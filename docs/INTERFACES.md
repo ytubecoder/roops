@@ -442,6 +442,9 @@ Four independent axes. Defaults are the report-only floor: `report_only / none /
 5. `perm_fs_write=workdir` without `notes` explaining why.
 6. `type=watchdog` without an executable `precheck.sh`; `schedule` unparseable; `engine` adapter
    missing; `name` ≠ directory name.
+7. `engine=codex` **and** `perm_network=full` **and** `perm_fs_write != workdir` — codex cannot
+   grant network under a read-only sandbox (§7.2); the combo is a config contradiction, not a
+   softer sandbox.
 
 ## 6. Engine adapter interface
 
@@ -548,7 +551,7 @@ codex exec --skip-git-repo-check --ephemeral -C "$WORKDIR" \
 |---|---|
 | `perm_fs_write=none|report_only` (floor) | `-s read-only` (the CLI itself writes `-o`; the model gets no write access — `report_only` needs nothing writable) |
 | `perm_fs_write=workdir` | `-s workspace-write` (workdir = `-C` target) |
-| `perm_network=full` | requires workspace-write + `-c sandbox_workspace_write.network_access=true` (key verified via `--strict-config`) |
+| `perm_network=full` | requires workspace-write + `-c sandbox_workspace_write.network_access=true` (key verified via `--strict-config`). **On codex this means `perm_network=full` is only valid with `perm_fs_write=workdir`** — the network key is ignored under a read-only sandbox. The adapter HARD-FAILS (exit 1, clear engine.status detail) on `PERM_NETWORK=full` with a non-workspace-write sandbox rather than silently no-opping the grant or silently widening writes; `loopctl validate` rejects the combo earlier for `engine=codex` (§5.2 check 7) |
 | `perm_local_exec` | commands always run inside the selected sandbox; `allowlist` on codex is enforced by sandbox + credential scoping, not a flag (documented limitation — validate's dangerous-combo rules assume this) |
 - Success: exit 0; `-o` file = exactly the final JSON object → copy to `contract.json.tmp`.
 - Usage: JSONL `turn.completed` event `.usage` = `{input_tokens, cached_input_tokens,

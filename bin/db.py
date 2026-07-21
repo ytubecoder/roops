@@ -570,6 +570,12 @@ def cmd_prior_findings(args) -> int:
 
 
 def cmd_suppressed(args) -> int:
+    """JSON array of objects {finding_id, action, created_at, note,
+    snooze_until} for findings whose current disposition is dismiss, or
+    snooze with snooze_until > ts (§4.5). ack never suppresses (and is
+    excluded, like reopen/no-disposition). The runner uses finding_id for
+    filtering and the rest for the human-readable suppression footer
+    (§4.5 exact format)."""
     conn = connect(args.root)
     try:
         init_db(conn)
@@ -585,11 +591,23 @@ def cmd_suppressed(args) -> int:
             if disp is None or disp["action"] == "reopen":
                 continue
             if disp["action"] == "dismiss":
-                result.append(fid)
+                result.append({
+                    "finding_id": fid,
+                    "action": "dismiss",
+                    "created_at": disp["created_at"],
+                    "note": disp["note"],
+                    "snooze_until": None,
+                })
             elif disp["action"] == "snooze":
                 until_norm = _normalize_date_for_compare(disp["snooze_until"])
                 if until_norm is not None and until_norm > ts_norm:
-                    result.append(fid)
+                    result.append({
+                        "finding_id": fid,
+                        "action": "snooze",
+                        "created_at": disp["created_at"],
+                        "note": disp["note"],
+                        "snooze_until": disp["snooze_until"],
+                    })
     finally:
         conn.close()
 

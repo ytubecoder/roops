@@ -266,6 +266,10 @@ test_contract_violation_invalid() {
   unset FAKE_INVALID
   assert_eq "contract-violation: exit code" "0" "$RUNNER_EXIT"
   assert_eq "contract-violation: runner_status" "contract-violation" "$(last_run_field "$root" loopcv runner_status)"
+  # §4.1 step 6: invalid contract -> loop_status=alert, effective_status=alert
+  # (not NULL/omitted -- distinct from engine-failed/auth-failed/etc.).
+  assert_eq "contract-violation: loop_status" "alert" "$(last_run_field "$root" loopcv loop_status)"
+  assert_eq "contract-violation: effective_status" "alert" "$(last_run_field "$root" loopcv effective_status)"
   assert_file_missing "contract-violation: no latest.json promoted" "$root/reports/loopcv/latest.json"
   rm -rf "$root"
 }
@@ -290,6 +294,8 @@ PY
   unset FAKE_CONTRACT_FILE
   assert_eq "run_id-mismatch: exit code" "0" "$RUNNER_EXIT"
   assert_eq "run_id-mismatch: runner_status" "contract-violation" "$(last_run_field "$root" loopmm runner_status)"
+  assert_eq "run_id-mismatch: loop_status" "alert" "$(last_run_field "$root" loopmm loop_status)"
+  assert_eq "run_id-mismatch: effective_status" "alert" "$(last_run_field "$root" loopmm effective_status)"
   assert_contains "run_id-mismatch: error_detail mentions run_id" "$(last_run_field "$root" loopmm error_detail)" "run_id"
   assert_file_missing "run_id-mismatch: no promotion" "$root/reports/loopmm/latest.json"
   rm -rf "$root"
@@ -388,6 +394,12 @@ test_suppression() {
 
   local latest_md; latest_md="$(cat "$root/reports/loopsup/latest.md")"
   assert_contains "suppression: latest.md has suppression footer" "$latest_md" "Suppressed by disposition"
+  # §4.5 exact format: id + kind + date + note, not a bare id (db.py
+  # suppressed now emits {finding_id, action, created_at, note,
+  # snooze_until} objects, §3).
+  local today; today="$(date -u +%Y-%m-%d)"
+  assert_contains "suppression: latest.md footer has dismiss detail (id, date, note)" \
+    "$latest_md" "subj:supcond (dismissed ${today} \"test dismiss\")"
   rm -rf "$root"
 }
 

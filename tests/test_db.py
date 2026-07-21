@@ -554,9 +554,20 @@ class TestDisposeAndSuppression(DbTestCase):
         return run_cli(args)
 
     def suppressed(self, ts):
+        """Raw JSON array of objects {finding_id, action, created_at, note,
+        snooze_until}, per the amended §3 contract."""
         r = run_cli(["suppressed", "--root", self.tmp, "--loop", "myloop", "--ts", ts])
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         return json.loads(r.stdout)
+
+    def suppressed_ids(self, ts):
+        return [d["finding_id"] for d in self.suppressed(ts)]
+
+    def suppressed_by_id(self, ts, finding_id):
+        for d in self.suppressed(ts):
+            if d["finding_id"] == finding_id:
+                return d
+        return None
 
     def test_dismiss_requires_note(self):
         self.upsert("run1", [FINDING_A], "2026-07-01T00:00:00Z")
@@ -575,19 +586,40 @@ class TestDisposeAndSuppression(DbTestCase):
     def test_dismiss_suppresses(self):
         self.upsert("run1", [FINDING_A], "2026-07-01T00:00:00Z")
         self.dispose("repo:no-remote", "dismiss", note="reason")
-        ids = self.suppressed("2026-07-02T00:00:00Z")
+        ids = self.suppressed_ids("2026-07-02T00:00:00Z")
         self.assertIn("repo:no-remote", ids)
+
+    def test_dismiss_suppressed_object_shape(self):
+        # §3: db.py suppressed emits objects {finding_id, action, created_at,
+        # note, snooze_until} -- not bare ids -- so the runner can render the
+        # §4.5 footer detail (dismissed <date> "note").
+        self.upsert("run1", [FINDING_A], "2026-07-01T00:00:00Z")
+        self.dispose("repo:no-remote", "dismiss", note="reason")
+        entry = self.suppressed_by_id("2026-07-02T00:00:00Z", "repo:no-remote")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["action"], "dismiss")
+        self.assertEqual(entry["note"], "reason")
+        self.assertTrue(entry["created_at"].startswith("2026-"))
+        self.assertIsNone(entry["snooze_until"])
 
     def test_snooze_suppresses_until_expiry(self):
         self.upsert("run1", [FINDING_A], "2026-07-01T00:00:00Z")
         self.dispose("repo:no-remote", "snooze", until="2026-09-01")
-        ids = self.suppressed("2026-08-01T00:00:00Z")
+        ids = self.suppressed_ids("2026-08-01T00:00:00Z")
         self.assertIn("repo:no-remote", ids)
+
+    def test_snooze_suppressed_object_shape(self):
+        self.upsert("run1", [FINDING_A], "2026-07-01T00:00:00Z")
+        self.dispose("repo:no-remote", "snooze", until="2026-09-01")
+        entry = self.suppressed_by_id("2026-08-01T00:00:00Z", "repo:no-remote")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["action"], "snooze")
+        self.assertEqual(entry["snooze_until"], "2026-09-01")
 
     def test_expired_snooze_does_not_suppress(self):
         self.upsert("run1", [FINDING_A], "2026-07-01T00:00:00Z")
         self.dispose("repo:no-remote", "snooze", until="2026-07-15")
-        ids = self.suppressed("2026-08-01T00:00:00Z")
+        ids = self.suppressed_ids("2026-08-01T00:00:00Z")
         self.assertNotIn("repo:no-remote", ids)
 
     def test_reopen_unsuppresses(self):
@@ -595,24 +627,24 @@ class TestDisposeAndSuppression(DbTestCase):
         self.dispose("repo:no-remote", "dismiss", note="reason")
         r = self.dispose("repo:no-remote", "reopen")
         self.assertEqual(r.returncode, 0, msg=r.stderr)
-        ids = self.suppressed("2026-08-01T00:00:00Z")
+        ids = self.suppressed_ids("2026-08-01T00:00:00Z")
         self.assertNotIn("repo:no-remote", ids)
 
     def test_dispositions_latest_wins(self):
         self.upsert("run1", [FINDING_A], "2026-07-01T00:00:00Z")
         self.dispose("repo:no-remote", "ack")
         self.dispose("repo:no-remote", "dismiss", note="later reason")
-        ids = self.suppressed("2026-07-02T00:00:00Z")
+        ids = self.suppressed_ids("2026-07-02T00:00:00Z")
         self.assertIn("repo:no-remote", ids)
 
     def test_reopen_after_dismiss_then_dismiss_again(self):
         self.upsert("run1", [FINDING_A], "2026-07-01T00:00:00Z")
         self.dispose("repo:no-remote", "dismiss", note="first")
         self.dispose("repo:no-remote", "reopen")
-        ids = self.suppressed("2026-07-02T00:00:00Z")
+        ids = self.suppressed_ids("2026-07-02T00:00:00Z")
         self.assertNotIn("repo:no-remote", ids)
         self.dispose("repo:no-remote", "dismiss", note="second")
-        ids = self.suppressed("2026-07-02T00:00:00Z")
+        ids = self.suppressed_ids("2026-07-02T00:00:00Z")
         self.assertIn("repo:no-remote", ids)
 
     def test_dispositions_are_append_only(self):

@@ -762,9 +762,14 @@ else
 fi
 
 if [ "$VALID" != "1" ]; then
-  sticky="$(sticky_loop_status)"
+  # §4.1 step 6: invalid/missing contract (incl. run_id mismatch, which
+  # validate_contract.py reports as a validation error via --expect-run-id)
+  # is alert alert, same as precheck-failed -- not the sticky "-" omission
+  # used for engine-failed/auth-failed/tool-denied/engine-timeout. Watchdog
+  # stickiness (§4.3) already wants alert here too, so hardcoding it is a
+  # superset, not a change in watchdog behavior.
   detail="contract-violation: $(printf '%s' "$VALIDATION_ERRORS" | tr '\n' '; ')"
-  finalize_and_finish contract-violation "$sticky" "$sticky" "$ATTEMPTS" \
+  finalize_and_finish contract-violation alert alert "$ATTEMPTS" \
     contract_violation - - - "${FINAL_ENGINE_EXIT:--}" "$detail"
 fi
 
@@ -790,7 +795,11 @@ contract_path, suppressed_json, out_dir, report_dir, dated_name, loop_name = sys
 with open(contract_path, "r") as f:
     contract = json.load(f)
 
-suppressed_ids = set(json.loads(suppressed_json))
+# db.py suppressed now emits objects: {finding_id, action, created_at, note,
+# snooze_until} (§3, §4.5). Index by finding_id for filtering; keep the
+# detail around for the human-readable footer.
+suppressed_by_id = {d["finding_id"]: d for d in json.loads(suppressed_json)}
+suppressed_ids = set(suppressed_by_id)
 findings = contract.get("findings") or []
 
 unsuppressed = [f for f in findings if f.get("finding_id") not in suppressed_ids]
@@ -812,7 +821,22 @@ report_md = contract.get("report_markdown", "") or ""
 if suppressed_findings:
     lines = []
     for f in suppressed_findings:
-        lines.append(f.get("finding_id", "?"))
+        fid = f.get("finding_id", "?")
+        disp = suppressed_by_id.get(fid, {})
+        action = disp.get("action")
+        if action == "dismiss":
+            date = (disp.get("created_at") or "")[:10]
+            note = disp.get("note") or ""
+            if note:
+                detail = f'dismissed {date} "{note}"'
+            else:
+                detail = f"dismissed {date}"
+        elif action == "snooze":
+            until = disp.get("snooze_until") or ""
+            detail = f"snoozed until {until}"
+        else:
+            detail = action or "?"
+        lines.append(f"{fid} ({detail})")
     footer = "\n\n---\nSuppressed by disposition: " + ", ".join(lines) + "\n"
     promoted_md = report_md + footer
 else:

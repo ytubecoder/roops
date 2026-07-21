@@ -43,23 +43,36 @@ if log_path:
 verb = sys.argv[1] if len(sys.argv) > 1 else ""
 
 # Simulates launchd actually firing the job on kickstart: inserts a fresh
-# completed run row, so loopctl's post-kickstart poll (§8.1 step 4) has
-# something real to find. Opt-in via env so failure-path tests can leave it
-# unset and let the poll time out for real.
-if verb == "kickstart" and os.environ.get("FAKE_LAUNCHCTL_INSERT_RUN"):
+# run row, so loopctl's post-kickstart poll (§8.1 step 4) has something real
+# to find. Opt-in via env so failure-path tests can leave it unset and let
+# the poll time out for real.
+#
+# FAKE_LAUNCHCTL_INSERT_RUN=<status> inserts a fresh row and immediately
+# finishes it with that runner_status (start-run then finish-run) — used to
+# simulate a completed engine run, whether it succeeded or failed.
+#
+# FAKE_LAUNCHCTL_INSERT_STARTED_ONLY=1 inserts a fresh row via start-run and
+# never calls finish-run, simulating db.py's transient runner_status="started"
+# row that never reaches a terminal state (e.g. the engine hangs or the
+# process is killed before it can report back) — the case the install poll
+# must NOT treat as success.
+if verb == "kickstart" and (
+    os.environ.get("FAKE_LAUNCHCTL_INSERT_RUN") or os.environ.get("FAKE_LAUNCHCTL_INSERT_STARTED_ONLY")
+):
     label = sys.argv[-1].rsplit("/", 1)[-1]
     loop_name = label[len("com.loops."):] if label.startswith("com.loops.") else label
     root = os.environ["FAKE_LAUNCHCTL_ROOT"]
     db_py = os.environ["FAKE_LAUNCHCTL_DB_PY"]
     run_id = "20260722T000000Z-" + loop_name + "-" + uuid.uuid4().hex[:6]
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    status = os.environ["FAKE_LAUNCHCTL_INSERT_RUN"]
     subprocess.run([sys.executable, db_py, "start-run", "--root", root, "--run-id", run_id,
                      "--loop", loop_name, "--engine", "codex", "--trigger", "launchd",
                      "--started-at", now], check=True)
-    subprocess.run([sys.executable, db_py, "finish-run", "--root", root, "--run-id", run_id,
-                     "--runner-status", status, "--effective-status", "ok",
-                     "--headline", "kickstart-simulated run", "--finished-at", now], check=True)
+    if os.environ.get("FAKE_LAUNCHCTL_INSERT_RUN"):
+        status = os.environ["FAKE_LAUNCHCTL_INSERT_RUN"]
+        subprocess.run([sys.executable, db_py, "finish-run", "--root", root, "--run-id", run_id,
+                         "--runner-status", status, "--effective-status", "ok",
+                         "--headline", "kickstart-simulated run", "--finished-at", now], check=True)
 
 exit_var = "FAKE_LAUNCHCTL_" + verb.upper() + "_EXIT"
 code = int(os.environ.get(exit_var, "0"))
@@ -774,17 +787,47 @@ class TestInstall(LoopsRootTestCase):
         self.assertEqual(verbs, ["bootout", "bootstrap", "kickstart", "bootout"])
 
     def test_fresh_but_failed_run_status_fails_install(self):
+        # The fake launchctl's kickstart inserts a FRESH, TERMINAL row (like
+        # the success-path fake does with "completed") but with a failing
+        # runner_status — proving the status-exclusion branch itself rejects
+        # it, not just the freshness check (a pre-existing row inserted
+        # before install would be rejected by freshness alone and wouldn't
+        # exercise the status check at all).
         name = self._valid_loop("fresh-but-failed")
-        run_id = f"20260722T000000Z-{name}-def456"
-        self.fixture.add_run(
-            run_id, name, iso(datetime.now(timezone.utc)), runner_status="engine-failed",
-            effective_status=None,
-        )
         env = self.fixture.base_env(
-            LOOPCTL_INSTALL_POLL_TIMEOUT_S="0.5", LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1"
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
+            LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
+            FAKE_LAUNCHCTL_INSERT_RUN="engine-failed",
         )
         r = run_cli(["install", name, "--root", self.root], env_overrides=env)
         self.assertEqual(r.returncode, 1)
+        rows = _query_last_runs(self.root, name)
+        self.assertIsNotNone(rows[0]["finished_at"])
+        self.assertEqual(rows[0]["runner_status"], "engine-failed")
+
+    def test_fresh_run_stuck_in_started_fails_install(self):
+        # db.py start-run writes a transient runner_status="started" row
+        # BEFORE the engine actually runs. If that row never reaches a
+        # terminal state (finished_at set) within the poll budget, install
+        # must fail loudly — a fresh-but-never-finished row is not a pass,
+        # even though "started" is not in the runner-failure-status set.
+        name = self._valid_loop("fresh-stuck-started")
+        env = self.fixture.base_env(
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="0.5",
+            LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
+            FAKE_LAUNCHCTL_INSERT_STARTED_ONLY="1",
+        )
+        r = run_cli(["install", name, "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("never reached a terminal state", r.stderr)
+        rows = _query_last_runs(self.root, name)
+        self.assertIsNone(rows[0]["finished_at"])
+        self.assertEqual(rows[0]["runner_status"], "started")
+        # verification failure boots the half-installed job out, same as
+        # the no-fresh-run-at-all failure path.
+        calls = self.fixture.launchctl_calls()
+        verbs = [c.split()[0] for c in calls]
+        self.assertEqual(verbs, ["bootout", "bootstrap", "kickstart", "bootout"])
 
 
 # ---------------------------------------------------------------------------

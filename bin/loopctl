@@ -277,6 +277,10 @@ _MUTATING_PREFIXES = [
 
 
 def _token_matches(tok, pat):
+    # Rule-4 denylist is a substring heuristic and is non-exhaustive by
+    # design: validate() is a lint/lint-adjacent warning layer, not the
+    # enforcement boundary — actual mutation prevention comes from
+    # credentials/sandboxing at the engine/permission-axis level.
     if pat == "*":
         return True
     return pat in tok
@@ -821,27 +825,46 @@ def cmd_install(args):
         _launchctl(["bootout", f"gui/{uid}/{label}"])
         return 1
 
+    # db.py start-run writes a transient runner_status="started" row BEFORE
+    # the engine actually runs (§4.1 step 3) — the row for a fresh run_id
+    # only reflects the real outcome once finish-run sets finished_at. So we
+    # must poll past "fresh" all the way to "fresh AND terminal" before
+    # trusting runner_status; a fresh row that never leaves "started" within
+    # the budget is a verification failure in its own right (engine likely
+    # hung or never got invoked), not a pass.
     timeout_s = float(os.environ.get("LOOPCTL_INSTALL_POLL_TIMEOUT_S", "90"))
     interval_s = float(os.environ.get("LOOPCTL_INSTALL_POLL_INTERVAL_S", "1"))
     deadline = time.monotonic() + timeout_s
     verified = False
+    fresh_row = None
     while True:
         rows = _db_query(root, "last-runs", loop=name, limit=1)
         if rows:
             row = rows[0]
-            if row.get("run_id") != before_run_id and row.get("runner_status") not in _RUNNER_FAILURE_STATUSES:
-                verified = True
-                break
+            if row.get("run_id") != before_run_id:
+                fresh_row = row
+                if row.get("finished_at"):
+                    # Terminal: apply the non-failed-status check now.
+                    verified = row.get("runner_status") not in _RUNNER_FAILURE_STATUSES
+                    break
         if time.monotonic() >= deadline:
             break
         time.sleep(interval_s)
 
     if not verified:
-        print(
-            f"install failed: no fresh non-failed run recorded for {name} within "
-            f"{timeout_s:.0f}s after kickstart — check engine auth/env under launchd",
-            file=sys.stderr,
-        )
+        if fresh_row is not None and not fresh_row.get("finished_at"):
+            print(
+                f"install failed: fresh run recorded for {name} but never reached a "
+                f"terminal state (stuck in runner_status={fresh_row.get('runner_status')!r}) "
+                f"within {timeout_s:.0f}s after kickstart — check engine process under launchd",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"install failed: no fresh non-failed run recorded for {name} within "
+                f"{timeout_s:.0f}s after kickstart — check engine auth/env under launchd",
+                file=sys.stderr,
+            )
         _launchctl(["bootout", f"gui/{uid}/{label}"])
         return 1
 

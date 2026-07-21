@@ -1,0 +1,1073 @@
+#!/usr/bin/env python3
+"""bin/loopctl — §8 CLI surface for the loops harness. Generalissimo's daily interface:
+scaffold, validate, run, install/uninstall/pause/resume against launchd,
+regenerate the dashboard, and manage findings dispositions.
+
+Design notes (see docs/INTERFACES.md §8/§8.1/§5/§5.1/§5.2/§4.2 for the
+authoritative contract):
+
+- `bin/loopconf.py` and `bin/schedule.py` are the frozen single
+  implementations (§5.0/§5.1). They are loaded here from THIS script's own
+  directory (the repo's `bin/`), never from `--root` — they are library
+  code, always co-located with loopctl itself, regardless of what data root
+  a given invocation operates against.
+- `bin/db.py` is invoked as a subprocess CLI (its documented interface),
+  also resolved from this script's own directory.
+- `dashboard/generate.py` (Task B, committed) is imported directly (it
+  already exposes a `generate(root=..., loopconf_parse=..., schedule_parse=...)`
+  seam) so loopctl never needs a copy of loopconf.py under an arbitrary
+  `--root`.
+- `bin/run-loop.sh` (Task C, built concurrently) and `engines/<engine>.sh`
+  (Task D, built concurrently) are resolved relative to `--root` (the data
+  root), NOT this script's directory — this lets hermetic tests supply
+  fakes for both without ever touching the real, still-being-built files,
+  and matches production where `--root` defaults to the same tree that will
+  eventually contain them.
+- `launchctl` is NEVER invoked directly — every call goes through
+  `_launchctl()`, which honours `LOOPS_LAUNCHCTL` (default: `launchctl`).
+  Tests point this at a recording stub script and must never exercise the
+  real binary.
+"""
+import argparse
+import importlib.util
+import json
+import os
+import plistlib
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(_HERE)
+
+
+# ---------------------------------------------------------------------------
+# Module loading (see docstring above for the resolution rules)
+# ---------------------------------------------------------------------------
+
+def _load_module_from_path(path, modname):
+    spec = importlib.util.spec_from_file_location(modname, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load module {modname} from {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+loopconf = _load_module_from_path(os.path.join(_HERE, "loopconf.py"), "_loopctl_loopconf")
+schedule = _load_module_from_path(os.path.join(_HERE, "schedule.py"), "_loopctl_schedule")
+
+_DB_BIN = os.path.join(_HERE, "db.py")
+_DASHBOARD_GENERATE = os.path.join(_REPO_ROOT, "dashboard", "generate.py")
+
+_dashboard_mod_cache = {}
+
+
+def _dashboard_module():
+    if "mod" not in _dashboard_mod_cache:
+        _dashboard_mod_cache["mod"] = _load_module_from_path(
+            _DASHBOARD_GENERATE, "_loopctl_dashboard"
+        )
+    return _dashboard_mod_cache["mod"]
+
+
+# ---------------------------------------------------------------------------
+# db.py subprocess helpers
+# ---------------------------------------------------------------------------
+
+def _db_run_raw(args_list):
+    return subprocess.run(
+        [sys.executable, _DB_BIN] + args_list, capture_output=True, text=True
+    )
+
+
+def _db_run(verb_args, root):
+    return _db_run_raw(verb_args + ["--root", root])
+
+
+def _db_query(root, query_name, **kwargs):
+    args_list = ["query", query_name]
+    for key, value in kwargs.items():
+        if value is None:
+            continue
+        flag = "--" + key.replace("_", "-")
+        args_list += [flag, str(value)]
+    r = _db_run(args_list, root)
+    if r.returncode != 0:
+        return []
+    try:
+        return json.loads(r.stdout)
+    except (ValueError, json.JSONDecodeError):
+        return []
+
+
+def _latest_run_id(root, name):
+    rows = _db_query(root, "last-runs", loop=name, limit=1)
+    return rows[0]["run_id"] if rows else None
+
+
+# ---------------------------------------------------------------------------
+# Read-only sqlite helpers (mirrors dashboard/generate.py's own pattern for
+# read-only access — never writes, so it's safe to open directly rather than
+# adding new db.py query verbs)
+# ---------------------------------------------------------------------------
+
+def _open_db_ro(root):
+    db_path = os.path.join(root, "state", "loops.sqlite")
+    if not os.path.exists(db_path):
+        return None
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _current_disposition(conn, loop_name, finding_id):
+    if conn is None:
+        return None
+    row = conn.execute(
+        "SELECT * FROM dispositions WHERE loop_name=? AND finding_id=? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (loop_name, finding_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _format_disposition(disp):
+    if disp is None or disp.get("action") == "reopen":
+        return "open"
+    action = disp["action"]
+    date = (disp.get("created_at") or "")[:10]
+    if action == "ack":
+        return f"acked {date}"
+    if action == "dismiss":
+        note = disp.get("note") or ""
+        return f'dismissed {date} ("{note}")'
+    if action == "snooze":
+        until = disp.get("snooze_until") or ""
+        return f"snoozed until {until}"
+    return f"{action} {date}"
+
+
+def _parse_iso(ts):
+    if not ts:
+        return None
+    ts = ts.strip()
+    if ts.endswith("Z"):
+        ts = ts[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+
+
+def _age_days(first_seen_at, now):
+    dt = _parse_iso(first_seen_at)
+    if dt is None:
+        return None
+    return (now - dt).days
+
+
+# ---------------------------------------------------------------------------
+# launchd — gated launchctl invocation (never call the real binary in tests)
+# ---------------------------------------------------------------------------
+
+def _launchctl_bin():
+    return os.environ.get("LOOPS_LAUNCHCTL", "launchctl")
+
+
+def _launchctl(args_list):
+    """The ONLY place launchctl is ever invoked from. Honours LOOPS_LAUNCHCTL
+    so tests can redirect to a recording stub and never touch the real
+    launchd."""
+    return subprocess.run(
+        [_launchctl_bin()] + args_list, capture_output=True, text=True
+    )
+
+
+def _service_label(name):
+    return f"com.loops.{name}"
+
+
+def _plist_path(root, name):
+    return os.path.join(root, "launchd", f"{_service_label(name)}.plist")
+
+
+def _is_installed(root, name):
+    plist_path = _plist_path(root, name)
+    if not os.path.isfile(plist_path):
+        return False
+    uid = os.getuid()
+    r = _launchctl(["print", f"gui/{uid}/{_service_label(name)}"])
+    return r.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# loop.conf grammar-aware rewrite (§5.0) — used by pause/resume
+# ---------------------------------------------------------------------------
+
+_KEY_LINE_RE = re.compile(r"^([a-z][a-z0-9_]*)=")
+
+
+def _rewrite_conf_key(path, key, new_value):
+    """Rewrites a single KEY=value line in place, preserving every other
+    line (including comments and blank lines) byte-for-byte. Uses the
+    loop.conf KEY=value grammar's own key-matching rule (§5.0) — not a
+    naive substring/sed replace — so it never touches a commented-out
+    `# key=...` line or a value elsewhere in the file that happens to
+    contain the key name."""
+    with open(path, "r") as f:
+        lines = f.readlines()
+    out = []
+    replaced = False
+    for line in lines:
+        stripped = line.rstrip("\n")
+        m = _KEY_LINE_RE.match(stripped)
+        if m and m.group(1) == key:
+            out.append(f"{key}={new_value}\n")
+            replaced = True
+        else:
+            out.append(line if line.endswith("\n") else line + "\n")
+    if not replaced:
+        if out and not out[-1].endswith("\n"):
+            out[-1] += "\n"
+        out.append(f"{key}={new_value}\n")
+    with open(path, "w") as f:
+        f.writelines(out)
+
+
+# ---------------------------------------------------------------------------
+# §5.2 dangerous-combination checks
+# ---------------------------------------------------------------------------
+
+_BARE_TOOLS = {"gh", "git", "npm", "curl", "aws", "gcloud", "vercel", "wrangler", "supabase"}
+
+# Prefix patterns of known mutating command forms. "*" matches any single
+# token; otherwise the pattern token must appear as a substring of the
+# corresponding entry token (covers verb-suffixed subcommands like
+# `delete-bucket`, `create-user`).
+_MUTATING_PREFIXES = [
+    ("gh", "pr", "create"),
+    ("gh", "pr", "merge"),
+    ("gh", "release"),
+    ("gh", "workflow", "run"),
+    ("gh", "repo", "delete"),
+    ("git", "push"),
+    ("git", "commit"),
+    ("git", "merge"),
+    ("git", "rebase"),
+    ("git", "reset"),
+    ("npm", "publish"),
+    ("npm", "install"),
+    ("aws", "*", "delete"),
+    ("aws", "*", "create"),
+    ("aws", "*", "put"),
+    ("aws", "*", "terminate"),
+    ("gcloud", "*", "delete"),
+    ("gcloud", "*", "create"),
+    ("vercel", "deploy"),
+    ("vercel", "remove"),
+    ("wrangler", "deploy"),
+    ("wrangler", "publish"),
+    ("supabase", "db", "push"),
+    ("supabase", "functions", "deploy"),
+]
+
+
+def _token_matches(tok, pat):
+    if pat == "*":
+        return True
+    return pat in tok
+
+
+def _matches_prefix(tokens, pattern):
+    if len(tokens) < len(pattern):
+        return False
+    return all(_token_matches(tok, pat) for tok, pat in zip(tokens, pattern))
+
+
+def _entry_is_dangerous(entry):
+    tokens = entry.strip().split()
+    if not tokens:
+        return True
+    if len(tokens) == 1 and tokens[0] in _BARE_TOOLS:
+        return True
+    return any(_matches_prefix(tokens, pattern) for pattern in _MUTATING_PREFIXES)
+
+
+def _dangerous_combo_checks(conf):
+    errors = []
+    perm_network = conf.get("perm_network")
+    perm_local_exec = conf.get("perm_local_exec")
+    perm_remote_mutation = conf.get("perm_remote_mutation")
+    perm_fs_write = conf.get("perm_fs_write")
+    exec_allowlist = conf.get("exec_allowlist") or []
+    notes = conf.get("notes")
+    i_accept = conf.get("i_accept_unrestricted")
+
+    # Rule 1: perm_network=full AND perm_local_exec != none AND exec_allowlist empty/absent.
+    if perm_network == "full" and perm_local_exec not in (None, "none") and not exec_allowlist:
+        errors.append(
+            "dangerous combo (rule 1): perm_network=full with perm_local_exec="
+            f"{perm_local_exec!r} requires a non-empty exec_allowlist"
+        )
+
+    # Rule 2: perm_remote_mutation != none without remote_mutation_justification.
+    if perm_remote_mutation and perm_remote_mutation != "none" and not conf.get(
+        "remote_mutation_justification"
+    ):
+        errors.append(
+            "dangerous combo (rule 2): perm_remote_mutation="
+            f"{perm_remote_mutation!r} requires a non-empty remote_mutation_justification"
+        )
+
+    # Rule 3: perm_local_exec=full AND perm_network=full without the explicit override.
+    if perm_local_exec == "full" and perm_network == "full" and not i_accept:
+        errors.append(
+            "dangerous combo (rule 3): perm_local_exec=full and perm_network=full "
+            "requires i_accept_unrestricted=true"
+        )
+
+    # Rule 4: exec_allowlist entries must be command-scoped, not bare tool names or
+    # known mutating forms.
+    for entry in exec_allowlist:
+        if _entry_is_dangerous(entry):
+            errors.append(
+                f"dangerous combo (rule 4): exec_allowlist entry {entry!r} is a bare "
+                "tool name or a mutating command form — must be a scoped read form"
+            )
+
+    # Rule 5: perm_fs_write=workdir without notes.
+    if perm_fs_write == "workdir" and not notes:
+        errors.append(
+            "dangerous combo (rule 5): perm_fs_write=workdir requires notes explaining why"
+        )
+
+    # Rule 7 (contract amendment): engine=codex AND perm_network=full AND
+    # perm_fs_write != workdir. codex cannot grant network under a read-only
+    # sandbox (§7.2) — network=full requires workspace-write, which is only
+    # ever selected by perm_fs_write=workdir. Not a permission-escalation risk
+    # like rules 1-6, but a config contradiction: this combo can never do
+    # anything, since the adapter has no read-only+network mode to map it to.
+    if conf.get("engine") == "codex" and perm_network == "full" and perm_fs_write != "workdir":
+        errors.append(
+            "dangerous combo (rule 7): network=full on codex requires perm_fs_write=workdir"
+        )
+
+    return errors
+
+
+def _validate_one(root, from_dir, name):
+    loop_dir = os.path.join(root, from_dir, name)
+    conf_path = os.path.join(loop_dir, "loop.conf")
+    if not os.path.isfile(conf_path):
+        return [f"loop.conf not found at {conf_path}"]
+
+    conf, parse_errors = loopconf.parse(conf_path)
+    errors = [f"loopconf: {e}" for e in parse_errors]
+
+    # Rule 6 (part): name must equal directory name.
+    conf_name = conf.get("name")
+    if conf_name and conf_name != name:
+        errors.append(
+            f"dangerous combo (rule 6): name={conf_name!r} does not match directory name {name!r}"
+        )
+
+    errors += _dangerous_combo_checks(conf)
+
+    # Rule 6 (part): watchdog requires an executable precheck.sh.
+    if conf.get("type") == "watchdog":
+        precheck = os.path.join(loop_dir, "precheck.sh")
+        if not (os.path.isfile(precheck) and os.access(precheck, os.X_OK)):
+            errors.append(
+                "dangerous combo (rule 6): type=watchdog requires an executable precheck.sh"
+            )
+
+    # Rule 6 (part): engine adapter must exist. Resolved under --root (engines/ is
+    # produced by a concurrently-built task, never under this script's own dir).
+    engine = conf.get("engine")
+    if engine:
+        adapter = os.path.join(root, "engines", f"{engine}.sh")
+        if not os.path.isfile(adapter):
+            errors.append(f"dangerous combo (rule 6): engine adapter missing: engines/{engine}.sh")
+
+    # §8 addition: prompt.md must document Finding identity.
+    prompt_path = os.path.join(loop_dir, "prompt.md")
+    if not os.path.isfile(prompt_path):
+        errors.append("prompt.md not found")
+    else:
+        with open(prompt_path, "r") as f:
+            prompt_text = f.read()
+        if "## Finding identity" not in prompt_text:
+            errors.append("prompt.md missing required '## Finding identity' heading")
+
+    # §8 addition: SPEC.md must have no remaining [FILL: ...] placeholders.
+    spec_path = os.path.join(loop_dir, "SPEC.md")
+    if not os.path.isfile(spec_path):
+        errors.append("SPEC.md not found")
+    else:
+        with open(spec_path, "r") as f:
+            spec_text = f.read()
+        if "[FILL:" in spec_text:
+            errors.append("SPEC.md still contains [FILL: ...] placeholder(s)")
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# Table / output helpers
+# ---------------------------------------------------------------------------
+
+def _print_table(rows, columns):
+    if not rows:
+        print("(none)")
+        return
+    str_rows = [{c: "" if r.get(c) is None else str(r.get(c)) for c in columns} for r in rows]
+    widths = {c: max(len(c), max(len(r[c]) for r in str_rows)) for c in columns}
+    print("  ".join(c.ljust(widths[c]) for c in columns))
+    print("  ".join("-" * widths[c] for c in columns))
+    for r in str_rows:
+        print("  ".join(r[c].ljust(widths[c]) for c in columns))
+
+
+def _discover_loop_names(root, from_dir):
+    base = os.path.join(root, from_dir)
+    if not os.path.isdir(base):
+        return []
+    names = []
+    for entry in sorted(os.listdir(base)):
+        if os.path.isfile(os.path.join(base, entry, "loop.conf")):
+            names.append(entry)
+    return names
+
+
+def _write_file(path, content):
+    with open(path, "w") as f:
+        f.write(content)
+
+
+# ---------------------------------------------------------------------------
+# Scaffold templates (§8 "loopctl new scaffolding")
+# ---------------------------------------------------------------------------
+
+_LOOP_CONF_TEMPLATE = """\
+# Scaffolded by `loopctl new __NAME__` on __DATE__.
+# TODO before installing: pick a real `schedule` (see docs/INTERFACES.md §5.1)
+# and fill in `description`. Optional keys below are commented with their
+# permissive defaults — uncomment and edit only what this loop needs.
+name=__NAME__
+description="TODO: one-line description of what this loop does"
+type=__TYPE__
+engine=__ENGINE__
+# model=
+schedule=manual
+# workdir=$LOOPS_ROOT
+# timeout_s=900
+# enabled=true
+# retention_days=30
+# retry_transient=1
+# perm_fs_write=report_only
+# perm_network=none
+# perm_local_exec=none
+# perm_remote_mutation=none
+# exec_allowlist=
+# credential_env=
+# remote_mutation_justification=
+# notes=
+"""
+
+_PROMPT_MD_TEMPLATE = """\
+# __NAME__ — prompt
+
+TODO: describe what this loop should investigate/monitor and report on.
+
+## Output contract
+
+Your final message MUST be a single JSON object conforming exactly to
+`contract/contract.schema.json` — schema_version, run_id, status,
+status_reason, headline, report_markdown, metrics, findings. No prose
+outside that JSON object.
+
+- `run_id` MUST equal the run id you were given for this invocation — never
+  invent your own.
+- `metrics` MUST be a JSON **string** containing a serialized JSON object
+  (e.g. the string `"{}"` when there is nothing to report) — not a nested
+  JSON object.
+- `findings` is required but MAY be an empty array.
+
+## Findings prompt contract
+
+1. Re-emit a still-true finding with its **same `finding_id`** — never
+   invent a new id for a recurring condition.
+2. Do not re-argue a `DISMISSED` finding unless the underlying situation has
+   **materially changed**; if it has, say what changed.
+3. Still emit `SNOOZED` findings if true — suppression is the runner's job,
+   not the model's.
+
+## Finding identity
+
+[FILL: derivation rule — how finding_id is derived from the durable identity
+of the condition being reported, e.g. `<subject>:<condition>`. Must be
+deterministic and stable across runs for the same real-world condition, and
+must NOT embed volatile data (timestamps, run ids, counts, shifting line
+numbers).]
+"""
+
+_SPEC_MD_TEMPLATE = """\
+# __NAME__ — intake spec
+
+1. Purpose & stop condition
+[FILL: what this loop exists to catch/report, and what "done" looks like]
+
+2. Agentic pattern
+[FILL: note — every v1 loop is outer-shape Human-in-the-loop; iterate-across-invocations
+is v2 — record the aspiration here, but ship single-shot for v1]
+
+3. Type & data flow (precheck gathers vs engine interprets)
+[FILL: what precheck.sh deterministically gathers vs what the engine is asked to interpret]
+
+4. Cadence
+[FILL: schedule and why]
+
+5. Scope & exclusions
+[FILL: what's in scope, what's explicitly excluded]
+
+6. Guardrails
+[FILL: verbatim guardrails this loop must respect]
+
+7. Permission axes + justification
+[FILL: perm_fs_write / perm_network / perm_local_exec / perm_remote_mutation values and why]
+
+8. Finding identity (what a finding IS + finding_id derivation rule)
+[FILL: same derivation rule as prompt.md's ## Finding identity section]
+
+9. Tier-1 semantics (ok/warn/alert meaning)
+[FILL: what ok / warn / alert mean for this loop]
+
+10. Tier-2 metrics + panels
+[FILL: metrics this loop emits and how dashboard.json renders them]
+
+11. Engine/model + budget
+[FILL: engine, model, expected tokens/run, retry_transient, timeout_s]
+"""
+
+_PRECHECK_SH_TEMPLATE = """\
+#!/usr/bin/env bash
+# __NAME__/precheck.sh — deterministic gathering step (script->agent pattern,
+# docs/INTERFACES.md §4.1/§6.2): this script does cheap, deterministic data
+# gathering; its stdout is injected into the engine's prompt as ground truth.
+# It must be idempotent and side-effect-free beyond read-only inspection. For
+# type=watchdog loops, THIS SCRIPT IS THE JOB — a non-zero exit or a
+# failure-shaped result escalates to the engine for diagnosis (§4.1).
+set -euo pipefail
+
+# TODO: gather deterministic signal here and print it to stdout.
+echo "TODO: implement precheck for __NAME__"
+"""
+
+
+def _render_template(template, name, **extra):
+    out = template.replace("__NAME__", name)
+    for key, value in extra.items():
+        out = out.replace(f"__{key.upper()}__", str(value))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# launchd plist generation
+# ---------------------------------------------------------------------------
+
+def _plist_dict(root, name, conf):
+    label = _service_label(name)
+    run_loop_sh = os.path.abspath(os.path.join(root, "bin", "run-loop.sh"))
+    log_dir = os.path.abspath(os.path.join(root, "state", "launchd-logs"))
+    home = os.environ.get("HOME", os.path.expanduser("~"))
+    path_val = ":".join(
+        [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            os.path.join(home, ".local/bin"),
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+    )
+    d = {
+        "Label": label,
+        "ProgramArguments": ["/bin/bash", run_loop_sh, name, "--trigger", "launchd"],
+        "WorkingDirectory": os.path.abspath(root),
+        "EnvironmentVariables": {
+            "HOME": home,
+            "PATH": path_val,
+            "LOOPS_ROOT": os.path.abspath(root),
+        },
+        "StandardOutPath": os.path.join(log_dir, f"{name}.out.log"),
+        "StandardErrorPath": os.path.join(log_dir, f"{name}.err.log"),
+    }
+    sched = schedule.parse(conf["schedule"])
+    d.update(sched["launchd"])
+    return d
+
+
+def _render_plist_xml(root, name, conf):
+    return plistlib.dumps(_plist_dict(root, name, conf), fmt=plistlib.FMT_XML)
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+def cmd_new(args):
+    loop_dir = os.path.join(args.root, args.from_dir, args.name)
+    if os.path.exists(loop_dir):
+        print(f"refusing to scaffold {args.name}: {loop_dir} already exists", file=sys.stderr)
+        return 1
+    if not loopconf.NAME_RE.match(args.name):
+        print(
+            f"invalid loop name {args.name!r}: must match ^[a-z][a-z0-9-]{{1,40}}$",
+            file=sys.stderr,
+        )
+        return 2
+
+    os.makedirs(loop_dir)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    _write_file(
+        os.path.join(loop_dir, "loop.conf"),
+        _render_template(_LOOP_CONF_TEMPLATE, args.name, type=args.type_, engine=args.engine, date=today),
+    )
+    _write_file(os.path.join(loop_dir, "prompt.md"), _render_template(_PROMPT_MD_TEMPLATE, args.name))
+    _write_file(os.path.join(loop_dir, "SPEC.md"), _render_template(_SPEC_MD_TEMPLATE, args.name))
+    _write_file(os.path.join(loop_dir, "dashboard.json"), '{"panels": []}\n')
+    precheck_path = os.path.join(loop_dir, "precheck.sh")
+    _write_file(precheck_path, _render_template(_PRECHECK_SH_TEMPLATE, args.name))
+    os.chmod(precheck_path, 0o755)
+
+    files = ["loop.conf", "prompt.md", "SPEC.md", "dashboard.json", "precheck.sh"]
+    if args.json:
+        print(json.dumps({"name": args.name, "dir": loop_dir, "files": files}))
+    else:
+        print(f"scaffolded {args.name} at {loop_dir}")
+    return 0
+
+
+def cmd_validate(args):
+    if args.name and args.all:
+        print("specify either <name> or --all, not both", file=sys.stderr)
+        return 2
+    if not args.name and not args.all:
+        print("specify <name> or --all", file=sys.stderr)
+        return 2
+
+    names = _discover_loop_names(args.root, args.from_dir) if args.all else [args.name]
+
+    results = {}
+    any_fail = False
+    for name in names:
+        errors = _validate_one(args.root, args.from_dir, name)
+        results[name] = errors
+        if errors:
+            any_fail = True
+
+    if args.json:
+        print(json.dumps({n: {"ok": not e, "errors": e} for n, e in results.items()}))
+    else:
+        for name, errors in results.items():
+            if errors:
+                print(f"FAIL {name}")
+                for e in errors:
+                    print(f"  - {e}")
+            else:
+                print(f"OK {name}")
+
+    return 1 if any_fail else 0
+
+
+def cmd_run(args):
+    runner = os.path.join(args.root, "bin", "run-loop.sh")
+    if not os.path.isfile(runner):
+        print(f"run-loop.sh not found at {runner}", file=sys.stderr)
+        return 1
+    cmd = ["bash", runner, args.name, "--trigger", args.trigger, "--from", args.from_dir]
+    proc = subprocess.run(cmd)
+    return proc.returncode
+
+
+def cmd_list(args):
+    names = _discover_loop_names(args.root, args.from_dir)
+    rows = []
+    for name in names:
+        conf_path = os.path.join(args.root, args.from_dir, name, "loop.conf")
+        conf, _errors = loopconf.parse(conf_path)
+        rows.append(
+            {
+                "name": name,
+                "type": conf.get("type"),
+                "engine": conf.get("engine"),
+                "schedule": conf.get("schedule"),
+                "enabled": conf.get("enabled"),
+                "installed": _is_installed(args.root, name),
+            }
+        )
+    if args.json:
+        print(json.dumps(rows))
+    else:
+        _print_table(rows, ["name", "type", "engine", "schedule", "enabled", "installed"])
+    return 0
+
+
+def cmd_status(args):
+    dash = _dashboard_module()
+    now = datetime.now(timezone.utc)
+    names = [args.name] if args.name else _discover_loop_names(args.root, args.from_dir)
+
+    rows = []
+    for name in names:
+        conf_path = os.path.join(args.root, args.from_dir, name, "loop.conf")
+        conf, _errors = loopconf.parse(conf_path)
+        last_runs = _db_query(args.root, "last-runs", loop=name, limit=1)
+        last = last_runs[0] if last_runs else None
+
+        next_text = "—"
+        sched_spec = conf.get("schedule")
+        if sched_spec:
+            next_dt = dash.next_run_estimate(
+                sched_spec, last["started_at"] if last else None, now
+            )
+            if next_dt:
+                next_text = dash.format_relative(next_dt.strftime("%Y-%m-%dT%H:%M:%SZ"), now)
+
+        rows.append(
+            {
+                "name": name,
+                "runner_status": last.get("runner_status") if last else None,
+                "effective_status": last.get("effective_status") if last else None,
+                "headline": last.get("headline") if last else None,
+                "started_at": last.get("started_at") if last else None,
+                "next_run": next_text,
+            }
+        )
+
+    if args.json:
+        print(json.dumps(rows))
+    else:
+        _print_table(
+            rows, ["name", "runner_status", "effective_status", "headline", "started_at", "next_run"]
+        )
+    return 0
+
+
+_RUNNER_FAILURE_STATUSES = {
+    "precheck-failed",
+    "engine-failed",
+    "engine-timeout",
+    "auth-failed",
+    "tool-denied",
+    "contract-violation",
+    "harness-error",
+}
+
+
+def cmd_install(args):
+    root, name = args.root, args.name
+    if args.from_dir != "loops.d":
+        # §1: examples/<name>/ are pilot fixtures and are NEVER installed to launchd.
+        print(f"refusing to install {name}: --from {args.from_dir} is never installed (loops.d only)",
+              file=sys.stderr)
+        return 1
+    conf_path = os.path.join(root, args.from_dir, name, "loop.conf")
+    if not os.path.isfile(conf_path):
+        print(f"loop not found: {name}", file=sys.stderr)
+        return 1
+
+    conf, _parse_errors = loopconf.parse(conf_path)
+    if conf.get("schedule") == "manual":
+        print(f"refusing to install {name}: schedule=manual is never installed", file=sys.stderr)
+        return 1
+
+    errors = _validate_one(root, args.from_dir, name)
+    if errors:
+        print(f"refusing to install {name}: fails validate", file=sys.stderr)
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr)
+        return 1
+
+    label = _service_label(name)
+    launchd_dir = os.path.join(root, "launchd")
+    os.makedirs(launchd_dir, exist_ok=True)
+    plist_path = _plist_path(root, name)
+    log_dir = os.path.join(root, "state", "launchd-logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    with open(plist_path, "wb") as f:
+        f.write(_render_plist_xml(root, name, conf))
+
+    uid = os.getuid()
+    before_run_id = _latest_run_id(root, name)
+
+    _launchctl(["bootout", f"gui/{uid}/{label}"])  # ignore failure — not yet installed is fine
+
+    r = _launchctl(["bootstrap", f"gui/{uid}", plist_path])
+    if r.returncode != 0:
+        print(f"install failed: launchctl bootstrap error: {r.stderr.strip()}", file=sys.stderr)
+        return 1
+
+    r = _launchctl(["kickstart", "-p", f"gui/{uid}/{label}"])
+    if r.returncode != 0:
+        print(f"install failed: launchctl kickstart error: {r.stderr.strip()}", file=sys.stderr)
+        _launchctl(["bootout", f"gui/{uid}/{label}"])
+        return 1
+
+    timeout_s = float(os.environ.get("LOOPCTL_INSTALL_POLL_TIMEOUT_S", "90"))
+    interval_s = float(os.environ.get("LOOPCTL_INSTALL_POLL_INTERVAL_S", "1"))
+    deadline = time.monotonic() + timeout_s
+    verified = False
+    while True:
+        rows = _db_query(root, "last-runs", loop=name, limit=1)
+        if rows:
+            row = rows[0]
+            if row.get("run_id") != before_run_id and row.get("runner_status") not in _RUNNER_FAILURE_STATUSES:
+                verified = True
+                break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(interval_s)
+
+    if not verified:
+        print(
+            f"install failed: no fresh non-failed run recorded for {name} within "
+            f"{timeout_s:.0f}s after kickstart — check engine auth/env under launchd",
+            file=sys.stderr,
+        )
+        _launchctl(["bootout", f"gui/{uid}/{label}"])
+        return 1
+
+    print(f"installed {name} -> {plist_path}")
+    return 0
+
+
+def cmd_uninstall(args):
+    root, name = args.root, args.name
+    label = _service_label(name)
+    uid = os.getuid()
+    _launchctl(["bootout", f"gui/{uid}/{label}"])  # best-effort; ignore failure
+    plist_path = _plist_path(root, name)
+    removed = False
+    if os.path.isfile(plist_path):
+        os.remove(plist_path)
+        removed = True
+    suffix = "" if removed else " (no plist was present)"
+    print(f"uninstalled {name}{suffix}")
+    return 0
+
+
+def _set_enabled(args, enabled_value):
+    root, name = args.root, args.name
+    conf_path = os.path.join(root, args.from_dir, name, "loop.conf")
+    if not os.path.isfile(conf_path):
+        print(f"loop not found: {name}", file=sys.stderr)
+        return 1
+
+    _rewrite_conf_key(conf_path, "enabled", "true" if enabled_value else "false")
+
+    label = _service_label(name)
+    plist_path = _plist_path(root, name)
+    uid = os.getuid()
+    if os.path.isfile(plist_path):
+        if enabled_value:
+            _launchctl(["bootstrap", f"gui/{uid}", plist_path])
+        else:
+            _launchctl(["bootout", f"gui/{uid}/{label}"])
+
+    verb = "resumed" if enabled_value else "paused"
+    print(f"{verb} {name}")
+    return 0
+
+
+def cmd_pause(args):
+    return _set_enabled(args, False)
+
+
+def cmd_resume(args):
+    return _set_enabled(args, True)
+
+
+def cmd_dashboard(args):
+    dash = _dashboard_module()
+    out = dash.generate(root=args.root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
+    print(out)
+    return 0
+
+
+def cmd_findings(args):
+    root, loop_name = args.root, args.loop
+    rows = _db_query(root, "open-findings", loop=loop_name)
+    conn = _open_db_ro(root)
+    now = datetime.now(timezone.utc)
+    out_rows = []
+    try:
+        for r in rows:
+            disp = _current_disposition(conn, loop_name, r["finding_id"])
+            out_rows.append(
+                {
+                    "finding_id": r["finding_id"],
+                    "severity": r["severity"],
+                    "age": _age_days(r.get("first_seen_at"), now),
+                    "times_seen": r["times_seen"],
+                    "disposition": _format_disposition(disp),
+                }
+            )
+    finally:
+        if conn is not None:
+            conn.close()
+
+    if args.json:
+        print(json.dumps(out_rows))
+    else:
+        _print_table(out_rows, ["finding_id", "severity", "age", "times_seen", "disposition"])
+    return 0
+
+
+def cmd_disposition(args, action):
+    root = args.root
+    if action == "dismiss" and not args.note:
+        print("dismiss requires --note", file=sys.stderr)
+        return 2
+    if action == "snooze" and not args.until:
+        print("snooze requires --until", file=sys.stderr)
+        return 2
+
+    db_args = [
+        "dispose",
+        "--loop",
+        args.loop,
+        "--finding-id",
+        args.finding_id,
+        "--action",
+        action,
+    ]
+    note = getattr(args, "note", None)
+    until = getattr(args, "until", None)
+    if note:
+        db_args += ["--note", note]
+    if until:
+        db_args += ["--until", until]
+
+    r = _db_run(db_args, root)
+    if r.returncode != 0:
+        if r.stderr:
+            print(r.stderr.strip(), file=sys.stderr)
+        return 1
+
+    dash = _dashboard_module()
+    try:
+        dash.generate(root=root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
+    except Exception as e:  # dashboard regen is best-effort; the disposition itself succeeded
+        print(f"warning: dashboard regen failed: {e}", file=sys.stderr)
+
+    print(f"{action} {args.loop} {args.finding_id}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# argparse wiring
+# ---------------------------------------------------------------------------
+
+def _default_root():
+    return os.environ.get("LOOPS_ROOT", os.path.expanduser("~/projects/loops"))
+
+
+def build_parser():
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--root", default=_default_root())
+    common.add_argument("--json", action="store_true")
+    common.add_argument("--from", dest="from_dir", default="loops.d", choices=["loops.d", "examples"])
+
+    p = argparse.ArgumentParser(prog="loopctl")
+    sub = p.add_subparsers(dest="verb")
+
+    new_p = sub.add_parser("new", parents=[common])
+    new_p.add_argument("name")
+    new_p.add_argument("--type", dest="type_", default="agent", choices=["agent", "watchdog"])
+    new_p.add_argument("--engine", default="codex", choices=["codex", "claude"])
+
+    validate_p = sub.add_parser("validate", parents=[common])
+    validate_p.add_argument("name", nargs="?")
+    validate_p.add_argument("--all", action="store_true")
+
+    run_p = sub.add_parser("run", parents=[common])
+    run_p.add_argument("name")
+    run_p.add_argument("--trigger", default="manual")
+
+    sub.add_parser("list", parents=[common])
+
+    status_p = sub.add_parser("status", parents=[common])
+    status_p.add_argument("name", nargs="?")
+
+    install_p = sub.add_parser("install", parents=[common])
+    install_p.add_argument("name")
+
+    uninstall_p = sub.add_parser("uninstall", parents=[common])
+    uninstall_p.add_argument("name")
+
+    pause_p = sub.add_parser("pause", parents=[common])
+    pause_p.add_argument("name")
+
+    resume_p = sub.add_parser("resume", parents=[common])
+    resume_p.add_argument("name")
+
+    sub.add_parser("dashboard", parents=[common])
+
+    findings_p = sub.add_parser("findings", parents=[common])
+    findings_p.add_argument("loop")
+
+    for verb in ("ack", "dismiss", "snooze", "reopen"):
+        vp = sub.add_parser(verb, parents=[common])
+        vp.add_argument("loop")
+        vp.add_argument("finding_id")
+        if verb in ("ack", "dismiss"):
+            vp.add_argument("--note", default=None)
+        if verb == "snooze":
+            vp.add_argument("--until", default=None)
+
+    return p
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not args.verb:
+        parser.print_usage(sys.stderr)
+        return 2
+
+    args.root = os.path.abspath(args.root)
+
+    dispatch = {
+        "new": cmd_new,
+        "validate": cmd_validate,
+        "run": cmd_run,
+        "list": cmd_list,
+        "status": cmd_status,
+        "install": cmd_install,
+        "uninstall": cmd_uninstall,
+        "pause": cmd_pause,
+        "resume": cmd_resume,
+        "dashboard": cmd_dashboard,
+        "findings": cmd_findings,
+        "ack": lambda a: cmd_disposition(a, "ack"),
+        "dismiss": lambda a: cmd_disposition(a, "dismiss"),
+        "snooze": lambda a: cmd_disposition(a, "snooze"),
+        "reopen": lambda a: cmd_disposition(a, "reopen"),
+    }
+    fn = dispatch.get(args.verb)
+    if fn is None:
+        parser.print_usage(sys.stderr)
+        return 2
+    return fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

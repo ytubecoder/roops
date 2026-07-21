@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "run_id": "__RUN_ID__",
+  "status": "alert",
+  "status_reason": "target_unreachable",
+  "headline": "target unreachable: couldn't open local file",
+  "report_markdown": "# hello-watchdog diagnosis\n\nThe configured target could not be reached.\n\nSee the PRECHECK OUTPUT block for the exact probe result (curl exit code, http_code, result line).\n",
+  "metrics": "{}",
+  "findings": [
+    {
+      "finding_id": "target:unreachable",
+      "title": "hello-watchdog target is unreachable",
+      "severity": "alert",
+      "detail": "curl could not reach the configured target (exit 37 — couldn't open local file). See PRECHECK OUTPUT for the exact probe result."
+    }
+  ]
+}

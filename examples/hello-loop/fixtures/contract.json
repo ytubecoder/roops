@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "run_id": "__RUN_ID__",
+  "status": "warn",
+  "status_reason": "todo_files_present",
+  "headline": "2 of 3 world files have an open TODO",
+  "report_markdown": "# hello-loop report\n\nScanned `world/`: 3 files, 2 with an open TODO.\n\n- alpha.md: TODO present\n- beta.md: TODO present\n- gamma.md: clean\n",
+  "metrics": "{\"world.files\": 3, \"world.todo_files\": 2}",
+  "findings": [
+    {
+      "finding_id": "alpha:has-todo",
+      "title": "world/alpha.md has an open TODO",
+      "severity": "warn",
+      "detail": "world/alpha.md contains a TODO marker: \"TODO: revisit auth flow before the next release.\""
+    },
+    {
+      "finding_id": "beta:has-todo",
+      "title": "world/beta.md has an open TODO",
+      "severity": "info",
+      "detail": "world/beta.md contains a TODO marker: \"TODO: add tests for the retry path.\""
+    }
+  ]
+}

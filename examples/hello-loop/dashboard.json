@@ -1,0 +1,20 @@
+{
+  "panels": [
+    {
+      "title": "Open TODO files",
+      "metric": "world.todo_files",
+      "type": "number",
+      "unit": "files",
+      "direction": "higher_is_worse",
+      "thresholds": {"warn": 1, "alert": 3},
+      "missing": "gap"
+    },
+    {
+      "title": "World files scanned",
+      "metric": "world.files",
+      "type": "trend",
+      "window_days": 30,
+      "missing": "hold"
+    }
+  ]
+}

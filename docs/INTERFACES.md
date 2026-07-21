@@ -27,6 +27,15 @@
 - **File modes:** `state/`, `reports/`, `state/runs/` are `0700`; files written into them `0600`.
 - **Timestamps:** ISO-8601 UTC with `Z` suffix, second precision — `2026-07-22T14:03:11Z`.
   In bash: `date -u +%Y-%m-%dT%H:%M:%SZ`. In Python: `datetime.now(timezone.utc)`.
+- **Fresh engine session per firing.** Adapters must NOT use any resume/session-continuation flag
+  (`codex exec resume`, `claude --resume`, …). Cross-run memory is mechanical (findings tables +
+  PRIOR FINDINGS injection, §3/§6.2) — a resumed model session would be a second, unauditable
+  memory channel and grows context per firing. A `SESSION_HINT` adapter env var is explicitly out
+  of v1.
+- **Token discipline (design intent, not new mechanism):** precheck gating (engine never invoked
+  when there is nothing to interpret) and the script→agent pattern (precheck does deterministic
+  gathering for ~0 tokens; the engine only interprets capped, redacted output) are the primary
+  cost controls. Per-run tokens/cost land in sqlite and surface as 7-day spend on the dashboard.
 
 ## 1. Repository layout (authoritative)
 
@@ -98,7 +107,8 @@ CREATE TABLE IF NOT EXISTS runs (
   model         TEXT,
   trigger       TEXT,                   -- launchd | manual | kickstart
   runner_status TEXT NOT NULL,          -- §4.3 enum
-  loop_status   TEXT,                   -- ok | warn | alert | NULL
+  loop_status   TEXT,                   -- ok | warn | alert | NULL — engine-emitted, verbatim
+  effective_status TEXT,                -- ok | warn | alert | NULL — post-suppression (§4.5); the dashboard displays THIS
   status_reason TEXT,
   headline      TEXT,
   report_path   TEXT,                   -- repo-relative
@@ -108,6 +118,7 @@ CREATE TABLE IF NOT EXISTS runs (
   tokens_total  INTEGER,                -- nullable
   cost_usd      REAL,                   -- nullable
   usage_raw     TEXT,                   -- raw engine usage JSON, verbatim
+  attempts      INTEGER,                -- engine attempts incl. transient retries (§4.6); NULL if engine not invoked
   exit_code     INTEGER,
   error_detail  TEXT
 );
@@ -135,9 +146,41 @@ CREATE TABLE IF NOT EXISTS metrics (
 );
 CREATE INDEX IF NOT EXISTS idx_metrics_loop_key_ts ON metrics(loop_name, key, ts);
 
+-- Amendment 1: findings memory (initial schema, NOT a migration — schema_version stays 1)
+CREATE TABLE IF NOT EXISTS findings (
+  finding_id     TEXT NOT NULL,
+  loop_name      TEXT NOT NULL,
+  title          TEXT NOT NULL,
+  severity       TEXT NOT NULL,
+  first_seen_run TEXT NOT NULL,
+  first_seen_at  TEXT NOT NULL,
+  last_seen_run  TEXT NOT NULL,
+  last_seen_at   TEXT NOT NULL,
+  times_seen     INTEGER NOT NULL DEFAULT 1,
+  resolved_at    TEXT,               -- set when a run stops reporting it
+  PRIMARY KEY (loop_name, finding_id)
+);
+
+CREATE TABLE IF NOT EXISTS dispositions (
+  loop_name    TEXT NOT NULL,
+  finding_id   TEXT NOT NULL,
+  action       TEXT NOT NULL,        -- ack | dismiss | snooze | reopen
+  note         TEXT,
+  snooze_until TEXT,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_disp_loop_finding ON dispositions(loop_name, finding_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT);
 -- schema_meta('schema_version') = '1'
 ```
+
+**Findings semantics (Amendment 1):** on each valid run the runner upserts the emitted findings —
+increment `times_seen`, update `last_seen_*` — and marks previously-open findings for that loop
+that are absent from this run as `resolved_at = now`. A finding that reappears after resolution is
+a new occurrence of a known id: `times_seen` continues, `resolved_at` clears. Dispositions are
+**append-only history**; current state is the latest row per `(loop_name, finding_id)`. A
+`reopen` row clears the effect of a prior `dismiss`/`snooze`.
 
 **`db.py` CLI surface** (used by `run-loop.sh`; also importable as a module):
 ```
@@ -148,6 +191,22 @@ db.py finish-run  --root R --run-id ID --runner-status S [--loop-status S] [--st
                   [--error-detail X] [--usage-file F] [--finished-at TS]
 db.py heartbeat   --root R --loop NAME [--run-id ID] --ok 0|1 [--detail X]
 db.py record-metrics --root R --run-id ID --loop NAME --contract-file F   # flattens metrics (§9.3)
+db.py upsert-findings --root R --run-id ID --loop NAME --contract-file F --ts TS
+                                    # findings semantics above; prints JSON summary
+                                    # {"upserted":n,"resolved":n} to stdout
+db.py prior-findings  --root R --loop NAME
+                                    # renders the PRIOR FINDINGS injection block (§6.2): one line
+                                    # per non-resolved finding — id, "seen N× since <first_seen
+                                    # date>", current disposition (open / ACKED <date> /
+                                    # DISMISSED <date> ("note") / SNOOZED until <date>).
+                                    # Empty stdout when there are none.
+db.py suppressed      --root R --loop NAME --ts TS
+                                    # JSON list of finding_ids whose current disposition is
+                                    # dismiss, or snooze with snooze_until > TS (§4.5)
+db.py dispose         --root R --loop L --finding-id ID --action ack|dismiss|snooze|reopen
+                      [--note X] [--until TS]
+                                    # appends a disposition row; dismiss REQUIRES --note;
+                                    # snooze REQUIRES --until; unknown (loop,finding) → exit 1
 db.py query <name> [args...]        # named read queries for the dashboard; JSON to stdout
 ```
 `start-run` inserts immediately (so a crashed run still leaves a row); `finish-run` updates by
@@ -193,21 +252,28 @@ Default `--from loops.d`; `--trigger manual`.
      containing a failure → escalate: proceed to step 5 with the precheck output injected, so the
      agent produces a diagnosis. The **probe failure result is sticky**: even if the diagnosis run
      fails, the stored `loop_status` stays `alert` (§4.3 precedence).
-5. **Engine invocation** (`type=agent`, or watchdog escalation): exec `engines/<engine>.sh` with the
-   env of §6, inside its **own process group** (`set -m` + background, or `setsid` where available).
-   Runner-owned timeout: at `timeout_s` send `TERM` to the **process group**, wait a 10s grace, then
-   `KILL`. Partial `engine.log` is preserved. The lock is released on every path (`trap ... EXIT`).
+5. **Prompt assembly + engine invocation** (`type=agent`, or watchdog escalation): compose
+   `PROMPT_FILE` per §6.2 — `prompt.md`, then the runner-generated `PRIOR FINDINGS` block (from
+   `db.py prior-findings`, omitted when empty), then `PRECHECK OUTPUT` when present. Exec
+   `engines/<engine>.sh` with the env of §6, inside its **own process group** (`set -m` +
+   background, or `setsid` where available). Runner-owned timeout: at `timeout_s` send `TERM` to
+   the **process group**, wait a 10s grace, then `KILL`. Partial `engine.log` is preserved. The
+   lock is released on every path (`trap ... EXIT`). Transient failures (adapter exit 12) are
+   retried per §4.6; nothing else is ever retried.
 6. **Contract validation + promotion** (the stale-green guarantee):
    - Adapter must have written `state/runs/<id>/contract.json.tmp`. Runner validates it against
      `contract/contract.schema.json` via `bin/validate_contract.py` (stdlib-only validator, §9.2).
    - Invalid / missing → `runner_status=contract-violation`, `loop_status=alert`, **no promotion**.
-   - Valid → `os.rename` (same filesystem, atomic) to `contract.json`; extract `report_markdown`
-     and write it as `state/runs/<id>/output.md`; copy to
-     `reports/<name>/<YYYY-MM-DD-HHMM>.md`; then promote `reports/<name>/latest.md` and
-     `latest.json` by **write-tmp-then-rename** in the same directory. Promotion happens **only**
+   - Valid → `os.rename` (same filesystem, atomic) to `contract.json`; then `db.py
+     upsert-findings`; then apply **suppression** (§4.5) to produce the promoted artifacts:
+     extract `report_markdown` and write it as `state/runs/<id>/output.md`; copy to
+     `reports/<name>/<YYYY-MM-DD-HHMM>.md` (with the §4.5 suppression footer when applicable);
+     then promote `reports/<name>/latest.md` and `latest.json` (suppression-filtered, §4.5) by
+     **write-tmp-then-rename** in the same directory. Promotion happens **only**
      for a run that both completed and validated — a timed-out or failed engine leaves the previous
-     `latest.*` untouched.
-7. `db.py finish-run` + `db.py record-metrics`; then regenerate the dashboard
+     `latest.*` untouched. `state/runs/<id>/contract.json` always keeps the engine emission
+     verbatim (audit trail).
+7. `db.py finish-run` (incl. `effective_status`, §4.5) + `db.py record-metrics`; then regenerate the dashboard
    (`dashboard/generate.py`) under a short global lock (`state/locks/_dashboard.lock`, `--wait-s 30`);
    a dashboard failure is logged but must **not** change the run's status or the exit code.
 8. Retention: prune `reports/<name>/*` and `state/runs/*` older than `retention_days` (default 30;
@@ -220,18 +286,59 @@ Default `--from loops.d`; `--trigger manual`.
 runner failure. launchd must only ever see non-zero for harness breakage.
 
 ### 4.3 Status model
-- **loop_status** (from the contract): `ok | warn | alert` → green / amber / red.
+- **loop_status** (from the contract): `ok | warn | alert` — the engine emission, stored verbatim.
+- **effective_status** (§4.5): loop_status after suppression — this is what the dashboard colours
+  green / amber / red.
 - **runner_status**, written by the runner: `completed | skipped-precheck | skipped-overlap |
   precheck-failed | engine-failed | engine-timeout | auth-failed | tool-denied |
-  contract-violation`. Derived by the dashboard only, never stored: `missed-schedule`, `stale`.
+  contract-violation | harness-error`. Derived by the dashboard only, never stored:
+  `missed-schedule`, `stale`, `died` (§4.6).
 - **Precedence for the displayed light:** any runner_status other than `completed` /
-  `skipped-precheck` outranks loop_status and renders red — **except** `skipped-overlap`, which
-  renders amber. `skipped-precheck` renders amber. `auth-failed` / `tool-denied` /
-  `contract-violation` render red with a distinct "harness problem" marker: they mean *fix the
-  harness*, not *the loop found something*.
-- **Watchdog stickiness:** if the probe failed (`heartbeat.ok=0`), the run's `loop_status` is
-  `alert` regardless of what the diagnosis engine returns; the diagnosis's own failure is recorded
-  in `runner_status` and `error_detail`.
+  `skipped-precheck` outranks effective_status and renders red — **except** `skipped-overlap`,
+  which renders amber. `skipped-precheck` renders amber. `auth-failed` / `tool-denied` /
+  `contract-violation` / `harness-error` render red with a distinct "harness problem" marker: they
+  mean *fix the harness*, not *the loop found something*.
+- **Watchdog stickiness:** if the probe failed (`heartbeat.ok=0`), the run's `loop_status` AND
+  `effective_status` are `alert` regardless of what the diagnosis engine returns and regardless of
+  suppression; the diagnosis's own failure is recorded in `runner_status` and `error_detail`.
+
+### 4.5 Findings suppression + effective status (Amendment 1 — mechanical, post-validation)
+
+The runner — never the model — filters findings whose current disposition is `dismiss`, or
+`snooze` with `snooze_until > now` (from `db.py suppressed`):
+
+- **Promoted `latest.json`**: the `findings` array contains unsuppressed findings only. The
+  verbatim emission stays in `state/runs/<id>/contract.json`.
+- **Promoted markdown** (`latest.md` + dated report): `report_markdown` is model prose and cannot
+  be reliably excised, so it is promoted verbatim with a runner-appended footer —
+  `---` + `Suppressed by disposition: <id> (dismissed 2026-06-01 "note"), …` — when any finding
+  was suppressed. Machine-read surfaces (dashboard, `latest.json`, sqlite) are the authoritative,
+  filtered views; the dashboard renders findings from sqlite + `latest.json` and NEVER parses
+  markdown.
+- **Effective status rule:** if the emitted `findings` array is **non-empty**, `effective_status`
+  = max severity of the *unsuppressed* findings (`info`→`ok`, `warn`→`warn`, `alert`→`alert`; all
+  suppressed → `ok`). If `findings` is **empty**, `effective_status = loop_status` (covers
+  watchdog probes and loops without itemized findings). Watchdog probe-failure stickiness (§4.3)
+  outranks this rule. Both values are stored on the run row.
+
+### 4.6 Engine-error handling
+
+- **Transient retry.** Adapters classify failures (§6.4): exit `12` = transient (HTTP 429/5xx,
+  network unreachable/reset, provider "overloaded"). The runner retries **only** exit-12 failures,
+  in-run: up to `retry_transient` attempts (§5, default 1, max 3), backoff 30s then 120s, all
+  inside the run's `timeout_s` budget (if the budget would be exceeded, stop retrying). Every
+  attempt is appended to `engine.log`; the attempt count is stored in `runs.attempts`. Retries
+  exhausted → `runner_status=engine-failed` with the transient classification in `error_detail`.
+  Auth (10), tool-denied (11), other (1), and contract violations are NEVER retried — they mean
+  *fix the harness*.
+- **`harness-error` catch-all.** Any unexpected runner error is trapped; the trap releases the
+  lock and finishes the run row with `runner_status=harness-error` + traceback/context in
+  `error_detail`, then exits 1. Harness bugs must surface on the dashboard, not only in launchd
+  stderr files.
+- **Died-run detection (derived, never stored).** `start-run` inserts immediately, so SIGKILL /
+  power loss leaves a row with `finished_at IS NULL`. The dashboard renders such rows older than
+  `timeout_s + 120s` grace as `died` (red, harness-problem marker), same family as stale
+  detection.
 
 ### 4.4 Redaction pass
 Applied to precheck output and to `engine.log` before they are written. Regex-replace with
@@ -265,6 +372,7 @@ Python, and sourcing arbitrary files is a code-execution footgun):
 | `timeout_s` | no | int 30–7200 | `900` | runner-owned, process-group |
 | `enabled` | no | `true` \| `false` | `true` | false ⇒ only `--trigger manual` runs |
 | `retention_days` | no | int 1–3650 | `30` | reports + run artifacts |
+| `retry_transient` | no | int 0–3 | `1` | in-run retries for adapter exit 12 ONLY (§4.6) |
 | `perm_fs_write` | no | `none` \| `report_only` \| `workdir` | `report_only` | §5.2 |
 | `perm_network` | no | `none` \| `full` | `none` | §5.2 |
 | `perm_local_exec` | no | `none` \| `allowlist` \| `full` | `none` | §5.2 |
@@ -338,7 +446,22 @@ permission axes to that CLI's flags, runs it, and writes four files. It contains
 | `LOOP_TYPE` | `agent` \| `watchdog` |
 
 ### 6.2 Prompt composition (runner-side, engine-neutral)
-`PROMPT_FILE` = `loops.d/<name>/prompt.md`, followed — when precheck produced output — by:
+`PROMPT_FILE` = `loops.d/<name>/prompt.md`, followed — when `db.py prior-findings` produced
+output — by:
+```
+
+---
+## PRIOR FINDINGS
+(generated by the runner — authoritative; do not recompute)
+
+```text
+<output of db.py prior-findings, e.g.:
+cookingapp:no-remote   seen 12× since 2026-05-04   DISMISSED 2026-06-01 ("intentional, local scratch repo")
+stuntsclone:unpushed   seen 3× since 2026-07-08    open
+claude-quality:no-remote  seen 9× since 2026-05-04  SNOOZED until 2026-09-01>
+```
+```
+followed — when precheck produced output — by:
 ```
 
 ---
@@ -350,7 +473,13 @@ permission axes to that CLI's flags, runs it, and writes four files. It contains
 ```
 ```
 The runner appends nothing else. Contract instructions live in the loop's `prompt.md` (seeded by
-`loopctl new`), because they are engine-neutral by design.
+`loopctl new`), because they are engine-neutral by design. The seeded template includes the three
+**findings prompt-contract rules** every loop keeps:
+1. Re-emit a still-true finding with its **same `finding_id`** — never invent a new id for a
+   recurring condition.
+2. Do not re-argue a `DISMISSED` finding unless the underlying situation has **materially
+   changed**; if it has, say what changed.
+3. Still emit `SNOOZED` findings if true — suppression is the runner's job, not the model's.
 
 ### 6.3 Output files (all inside `OUT_DIR`)
 | file | required | content |
@@ -358,12 +487,15 @@ The runner appends nothing else. Contract instructions live in the loop's `promp
 | `contract.json.tmp` | yes on success | exactly the engine's schema-conforming final message — a single JSON object, nothing else. The **runner** validates and renames it. |
 | `usage.json` | best-effort | raw usage/telemetry as emitted by the CLI, verbatim; absent or `{}` if unavailable |
 | `engine.log` | yes | the CLI's stdout+stderr (redacted via `bin/redact.py`) |
-| `engine.status` | yes | one line: `status=<ok\|auth-failed\|tool-denied\|engine-failed> exit=<n>` |
+| `engine.status` | yes | one line: `status=<ok\|auth-failed\|tool-denied\|transient\|engine-failed> exit=<n>` |
 
 ### 6.4 Adapter exit codes
 `0` success · `10` auth/credential failure · `11` a required tool was denied by the permission layer
-· `1` any other engine failure. The runner maps these to `completed` / `auth-failed` / `tool-denied`
-/ `engine-failed`, and maps its own timeout kill to `engine-timeout`.
+· `12` transient failure (HTTP 429 rate-limit, 5xx, network unreachable/reset, provider
+"overloaded" — the only class the runner retries, §4.6) · `1` any other engine failure. The runner
+maps these to `completed` / `auth-failed` / `tool-denied` / (`engine-failed` after retries) /
+`engine-failed`, and maps its own timeout kill to `engine-timeout`. The classification is recorded
+in `engine.status` and, on failure, in the run row's `error_detail`.
 
 ## 7. Engine flag mapping (VERIFIED — see `docs/ENGINE_PROBES.md`)
 
@@ -383,9 +515,26 @@ loopctl install <name>                                               # generate 
 loopctl uninstall <name>                                             # bootout + remove plist
 loopctl pause <name> / resume <name>                                 # sets enabled= and bootout/bootstrap
 loopctl dashboard                                                    # regenerate + print path
+loopctl findings <loop>                                              # open findings: id, severity, age, times_seen, disposition
+loopctl ack <loop> <finding_id> [--note …]                           # Amendment 1 disposition verbs —
+loopctl dismiss <loop> <finding_id> --note …                         #   note REQUIRED (audit trail)
+loopctl snooze <loop> <finding_id> --until YYYY-MM-DD                #   --until REQUIRED
+loopctl reopen <loop> <finding_id>
 ```
+Disposition verbs are thin wrappers over `db.py dispose` (+ dashboard regen so the change is
+visible immediately). The dashboard stays static (Change 4, Option A — settled with Generalissimo
+2026-07-22): dispositions enter via this CLI only.
 Global flags: `--root R` (default `$LOOPS_ROOT`), `--json` (machine-readable output where sensible),
 `--from loops.d|examples`. Exit codes: `0` ok · `1` operation failed · `2` usage.
+
+**`loopctl new` scaffolding** additionally seeds `loops.d/<name>/SPEC.md` from the intake template
+(`docs/LOOP_AUTHORING.md` carries the interview script). Template placeholders use the literal
+marker `[FILL: <hint>]`.
+
+**`loopctl validate` additions (Amendment 1 + intake):**
+- `prompt.md` must contain a `## Finding identity` heading documenting the loop's `finding_id`
+  derivation rule (seeded by the scaffold template) — missing heading = FAIL.
+- `SPEC.md` still containing any `[FILL:` placeholder = FAIL.
 
 ### 8.1 Install must self-verify
 `install` is not done when `launchctl bootstrap` returns. It must:
@@ -410,9 +559,25 @@ Global flags: `--root R` (default `$LOOPS_ROOT`), `--json` (machine-readable out
   "status_reason": "short_machine_category",
   "headline": "one line, e.g. '3 repos unpushed, 1 has no remote'",
   "report_markdown": "# full human report…",
-  "metrics": { }
+  "metrics": { },
+  "findings": [
+    {
+      "finding_id": "cookingapp:no-remote",
+      "title": "cookingapp has 23 unpushed commits and no remote",
+      "severity": "info | warn | alert",
+      "detail": "…"
+    }
+  ]
 }
 ```
+- `findings` is **required but MAY be empty** (a clean run, a watchdog probe). Each item requires
+  all four fields shown; no additional properties.
+- **`finding_id` must be deterministic and stable across runs** for the same real-world condition
+  and must NOT embed volatile data (timestamps, run ids, counts, shifting line numbers). Derive it
+  from the durable identity of the thing: `<subject>:<condition>`. Identity is **loop-defined**:
+  each loop's `prompt.md` documents its derivation rule under `## Finding identity` (§8).
+- The **engine emits identity only** — it never computes recurrence, age, or "3rd time seen"; the
+  runner derives all of that from sqlite. Never trust the model to count its own history.
 - `report_markdown` is in-schema on purpose: the schema-enforced final message **is** the entire
   emission, so there is no second free-text channel that can be lost.
 - `run_id` must equal the runner's `RUN_ID`; a mismatch is a `contract-violation`.
@@ -460,8 +625,17 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
 - **Top strip:** fleet counts by status, `needs_attention` count, spend today / 7d, last regen time.
 - **Stale detection:** a loop overdue by > 1.5 × its `expected_interval_s` (§5.1) is flagged
   `stale` and counts toward `needs_attention`. `manual` loops are exempt.
-- **Per-loop sections:** declared panels, trends (from the `metrics` table), a recent-runs table
-  including runner_status, report links, and the raw fallback panel.
+- **Died-run detection (§4.6):** a run row with `finished_at IS NULL` older than
+  `timeout_s + 120s` renders as `died` (red, harness-problem marker) and counts toward
+  `needs_attention`.
+- **Status light** uses `effective_status` (§4.5) under the §4.3 precedence — never raw
+  `loop_status`.
+- **Per-loop sections:** declared panels, trends (from the `metrics` table), a **findings list**
+  (from sqlite + `latest.json`, never parsed from markdown): open findings with recurrence and
+  disposition rendered as text — e.g. `3rd report · dismissed 2026-06-01 ("note")` — suppressed
+  findings shown greyed/collapsed, not hidden; a recent-runs table including runner_status,
+  report links, and the raw fallback panel. The dashboard is static (Change 4 Option A):
+  dispositions are entered via `loopctl`, and the page may display the ready-to-paste command.
 - Style: bold and distinctive, not generic corporate; dark-friendly; function first, dense over
   airy. It is a status board read at a glance, not a marketing page.
 
@@ -476,3 +650,19 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   stub fixture that emits a canned contract, honours `EXIT_CODE`/`SLEEP_S` env knobs for the
   timeout/failure paths, and is used by the runner tests.
 - `tests/run-tests.sh` must pass before any task is considered complete.
+
+**Amendment 1 verification additions (mandatory in the pilot matrix and the hermetic suite):**
+- **Idempotence:** run a loop twice against an unchanged world (fake engine, canned contract) →
+  identical `finding_id`s, `times_seen` increments, no duplicate `findings` rows, promoted report
+  unchanged in substance.
+- **Suppression:** dismiss a finding → the next run's promoted `latest.json` and the dashboard
+  omit it even though the engine still emits it (runner-side suppression proven, not prompt-side);
+  `effective_status` recomputed per §4.5 (a loop whose only finding is dismissed goes green).
+- **Resolution lifecycle:** a finding absent from a run gets `resolved_at` set; reappearing later
+  clears `resolved_at` and continues `times_seen`.
+- **Engine-error paths:** adapter exit 12 retried exactly `retry_transient` times then
+  `engine-failed` with transient classification; exits 10/11 never retried; an injected runner
+  exception produces `harness-error` with the lock released; a row with `finished_at IS NULL`
+  past `timeout_s + 120s` renders `died` on the dashboard.
+- **Pilot:** `examples/hello-loop` emits ≥2 findings with stable ids so recurrence and one
+  disposition are exercised as regression fixtures.

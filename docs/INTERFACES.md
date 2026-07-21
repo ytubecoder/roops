@@ -45,6 +45,8 @@ $LOOPS_ROOT/
   bin/loopctl                      # CLI (§8)
   bin/lock.py                      # fcntl lock helper (§2)
   bin/db.py                        # sqlite schema + insert/query helpers (§3)
+  bin/loopconf.py                  # loop.conf parser (§5.0) — single implementation
+  bin/schedule.py                  # schedule grammar parser (§5.1)
   engines/codex.sh                 # default engine adapter (§6, §7)
   engines/claude.sh                # alternate engine adapter (§6, §7)
   engines/README.md                # adapter interface spec (mirrors §6)
@@ -186,7 +188,8 @@ a new occurrence of a known id: `times_seen` continues, `resolved_at` clears. Di
 ```
 db.py init [--root R]
 db.py start-run   --root R --run-id ID --loop NAME --engine E [--model M] --trigger T --started-at TS
-db.py finish-run  --root R --run-id ID --runner-status S [--loop-status S] [--status-reason X]
+db.py finish-run  --root R --run-id ID --runner-status S [--loop-status S]
+                  [--effective-status S] [--attempts N] [--status-reason X]
                   [--headline H] [--report-path P] [--contract-path P] [--exit-code N]
                   [--error-detail X] [--usage-file F] [--finished-at TS]
 db.py heartbeat   --root R --loop NAME [--run-id ID] --ok 0|1 [--detail X]
@@ -207,8 +210,16 @@ db.py dispose         --root R --loop L --finding-id ID --action ack|dismiss|sno
                       [--note X] [--until TS]
                                     # appends a disposition row; dismiss REQUIRES --note;
                                     # snooze REQUIRES --until; unknown (loop,finding) → exit 1
-db.py query <name> [args...]        # named read queries for the dashboard; JSON to stdout
+db.py query <name> [args...]        # named read queries; JSON to stdout. Names:
+                                    #   loops-summary                     (latest run per loop)
+                                    #   last-runs   --loop L --limit N
+                                    #   metric-history --loop L --key K --days D
+                                    #   open-findings  --loop L
+                                    #   heartbeats  --loop L --limit N
+                                    #   spend       --days D              (per-loop token/cost sums)
 ```
+The dashboard MAY use `db.py query` or read sqlite directly with its own SQL — the §3 schema is
+frozen either way.
 `start-run` inserts immediately (so a crashed run still leaves a row); `finish-run` updates by
 `run_id` and computes `duration_ms`. Both are idempotent-safe (`INSERT OR REPLACE` / `UPDATE`).
 All writes wrapped in a single transaction with `busy_timeout`.
@@ -351,6 +362,15 @@ Implemented once in `bin/redact.py` (usable as filter: stdin → stdout) and use
 and the adapters. Redaction is best-effort defence in depth, never the primary control.
 
 ## 5. `loop.conf` — format and fields
+
+### 5.0 `bin/loopconf.py` — the single parser
+One implementation, used by everything: `parse(path) -> (conf: dict, errors: list[str])` applies
+defaults and type/range checks (grammar + field table below; unknown keys are errors). CLI:
+`loopconf.py parse --file F --json` (full dict + errors; exit 1 if errors) and
+`loopconf.py get --file F --key K` (resolved value incl. defaults; empty + exit 1 if unknown).
+`run-loop.sh` reads config via `loopconf.py get`/`parse --json`; `loopctl` and
+`dashboard/generate.py` import it. Dangerous-combo checks (§5.2) live in `loopctl validate`, not
+in the parser.
 
 **Strict `KEY=value` grammar — the file is NEVER `source`d** (it is parsed by both bash and
 Python, and sourcing arbitrary files is a code-execution footgun):

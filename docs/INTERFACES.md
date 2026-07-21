@@ -499,9 +499,68 @@ in `engine.status` and, on failure, in the run row's `error_detail`.
 
 ## 7. Engine flag mapping (VERIFIED — see `docs/ENGINE_PROBES.md`)
 
-> Filled in by the controller from live CLI probes. Builders: use these exact forms.
+> Filled in by the controller from live CLI probes on 2026-07-22 (`codex-cli 0.144.3`,
+> `Claude Code 2.1.217`). Builders: use these exact forms.
 
-*(pending probe results — controller fills before adapters are finalized)*
+### 7.1 Shared facts
+- **One schema for both.** `codex --output-schema` uses OpenAI *strict* structured outputs:
+  every object needs `additionalProperties:false` and all properties in `required`; free-form
+  objects are rejected with a 400 (verified). Claude accepts that same strict subset, so
+  `contract/contract.schema.json` is written to it. Consequence: **`metrics` is a JSON-string
+  field** (§9.1), parsed by the runner. `enum` on strings and integers is verified OK on both.
+- **Prompt via stdin.** codex: prompt arg + open stdin makes it read both — always
+  `codex exec … - < "$PROMPT_FILE"`. claude: `claude -p … < "$PROMPT_FILE"` equally avoids
+  ARG_MAX/quoting.
+- **Fresh session flags (§0):** codex `--ephemeral`; claude `--no-session-persistence`. Never
+  `resume`/`--resume`/`--continue`.
+- **Minimal launchd env:** `HOME`, `PATH` ⊇ `/opt/homebrew/bin` + `$HOME/.local/bin`,
+  `LOOPS_ROOT`. codex auth: `~/.codex/`; claude auth: keychain/`~/.claude` (kickstart-verify
+  §8.1 is what proves it works under launchd).
+
+### 7.2 codex adapter (`engines/codex.sh`)
+```
+codex exec --skip-git-repo-check --ephemeral -C "$WORKDIR" \
+  -s <sandbox> [-c sandbox_workspace_write.network_access=true] [--add-dir …] \
+  --output-schema "$SCHEMA_FILE" -o "$OUT_DIR/last-message.json" --json \
+  ${MODEL:+-m "$MODEL"} - < "$PROMPT_FILE"
+```
+| axes | flags |
+|---|---|
+| `perm_fs_write=none|report_only` (floor) | `-s read-only` (the CLI itself writes `-o`; the model gets no write access — `report_only` needs nothing writable) |
+| `perm_fs_write=workdir` | `-s workspace-write` (workdir = `-C` target) |
+| `perm_network=full` | requires workspace-write + `-c sandbox_workspace_write.network_access=true` (key verified via `--strict-config`) |
+| `perm_local_exec` | commands always run inside the selected sandbox; `allowlist` on codex is enforced by sandbox + credential scoping, not a flag (documented limitation — validate's dangerous-combo rules assume this) |
+- Success: exit 0; `-o` file = exactly the final JSON object → copy to `contract.json.tmp`.
+- Usage: JSONL `turn.completed` event `.usage` = `{input_tokens, cached_input_tokens,
+  output_tokens, reasoning_output_tokens}` → `usage.json`; **no cost field** (`cost_usd` NULL).
+- Failure: exit 1 + `error`/`turn.failed` events; no `-o` file. Classify from the `error`
+  message: auth → 10; 429/5xx/network/overloaded → 12; else 1. Sandbox denials produce no
+  distinct signal (11 is claude-primary).
+- Empty `MODEL` ⇒ omit `-m` (config default, currently `gpt-5.5`).
+
+### 7.3 claude adapter (`engines/claude.sh`)
+```
+claude -p --output-format json --json-schema "$(cat "$SCHEMA_FILE")" \
+  ${MODEL:+--model "$MODEL"} --tools <set> [--allowedTools …] [--add-dir …] \
+  --setting-sources "" --strict-mcp-config --no-session-persistence \
+  --disable-slash-commands < "$PROMPT_FILE"
+```
+| axes | flags |
+|---|---|
+| floor (`report_only/none/none/none`) | `--tools ""` — no tools at all; pure interpretation (the adapter writes all files, the model none) |
+| read-only exploration (loop-approved) | `--tools "Read,Glob,Grep"` + `--add-dir <scope>` |
+| `perm_local_exec=allowlist` | `--tools "Bash"` + one `--allowedTools "Bash(<pattern>)"` per `EXEC_ALLOWLIST` entry; in `-p` mode un-allowed tool calls fail (nobody to ask) and land in `permission_denials` |
+| `perm_network` | no dedicated flag — governed by which tools are exposed (no Bash/WebFetch ⇒ no network); `full` requires local_exec allowing a network-capable command |
+- `--json-schema` takes the schema as a **JSON string** (verified) — pass file content.
+- Success: exit 0; stdout = one JSON object; adapter extracts **`structured_output`** (parsed,
+  schema-conformant — verified) → `contract.json.tmp`; whole object → `usage.json`
+  (`total_cost_usd` is real — verified 0.018568 on the probe; also `usage`, `modelUsage`,
+  `permission_denials`, `session_id`, `num_turns`).
+- Failure: `is_error:true` / `subtype != "success"` / non-zero exit; `api_error_status` carries
+  HTTP status. Classify: 401/403 → 10; 429/5xx/overloaded → 12; missing `structured_output`
+  with non-empty `permission_denials` → 11; else 1.
+- **Never pass `--dangerously-skip-permissions`** (the user's interactive alias adds it;
+  scripts bypass aliases — invoke the plain binary).
 
 ## 8. `bin/loopctl` — CLI surface
 
@@ -559,7 +618,7 @@ marker `[FILL: <hint>]`.
   "status_reason": "short_machine_category",
   "headline": "one line, e.g. '3 repos unpushed, 1 has no remote'",
   "report_markdown": "# full human report…",
-  "metrics": { },
+  "metrics": "{\"repos\": {\"dirty\": 2}}",
   "findings": [
     {
       "finding_id": "cookingapp:no-remote",
@@ -581,8 +640,13 @@ marker `[FILL: <hint>]`.
 - `report_markdown` is in-schema on purpose: the schema-enforced final message **is** the entire
   emission, so there is no second free-text channel that can be lost.
 - `run_id` must equal the runner's `RUN_ID`; a mismatch is a `contract-violation`.
-- `metrics` is tier-2, free-form, and may be empty. Its exact JSON-Schema encoding is dictated by
-  what the two CLIs' strict structured-output modes actually accept — see §7 / `ENGINE_PROBES.md`.
+- `metrics` is tier-2 and free-form **in content**, but its wire encoding is a **JSON string
+  containing a serialized JSON object** (`"{}"` when empty). This is forced by codex's strict
+  structured-output mode, which rejects free-form objects (verified — §7.1 / `ENGINE_PROBES.md`).
+  `validate_contract.py` additionally checks the string parses as a JSON **object**; a
+  non-parsing or non-object `metrics` string is a `contract-violation`. The string stays
+  verbatim in `contract.json`/`latest.json`; `db.py record-metrics` parses it before flattening
+  (§3); the dashboard reads metrics from sqlite only.
 - The schema file `contract/contract.schema.json` is the single source of truth and is passed to
   **both** engines. If the two CLIs demand incompatible strictness, the schema is written to the
   intersection of what both accept.

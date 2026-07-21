@@ -48,7 +48,7 @@ FIELDS = {
     "engine": {"required": True, "type": "enum", "values": ["codex", "claude"]},
     "model": {"required": False, "type": "str", "default": None},
     "schedule": {"required": True, "type": "schedule"},
-    "workdir": {"required": False, "type": "path", "default": "$LOOPS_ROOT"},
+    "workdir": {"required": False, "type": "path", "default": None},
     "timeout_s": {"required": False, "type": "int", "min": 30, "max": 7200, "default": 900},
     "enabled": {"required": False, "type": "bool", "default": True},
     "retention_days": {"required": False, "type": "int", "min": 1, "max": 3650, "default": 30},
@@ -216,7 +216,11 @@ def parse(path: str):
             else:
                 conf[key] = field.get("default")
 
-    # $HOME/~ expansion ONLY in workdir.
+    # $HOME/~ expansion ONLY in workdir. workdir's schema default is None
+    # (not a literal placeholder) so that an omitted workdir falls through
+    # to _loops_root(), which resolves LOOPS_ROOT (env, else
+    # $HOME/projects/loops) at parse() time — honoring the §0 rule and
+    # letting LOOPS_ROOT overrides in the environment take effect.
     if conf.get("workdir"):
         conf["workdir"] = _expand_home(conf["workdir"])
     if not conf.get("workdir"):

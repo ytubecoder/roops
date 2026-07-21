@@ -251,6 +251,60 @@ class TestLoopConfParsing(unittest.TestCase):
         conf, errors = loopconf.parse(str(Path(self.tmp) / "missing.conf"))
         self.assertTrue(errors)
 
+    def test_omitted_workdir_defaults_to_loops_root_env(self):
+        # Omitting workdir must resolve to the real loops root, not the
+        # literal placeholder string "$LOOPS_ROOT". LOOPS_ROOT env wins.
+        fake_root = os.path.join(self.tmp, "fake-loops-root")
+        os.makedirs(fake_root, exist_ok=True)
+        old = os.environ.get("LOOPS_ROOT")
+        os.environ["LOOPS_ROOT"] = fake_root
+        self.addCleanup(
+            lambda: os.environ.pop("LOOPS_ROOT", None)
+            if old is None
+            else os.environ.__setitem__("LOOPS_ROOT", old)
+        )
+        path = self.write(MINIMAL_VALID)
+        conf, errors = loopconf.parse(path)
+        self.assertEqual(errors, [])
+        self.assertNotEqual(conf["workdir"], "$LOOPS_ROOT")
+        self.assertEqual(conf["workdir"], fake_root)
+
+    def test_omitted_workdir_defaults_to_loops_root_no_env(self):
+        # Without LOOPS_ROOT set, the fallback is $HOME/projects/loops
+        # (per _loops_root()), never the literal placeholder string.
+        old = os.environ.pop("LOOPS_ROOT", None)
+        self.addCleanup(
+            lambda: None if old is None else os.environ.__setitem__("LOOPS_ROOT", old)
+        )
+        path = self.write(MINIMAL_VALID)
+        conf, errors = loopconf.parse(path)
+        self.assertEqual(errors, [])
+        self.assertNotEqual(conf["workdir"], "$LOOPS_ROOT")
+        self.assertEqual(conf["workdir"], os.path.expanduser("~/projects/loops"))
+
+    def test_explicit_workdir_unchanged_when_loops_root_env_set(self):
+        # An explicitly-set workdir must NOT be overridden by LOOPS_ROOT —
+        # only the omitted-workdir fallback consults it.
+        old = os.environ.get("LOOPS_ROOT")
+        os.environ["LOOPS_ROOT"] = os.path.join(self.tmp, "unrelated-root")
+        self.addCleanup(
+            lambda: os.environ.pop("LOOPS_ROOT", None)
+            if old is None
+            else os.environ.__setitem__("LOOPS_ROOT", old)
+        )
+        content = MINIMAL_VALID + "workdir=/explicit/path\n"
+        path = self.write(content)
+        conf, errors = loopconf.parse(path)
+        self.assertEqual(errors, [])
+        self.assertEqual(conf["workdir"], "/explicit/path")
+
+    def test_explicit_workdir_home_expansion_still_works(self):
+        content = MINIMAL_VALID + "workdir=$HOME/explicit-somewhere\n"
+        path = self.write(content)
+        conf, errors = loopconf.parse(path)
+        self.assertEqual(errors, [])
+        self.assertEqual(conf["workdir"], os.path.expanduser("~/explicit-somewhere"))
+
 
 class TestLoopConfCLI(unittest.TestCase):
     def setUp(self):
@@ -289,6 +343,24 @@ class TestLoopConfCLI(unittest.TestCase):
         proc = self.run_cli(["get", "--file", str(self.path), "--key", "nope"])
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(proc.stdout.strip(), "")
+
+    def test_get_workdir_omitted_resolves_to_loops_root_env(self):
+        # Regression: omitted workdir must not surface the literal
+        # placeholder "$LOOPS_ROOT" — it must resolve to the real root,
+        # honoring LOOPS_ROOT from the environment.
+        fake_root = os.path.join(self.tmp, "fake-loops-root")
+        os.makedirs(fake_root, exist_ok=True)
+        env = dict(os.environ)
+        env["LOOPS_ROOT"] = fake_root
+        proc = subprocess.run(
+            [sys.executable, str(BIN), "get", "--file", str(self.path), "--key", "workdir"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotEqual(proc.stdout.strip(), "$LOOPS_ROOT")
+        self.assertEqual(proc.stdout.strip(), fake_root)
 
 
 if __name__ == "__main__":

@@ -103,3 +103,9 @@ missing/invalid `structured_output` with non-empty `permission_denials` → 11; 
 `LOOPS_ROOT`. codex auth lives under `~/.codex/`; claude auth uses the keychain/`~/.claude` —
 keychain access from a launchd job is exactly what `loopctl install`'s kickstart-verify (§8.1)
 exists to prove.
+
+## Follow-up probe (2026-07-22, post-build)
+The committed `contract/contract.schema.json` — including `minLength:1` on `run_id` and
+`finding_id` — was probed against `codex exec --output-schema` directly: accepted, exit 0,
+conformant emission. String `minLength` is fine in codex's strict mode; the schema file is
+verified as-committed.

@@ -204,8 +204,11 @@ db.py prior-findings  --root R --loop NAME
                                     # DISMISSED <date> ("note") / SNOOZED until <date>).
                                     # Empty stdout when there are none.
 db.py suppressed      --root R --loop NAME --ts TS
-                                    # JSON list of finding_ids whose current disposition is
-                                    # dismiss, or snooze with snooze_until > TS (§4.5)
+                                    # JSON array of objects {finding_id, action, created_at,
+                                    # note, snooze_until} for findings whose current disposition
+                                    # is dismiss, or snooze with snooze_until > TS (§4.5) —
+                                    # the runner uses finding_id for filtering and the rest for
+                                    # the human-readable suppression footer
 db.py dispose         --root R --loop L --finding-id ID --action ack|dismiss|snooze|reopen
                       [--note X] [--until TS]
                                     # appends a disposition row; dismiss REQUIRES --note;
@@ -295,6 +298,11 @@ Default `--from loops.d`; `--trigger manual`.
 `1` = the harness itself failed (bad conf, unwritable state, missing engine adapter);
 `2` = usage error. **A loop reporting `alert` still exits 0** — the loop's finding is data, not a
 runner failure. launchd must only ever see non-zero for harness breakage.
+**Clarification (settled):** `auth-failed` / `tool-denied` / `contract-violation` /
+`engine-failed` / `engine-timeout` are *recorded* definitive outcomes → exit 0; the dashboard's
+harness-problem marker is their surfacing mechanism. Non-zero is reserved for failures that
+prevented recording a run at all (plus `harness-error`, which exits 1 after best-effort
+recording).
 
 ### 4.3 Status model
 - **loop_status** (from the contract): `ok | warn | alert` — the engine emission, stored verbatim.

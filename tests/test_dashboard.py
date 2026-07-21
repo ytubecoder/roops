@@ -451,7 +451,11 @@ class GenerateIntegrationTests(unittest.TestCase):
         )
         with open(out) as f:
             html = f.read()
-        self.assertIn("stale", html.lower())
+        # exact rendered badge markup (not just the substring "stale", which also
+        # appears in the page's static .badge.stale CSS rule regardless of wiring)
+        self.assertIn('<span class="badge stale">stale</span>', html)
+        # and it must actually count toward the needs-attention chip
+        self.assertIn("needs attention 1", html)
 
     def test_manual_loop_never_flagged_stale(self):
         conn = self.fx.init_db()
@@ -487,7 +491,11 @@ class GenerateIntegrationTests(unittest.TestCase):
         )
         with open(out) as f:
             html = f.read()
-        self.assertIn("died", html.lower())
+        # exact rendered badge markup (not just the substring "died", which also
+        # appears in the page's static .badge.died CSS rule regardless of wiring)
+        self.assertIn('<span class="badge died">died</span>', html)
+        # and it must actually count toward the needs-attention chip
+        self.assertIn("needs attention 1", html)
 
     def test_findings_suppressed_greyed_open_shows_recurrence(self):
         conn = self.fx.init_db()
@@ -542,8 +550,10 @@ class GenerateIntegrationTests(unittest.TestCase):
         self.assertIn("intentional, local scratch repo", html)
         # a ready-to-paste loopctl dismiss command for the open finding
         self.assertIn("loopctl dismiss cookingapp cookingapp:unpushed", html)
-        # suppressed finding visually marked (grey/collapsed class), not simply absent
-        self.assertIn("suppressed", html.lower())
+        # suppressed finding visually marked (grey/collapsed class), not simply absent --
+        # exact rendered markup, not just the substring "suppressed" which also appears
+        # in the page's static .finding.suppressed CSS rule regardless of wiring
+        self.assertIn('class="finding suppressed"', html)
 
     def test_spend_aggregation_7day(self):
         conn = self.fx.init_db()

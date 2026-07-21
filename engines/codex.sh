@@ -26,10 +26,6 @@ mkdir -p "$OUT_DIR"
 
 REDACT="$LOOPS_ROOT/bin/redact.py"
 O_FILE="$OUT_DIR/last-message.json"
-STDOUT_RAW="$(mktemp "${TMPDIR:-/tmp}/codex-stdout.XXXXXX")"
-STDERR_RAW="$(mktemp "${TMPDIR:-/tmp}/codex-stderr.XXXXXX")"
-cleanup() { rm -f "$STDOUT_RAW" "$STDERR_RAW"; }
-trap cleanup EXIT
 
 # --- axes -> flags (§7.2 table; read-only floor; workspace-write only when
 # PERM_FS_WRITE=workdir; network key only when PERM_NETWORK=full — the two
@@ -39,6 +35,25 @@ if [ "$PERM_FS_WRITE" = "workdir" ]; then
 else
   SANDBOX="read-only"
 fi
+
+# §7.2: on codex, `-c sandbox_workspace_write.network_access=true` is
+# silently ignored under a read-only sandbox — PERM_NETWORK=full is only
+# meaningful together with PERM_FS_WRITE=workdir. Rather than either
+# silently no-opping the network grant or silently widening the sandbox to
+# workspace-write (which would grant fs access the conf never asked for),
+# hard-fail before invoking codex at all.
+if [ "$PERM_NETWORK" = "full" ] && [ "$SANDBOX" != "workspace-write" ]; then
+  DETAIL="codex adapter refuses to run: PERM_NETWORK=full requires PERM_FS_WRITE=workdir (workspace-write sandbox); with PERM_FS_WRITE=$PERM_FS_WRITE the resolved sandbox is $SANDBOX, under which -c sandbox_workspace_write.network_access=true is silently ignored by codex — a contradictory grant, not something this adapter will silently no-op or silently escalate the sandbox to fix."
+  printf '%s\n' "$DETAIL" | python3 "$REDACT" >"$OUT_DIR/engine.log"
+  printf '{}' >"$OUT_DIR/usage.json"
+  printf 'status=engine-failed exit=1\n' >"$OUT_DIR/engine.status"
+  exit 1
+fi
+
+STDOUT_RAW="$(mktemp "${TMPDIR:-/tmp}/codex-stdout.XXXXXX")"
+STDERR_RAW="$(mktemp "${TMPDIR:-/tmp}/codex-stderr.XXXXXX")"
+cleanup() { rm -f "$STDOUT_RAW" "$STDERR_RAW"; }
+trap cleanup EXIT
 
 cmd=(codex exec --skip-git-repo-check --ephemeral -C "$WORKDIR" -s "$SANDBOX")
 

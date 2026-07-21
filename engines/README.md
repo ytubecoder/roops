@@ -103,13 +103,16 @@ codex exec --skip-git-repo-check --ephemeral -C "$WORKDIR" \
 |---|---|
 | `PERM_FS_WRITE=none\|report_only` (floor) | `-s read-only` |
 | `PERM_FS_WRITE=workdir` | `-s workspace-write` |
-| `PERM_NETWORK=full` | `-c sandbox_workspace_write.network_access=true` |
+| `PERM_NETWORK=full` | `-c sandbox_workspace_write.network_access=true` — **only valid combined with `PERM_FS_WRITE=workdir`**; under a read-only sandbox the key is silently ignored by codex, so the adapter HARD-FAILS instead (exit `1`, no codex invocation, `engine.status`/`engine.log` explain why) rather than silently no-opping the network grant or silently escalating the sandbox to workspace-write |
 | `PERM_LOCAL_EXEC` (any value) | no dedicated flag — codex enforces this via sandbox + credential scoping, not a CLI flag |
 
 The two flag rows above are independent conditions, not an if/elif chain:
-`PERM_NETWORK=full` adds the `-c` key regardless of `PERM_FS_WRITE` (the
-adapter does not silently escalate the sandbox mode just to satisfy a
-network request — see "Known gaps" below).
+`PERM_NETWORK=full` adds the `-c` key regardless of `PERM_FS_WRITE` — but
+only after confirming the resolved sandbox is `workspace-write`. The
+adapter never silently escalates the sandbox mode just to satisfy a network
+request; on the contradictory combo (`PERM_NETWORK=full` with a
+non-workspace-write sandbox) it refuses to run at all (see "Known gaps"
+below).
 
 - Success: exit `0`; the `-o` file is exactly the final JSON object — copy
   it verbatim to `contract.json.tmp`.

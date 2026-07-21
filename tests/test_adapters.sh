@@ -328,11 +328,38 @@ d="$(new_out_dir)"
 run_codex "$d" workdir none none none "" "" 0 "" "" "$CONTRACT_JSON"
 assert "codex workdir-write: -s workspace-write" argv_has_pair "$d/.argv" "-s" "workspace-write"
 
-# --- network=full axes (report_only fs_write; independent per brief) ---
+# --- network=full + non-workspace-write sandbox: hard-fail (§7.2 amended
+# row). codex is never invoked; the adapter refuses the contradictory combo
+# rather than silently no-opping the network grant or silently widening the
+# sandbox to workspace-write. ---
 d="$(new_out_dir)"
 run_codex "$d" report_only full none none "" "" 0 "" "" "$CONTRACT_JSON"
-assert "codex network=full: -s still read-only" argv_has_pair "$d/.argv" "-s" "read-only"
-assert "codex network=full: network_access key present" argv_has_pair "$d/.argv" "-c" "sandbox_workspace_write.network_access=true"
+rc=$?
+assert_eq "codex network=full + report_only: adapter exit 1" "1" "$rc"
+assert_file_absent "codex network=full + report_only: codex never invoked" "$d/.argv"
+assert_file_exists "codex network=full + report_only: engine.log written" "$d/engine.log"
+assert_eq "codex network=full + report_only: engine.status" "status=engine-failed exit=1" "$(cat "$d/engine.status" 2>/dev/null)"
+assert_file_exists "codex network=full + report_only: usage.json written" "$d/usage.json"
+assert "codex network=full + report_only: usage.json is {}" json_eq_file_and_literal "$d/usage.json" '{}'
+assert_file_absent "codex network=full + report_only: no contract.json.tmp" "$d/contract.json.tmp"
+
+d="$(new_out_dir)"
+run_codex "$d" none full none none "" "" 0 "" "" "$CONTRACT_JSON"
+rc=$?
+assert_eq "codex network=full + fs_write=none: adapter exit 1" "1" "$rc"
+assert_file_absent "codex network=full + fs_write=none: codex never invoked" "$d/.argv"
+assert_eq "codex network=full + fs_write=none: engine.status" "status=engine-failed exit=1" "$(cat "$d/engine.status" 2>/dev/null)"
+assert_file_absent "codex network=full + fs_write=none: no contract.json.tmp" "$d/contract.json.tmp"
+
+# --- network=full + workdir: the one valid combo — must keep working
+# exactly as before (workspace-write sandbox + the network_access key). ---
+d="$(new_out_dir)"
+run_codex "$d" workdir full none none "" "" 0 "" "" "$CONTRACT_JSON"
+rc=$?
+assert_eq "codex network=full + workdir: adapter exit 0" "0" "$rc"
+assert "codex network=full + workdir: -s workspace-write" argv_has_pair "$d/.argv" "-s" "workspace-write"
+assert "codex network=full + workdir: network_access key present" argv_has_pair "$d/.argv" "-c" "sandbox_workspace_write.network_access=true"
+assert_file_exists "codex network=full + workdir: contract.json.tmp written" "$d/contract.json.tmp"
 
 # --- MODEL passthrough ---
 d="$(new_out_dir)"

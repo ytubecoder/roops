@@ -1033,7 +1033,7 @@ class TestDispositions(LoopsRootTestCase):
         self.assertEqual(len(rows), 1)
 
         rsup = run_db(["suppressed", "--root", self.root, "--loop", name, "--ts", iso(datetime.now(timezone.utc))])
-        self.assertIn("svc:down", json.loads(rsup.stdout))
+        self.assertIn("svc:down", [d["finding_id"] for d in json.loads(rsup.stdout)])
 
     def test_snooze_requires_until(self):
         name = "disp-loop3"
@@ -1050,7 +1050,7 @@ class TestDispositions(LoopsRootTestCase):
         r = run_cli(["snooze", name, "svc:down", "--until", until, "--root", self.root])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         rsup = run_db(["suppressed", "--root", self.root, "--loop", name, "--ts", iso(datetime.now(timezone.utc))])
-        self.assertIn("svc:down", json.loads(rsup.stdout))
+        self.assertIn("svc:down", [d["finding_id"] for d in json.loads(rsup.stdout)])
 
     def test_ack_round_trips(self):
         name = "disp-loop5"

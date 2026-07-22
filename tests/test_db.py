@@ -563,7 +563,7 @@ class TestPriorFindings(DbTestCase):
         self.upsert("run1", [FINDING_A], "2026-07-01T00:00:00Z")
         out = self.prior_findings()
         self.assertIn("repo:no-remote", out)
-        self.assertIn("seen 1x since 2026-07-01", out)
+        self.assertIn("seen 1× since 2026-07-01", out)
         self.assertIn("open", out)
 
     def test_dismissed_finding_rendering(self):

@@ -575,7 +575,7 @@ def cmd_prior_findings(args) -> int:
             since_date = row["first_seen_at"][:10]
             disp_str = _format_disposition(disp)
             lines.append(
-                f"{row['finding_id']}  seen {row['times_seen']}x since {since_date}  {disp_str}"
+                f"{row['finding_id']}  seen {row['times_seen']}× since {since_date}  {disp_str}"
             )
     finally:
         conn.close()

@@ -486,16 +486,18 @@ prune_retention() {
   local retention_days="${CONF_RETENTION_DAYS:-30}"
   case "$retention_days" in ''|*[!0-9]*) retention_days=30 ;; esac
   "$PY" - "$ROOT" "$NAME" "$retention_days" <<'PYEOF' 2>/dev/null || true
-import os, sys, time, shutil
+import os, re, sys, time, shutil
 
 root, name, days = sys.argv[1], sys.argv[2], int(sys.argv[3])
 cutoff = time.time() - days * 86400
 
-def prune_dir(d, keep_names=()):
+def prune_dir(d, keep_names=(), only_match=None):
     if not os.path.isdir(d):
         return
     for entry in os.listdir(d):
         if entry in keep_names:
+            continue
+        if only_match is not None and not only_match.match(entry):
             continue
         p = os.path.join(d, entry)
         try:
@@ -512,7 +514,15 @@ def prune_dir(d, keep_names=()):
                 pass
 
 prune_dir(os.path.join(root, "reports", name), keep_names=("latest.md", "latest.json"))
-prune_dir(os.path.join(root, "state", "runs"))
+
+# state/runs/* is a GLOBAL directory shared by every loop in the tree: a
+# short-retention loop must only prune run dirs it owns, never another
+# loop's audit trail. run_id shape (bin/run-loop.sh Step 2) is exactly
+# <UTC %Y%m%dT%H%M%SZ>-<name>-<6 hex chars>; anchor on the full shape (not
+# just a `-<name>-` substring) so a loop whose name is a prefix/suffix of
+# another loop's name can never match its dirs.
+run_id_re = re.compile(r"^\d{8}T\d{6}Z-" + re.escape(name) + r"-[0-9a-f]{6}$")
+prune_dir(os.path.join(root, "state", "runs"), only_match=run_id_re)
 PYEOF
   return 0
 }

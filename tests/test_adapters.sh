@@ -53,6 +53,12 @@ CLAUDE_SUCCESS_JSON="{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":f
 CLAUDE_AUTH_JSON='{"type":"result","subtype":"error","is_error":true,"api_error_status":401,"permission_denials":[]}'
 CLAUDE_TRANSIENT_JSON='{"type":"result","subtype":"error","is_error":true,"api_error_status":429,"permission_denials":[]}'
 CLAUDE_TOOLDENIED_JSON='{"type":"result","subtype":"error","is_error":true,"permission_denials":[{"tool":"Bash","pattern":"Bash(rm -rf /)"}]}'
+# Item 3 regression fixture: a permission denial whose canned "result" text
+# happens to contain the word "network" (a TRANSIENT_RE trigger word). The
+# text-regex fallback must never run before the missing-structured_output +
+# permission_denials check, or this denial gets misclassified transient (12)
+# and pointlessly retried instead of tool-denied (11).
+CLAUDE_TOOLDENIED_NETWORK_TEXT_JSON='{"type":"result","subtype":"error","is_error":true,"result":"denied: blocked access to network resource","permission_denials":[{"tool":"Bash","pattern":"Bash(curl *)"}]}'
 CLAUDE_GENERIC_JSON='{"type":"result","subtype":"error","is_error":true,"permission_denials":[]}'
 
 # ---------------------------------------------------------------------------
@@ -471,6 +477,15 @@ run_claude "$d" report_only none none none "" "" 1 "" "$CLAUDE_TOOLDENIED_JSON"
 rc=$?
 assert_eq "claude tool-denied: adapter exit 11" "11" "$rc"
 assert_eq "claude tool-denied: engine.status" "status=tool-denied exit=11" "$(cat "$d/engine.status" 2>/dev/null)"
+
+# --- failure classification: tool-denied, but the canned result text
+# contains "network" (order regression, item 3) — must still classify 11,
+# not fall through to the TRANSIENT_RE text fallback and classify 12. ---
+d="$(new_out_dir)"
+run_claude "$d" report_only none none none "" "" 1 "" "$CLAUDE_TOOLDENIED_NETWORK_TEXT_JSON"
+rc=$?
+assert_eq "claude tool-denied w/ 'network' in result text: adapter exit 11" "11" "$rc"
+assert_eq "claude tool-denied w/ 'network' in result text: engine.status" "status=tool-denied exit=11" "$(cat "$d/engine.status" 2>/dev/null)"
 
 # --- failure classification: other/generic ---
 d="$(new_out_dir)"

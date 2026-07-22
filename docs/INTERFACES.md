@@ -364,8 +364,9 @@ Applied to precheck output and to `engine.log` before they are written. Regex-re
 `«redacted:<kind>»`, case-insensitive:
 - `gh[pousr]_[A-Za-z0-9]{20,}` (GitHub tokens), `sk-[A-Za-z0-9_-]{20,}`, `xox[baprs]-[A-Za-z0-9-]{10,}`
 - `AKIA[0-9A-Z]{16}`, `-----BEGIN [A-Z ]*PRIVATE KEY-----` … block
-- lines matching `(?i)(api[_-]?key|secret|password|token|authorization)\s*[:=]\s*\S+` → keep the key
-  name, redact the value.
+- lines matching `(?i)(api[_-]?key|secret|password|token|authorization)\s*[:=]\s*` → keep the key
+  name, redact the REST OF THE LINE (multi-token values like `Bearer <jwt>` must not survive).
+- `eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+` (bare JWTs).
 Implemented once in `bin/redact.py` (usable as filter: stdin → stdout) and used by both the runner
 and the adapters. Redaction is best-effort defence in depth, never the primary control.
 
@@ -406,7 +407,7 @@ Python, and sourcing arbitrary files is a code-execution footgun):
 | `perm_local_exec` | no | `none` \| `allowlist` \| `full` | `none` | §5.2 |
 | `perm_remote_mutation` | no | `none` \| `allowlist` | `none` | §5.2 |
 | `exec_allowlist` | cond | quoted comma-separated command patterns | — | required when `perm_local_exec=allowlist` or `perm_remote_mutation=allowlist` |
-| `credential_env` | no | comma-separated env var names | — | vars passed through to the engine (values never logged) |
+| `credential_env` | no | comma-separated env var names | — | RESERVED — not implemented in v1: `loopctl validate` hard-fails a non-empty value (real passthrough needs a launchd-env design; do not fake it) |
 | `remote_mutation_justification` | cond | string | — | **required** when `perm_remote_mutation != none` |
 | `notes` | no | string | — | free text |
 

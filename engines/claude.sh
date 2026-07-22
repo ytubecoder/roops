@@ -160,15 +160,21 @@ if obj is not None:
     else:
         bucket = classify_status_code(api_error_status)
         combined = stdout_text + "\n" + stderr_text
-        if bucket == "auth" or (bucket is None and AUTH_RE.search(combined)):
+        if bucket == "auth":
             status = "auth-failed"
             adapter_exit = 10
-        elif bucket == "transient" or (bucket is None and TRANSIENT_RE.search(combined)):
+        elif bucket == "transient":
             status = "transient"
             adapter_exit = 12
         elif structured_output is None and len(permission_denials) > 0:
             status = "tool-denied"
             adapter_exit = 11
+        elif AUTH_RE.search(combined):
+            status = "auth-failed"
+            adapter_exit = 10
+        elif TRANSIENT_RE.search(combined):
+            status = "transient"
+            adapter_exit = 12
         else:
             status = "engine-failed"
             adapter_exit = 1

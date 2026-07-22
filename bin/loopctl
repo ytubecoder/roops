@@ -360,6 +360,15 @@ def _dangerous_combo_checks(conf):
             "dangerous combo (rule 7): network=full on codex requires perm_fs_write=workdir"
         )
 
+    # Rule 8 (§5 credential_env): reserved, not implemented in v1 — hard-fail any
+    # non-empty value rather than silently accepting a config that promises
+    # credential passthrough the harness does not actually provide.
+    if conf.get("credential_env"):
+        errors.append(
+            "dangerous combo (rule 8): credential_env is reserved and not implemented "
+            "in v1 — remove it"
+        )
+
     return errors
 
 
@@ -696,7 +705,8 @@ def cmd_run(args):
         print(f"run-loop.sh not found at {runner}", file=sys.stderr)
         return 1
     cmd = ["bash", runner, args.name, "--trigger", args.trigger, "--from", args.from_dir]
-    proc = subprocess.run(cmd)
+    env = {**os.environ, "LOOPS_ROOT": str(args.root)}
+    proc = subprocess.run(cmd, env=env)
     return proc.returncode
 
 

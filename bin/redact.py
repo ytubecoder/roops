@@ -17,6 +17,7 @@ _TOKEN_PATTERNS = [
     ("secret-key", re.compile(r"sk-[A-Za-z0-9_-]{20,}", re.IGNORECASE)),
     ("slack-token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}", re.IGNORECASE)),
     ("aws-key", re.compile(r"AKIA[0-9A-Z]{16}", re.IGNORECASE)),
+    ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+", re.IGNORECASE)),
 ]
 
 _PRIVATE_KEY_RE = re.compile(
@@ -25,9 +26,12 @@ _PRIVATE_KEY_RE = re.compile(
 )
 
 # Generic "key: value" / "key=value" lines — keep the key name, redact the
-# value only. Applied last so it doesn't fight with the token patterns above.
+# REST OF THE LINE (not just the first token: multi-token values like
+# `Authorization: Bearer eyJ...` must not leak past the key name). Applied
+# last so it doesn't fight with the token patterns above. `.` does not match
+# `\n` (no DOTALL), so this naturally stops at end-of-line.
 _KV_RE = re.compile(
-    r"(api[_-]?key|secret|password|token|authorization)(\s*[:=]\s*)(\S+)",
+    r"(api[_-]?key|secret|password|token|authorization)(\s*[:=]\s*)(.+)",
     re.IGNORECASE,
 )
 

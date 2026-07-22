@@ -476,6 +476,35 @@ test_retention_pruning() {
   rm -rf "$root"
 }
 
+# Cross-loop isolation: state/runs/* is a single GLOBAL directory shared by
+# every loop in the tree. Pruning loop A (short retention) must never delete
+# loop B's old run dirs — including when B's name is a hyphenated
+# superstring of A's name (e.g. "loopxa" and "loopxa-ext"), which would
+# false-match a naive `-<name>-` substring/prefix check but must NOT match
+# the full `<ts>-<name>-<6hex>` anchored shape.
+test_retention_pruning_cross_loop_isolation() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopxa agent "retention_days=1" >/dev/null
+  make_loop "$root" "loopxa-ext" agent "retention_days=3650" >/dev/null
+
+  mkdir -p "$root/state/runs"
+  local a_old_run_dir="$root/state/runs/20200101T000000Z-loopxa-000000"
+  local b_old_run_dir="$root/state/runs/20200101T000000Z-loopxa-ext-000000"
+  mkdir -p "$a_old_run_dir" "$b_old_run_dir"
+  echo "ancient a" > "$a_old_run_dir/contract.json"
+  echo "ancient b" > "$b_old_run_dir/contract.json"
+  touch -t 202001010000 "$a_old_run_dir" "$b_old_run_dir"
+  assert_file_exists "cross-loop retention: loop A old run dir exists before run" "$a_old_run_dir"
+  assert_file_exists "cross-loop retention: loop B old run dir exists before run" "$b_old_run_dir"
+
+  run_runner "$root" loopxa
+
+  assert_file_missing "cross-loop retention: loop A's own old run dir pruned" "$a_old_run_dir"
+  assert_file_exists "cross-loop retention: loop B's old run dir NOT pruned by A's run" "$b_old_run_dir"
+  rm -rf "$root"
+}
+
 # ===========================================================================
 # enabled=false refused except --trigger manual
 # ===========================================================================
@@ -595,6 +624,7 @@ test_idempotence
 
 echo "== bin/run-loop.sh: retention pruning =="
 test_retention_pruning
+test_retention_pruning_cross_loop_isolation
 
 echo "== bin/run-loop.sh: enabled=false =="
 test_enabled_false_refused

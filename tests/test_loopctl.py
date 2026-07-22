@@ -485,6 +485,27 @@ class TestValidateDangerousCombos(LoopsRootTestCase):
         errors = json.loads(r.stdout)["ok7"]["errors"]
         self.assertFalse(any("rule 7" in e for e in errors), errors)
 
+    def test_rule8_credential_env_nonempty_hard_fails(self):
+        # §5 credential_env row: RESERVED, not implemented in v1 —
+        # loopctl validate must hard-fail any non-empty value.
+        self.fixture.minimal_valid_loop(
+            "bad8", extra_lines=['credential_env="SOME_TOKEN"']
+        )
+        self.fixture.write_spec("bad8", "filled\n" * 11)
+        r = self._validate("bad8")
+        errors = json.loads(r.stdout)["bad8"]["errors"]
+        self.assertTrue(
+            any("rule 8" in e and "credential_env" in e and "reserved" in e for e in errors),
+            errors,
+        )
+
+    def test_rule8_passes_when_credential_env_absent(self):
+        self.fixture.minimal_valid_loop("ok8")
+        self.fixture.write_spec("ok8", "filled\n" * 11)
+        r = self._validate("ok8")
+        errors = json.loads(r.stdout)["ok8"]["errors"]
+        self.assertFalse(any("rule 8" in e for e in errors), errors)
+
     def test_rule7_does_not_apply_to_claude_engine(self):
         self.fixture.minimal_valid_loop(
             "ok7b", extra_lines=["engine=claude", "perm_network=full"]
@@ -598,6 +619,37 @@ class TestRun(LoopsRootTestCase):
         os.remove(self.fixture.run_loop_sh)
         r = run_cli(["run", "hello-loop", "--root", self.root])
         self.assertEqual(r.returncode, 1)
+
+    def test_run_passes_root_as_loops_root_env_not_inherited(self):
+        # Regression: run-loop.sh resolves its own root purely from the
+        # LOOPS_ROOT env var, defaulting to $HOME/projects/loops (the REAL
+        # tree) when unset. `loopctl run --root <fixture>` used to spawn
+        # run-loop.sh with the bare inherited environment, so a caller whose
+        # shell never exported LOOPS_ROOT would silently run against the
+        # real tree instead of the hermetic --root fixture. Stub
+        # run-loop.sh records the LOOPS_ROOT it actually sees.
+        recorder = os.path.join(self.root, "loops_root_seen.txt")
+        with open(self.fixture.run_loop_sh, "w") as f:
+            f.write(
+                "#!/usr/bin/env bash\n"
+                f'echo "$LOOPS_ROOT" > "{recorder}"\n'
+                "exit 0\n"
+            )
+        os.chmod(self.fixture.run_loop_sh, 0o755)
+
+        env = os.environ.copy()
+        env.pop("LOOPS_ROOT", None)  # simulate a shell that never exported it
+        env["FAKE_RUN_LOOP_EXIT"] = "0"
+        r = subprocess.run(
+            [sys.executable, str(LOOPCTL), "run", "hello-loop", "--root", self.root],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        with open(recorder) as f:
+            seen_root = f.read().strip()
+        self.assertEqual(seen_root, self.root)
 
 
 # ---------------------------------------------------------------------------

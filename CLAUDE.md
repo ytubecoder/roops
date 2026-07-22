@@ -1,10 +1,12 @@
 # Loops — recurring automation harness
 
-Custom thin harness for scheduled agent "loops" (recurring maintenance/monitoring jobs across ~/projects). **Status: planned, not yet built.**
+Custom thin harness for scheduled agent "loops" (recurring maintenance/monitoring jobs across ~/projects). **Status: BUILT + live-verified 2026-07-22** (real launchd firing, codex AND claude, findings memory/dispositions, enforcement denial, full dashboard matrix; ~530 hermetic tests via `bash tests/run-tests.sh`).
 
 ## Start here (cold start)
-- **Building the harness:** execute `docs/HARNESS_PLAN.md` (finalized; plan-checked 3 rounds with codex — do not relitigate settled decisions recorded there).
-- **Choosing/specifying loops:** work from `docs/LOOPS_WARMSTART.md` (13-candidate table awaiting Generalissimo's yes/no; evidence + hard guardrails included). Loops can be specified before the harness exists, but not built (they need `docs/LOOP_AUTHORING.md`, which the harness build produces).
+- **Building a LOOP:** `docs/LOOP_AUTHORING.md` + `bin/loopctl new` — run the intake interview first (11 questions, in the doc); fill SPEC.md; `loopctl validate` gates it.
+- **Touching HARNESS code:** `docs/INTERFACES.md` is the frozen mechanical contract — conform or amend it explicitly, never drift. Design rationale: `docs/HARNESS_PLAN.md` + `docs/HARNESS_PLAN_AMENDMENT_1.md` (do not relitigate settled decisions). Verified engine CLI facts: `docs/ENGINE_PROBES.md`.
+- **Choosing/specifying loops:** work from `docs/LOOPS_WARMSTART.md`.
+- Findings/disposition flow (the human arrow): `loopctl findings <loop>` → `ack|dismiss --note|snooze --until|reopen`. Dismissed/snoozed findings are suppressed by the RUNNER (latest.json + dashboard); the engine still emits them; audit copy stays in `state/runs/<id>/contract.json`.
 
 ## Non-negotiables (from the plan — full rationale in docs/HARNESS_PLAN.md)
 - Engine: **codex default** (`codex exec --output-last-message --output-schema`), claude switchable (`claude -p --json-schema`), local models later. Prompts engine-neutral; prefer CLI/curl over MCP.

@@ -90,6 +90,34 @@ class TestRedactPatterns(unittest.TestCase):
         out = redact(text)
         self.assertEqual(out.count("«redacted:"), 1)
 
+    def test_bare_jwt_in_prose_redacted(self):
+        jwt = (
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            "eyJzdWIiOiIxMjM0NTY3ODkwIn0"
+        )
+        text = f"here is a token {jwt} embedded in prose"
+        out = redact(text)
+        self.assertIn("«redacted:jwt»", out)
+        self.assertNotIn(jwt, out)
+
+    def test_authorization_bearer_jwt_line_fully_redacted(self):
+        jwt = (
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            "eyJzdWIiOiIxMjM0NTY3ODkwIn0"
+        )
+        text = f"Authorization: Bearer {jwt}"
+        out = redact(text)
+        self.assertNotIn(jwt, out)
+        self.assertNotIn("Bearer", out)
+        self.assertTrue(out.startswith("Authorization:"))
+
+    def test_kv_line_redacts_rest_of_line_not_just_first_token(self):
+        text = "password: hunter2value and more trailing context"
+        out = redact(text)
+        self.assertIn("password:", out)
+        self.assertNotIn("hunter2value", out)
+        self.assertNotIn("trailing context", out)
+
 
 class TestRedactCLI(unittest.TestCase):
     def test_stdin_to_stdout_filter(self):

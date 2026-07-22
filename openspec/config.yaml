@@ -1,0 +1,36 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Injected into every artifact request (50KB cap) — kept as a pointer, not a
+# copy, so it cannot drift from the real docs.
+context: |
+  Custom thin harness for recurring report-only agent "loops" run via launchd.
+  Stack: Python 3 (stdlib only, sqlite3) + bash. No third-party runtime deps.
+
+  Read these before proposing anything — they are the authority, not this block:
+    CLAUDE.md            project conventions and gotchas
+    docs/INTERFACES.md   FROZEN contract. Harness internals change only per this.
+    docs/LOOP_AUTHORING.md  how a loop is built (intake interview -> SPEC.md)
+
+  Conventions:
+    - Loops are report-only; enforcement lives in the runner, never in the model.
+    - Tests are hermetic: tests/run-tests.sh must pass with no network.
+    - macOS-safe shell only (no GNU-only flags).

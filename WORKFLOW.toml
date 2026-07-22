@@ -1,0 +1,9 @@
+# Repo-owned policy for Ticket Takeaway. See ticket-takeaway/docs/KITCHEN.md §11.
+# Only the keys declared here override the defaults; unknown keys are preserved.
+
+[verify]
+# The close gate runs this and records the real exit code + output tail against
+# the ticket. Declared rather than inferred so the step is deterministic no
+# matter which agent (or human) is closing the ticket.
+command = "tests/run-tests.sh"
+timeout_ms = 600000

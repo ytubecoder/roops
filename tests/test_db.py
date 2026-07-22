@@ -202,6 +202,68 @@ class TestStartFinishRun(DbTestCase):
         self.assertAlmostEqual(row["cost_usd"], 0.018568)
         self.assertIn("session_id", row["usage_raw"])
 
+    def test_finish_run_usage_bare_codex_shape(self):
+        # engines/codex.sh writes usage.json as the bare turn.completed
+        # .usage object, unwrapped — no "usage" key, no JSONL envelope.
+        run_cli([
+            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
+            "--engine", "codex", "--trigger", "manual", "--started-at",
+            "2026-07-22T14:00:00Z",
+        ])
+        usage_file = Path(self.tmp) / "usage.json"
+        payload = {
+            "input_tokens": 13577,
+            "cached_input_tokens": 1408,
+            "output_tokens": 696,
+            "reasoning_output_tokens": 516,
+        }
+        usage_file.write_text(json.dumps(payload))
+        r = run_cli([
+            "finish-run", "--root", self.tmp, "--run-id", "run1",
+            "--runner-status", "completed", "--usage-file", str(usage_file),
+            "--finished-at", "2026-07-22T14:00:05Z",
+        ])
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        conn = self.raw_conn()
+        row = conn.execute("SELECT * FROM runs WHERE run_id='run1'").fetchone()
+        self.assertEqual(row["tokens_input"], 13577)
+        self.assertEqual(row["tokens_output"], 696)
+        self.assertEqual(row["tokens_total"], 14273)
+        self.assertIsNone(row["cost_usd"])
+        self.assertIn("cached_input_tokens", row["usage_raw"])
+
+    def test_finish_run_usage_claude_shape_wins_over_bare_precedence(self):
+        # A claude-style object that ALSO happens to carry top-level
+        # input_tokens/output_tokens (in addition to the nested "usage"
+        # sub-object) must still parse as claude-style — the richer shape
+        # wins over the bare-object fallback.
+        run_cli([
+            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
+            "--engine", "claude", "--trigger", "manual", "--started-at",
+            "2026-07-22T14:00:00Z",
+        ])
+        usage_file = Path(self.tmp) / "usage.json"
+        payload = {
+            "input_tokens": 999999,
+            "output_tokens": 999999,
+            "usage": {"input_tokens": 200, "output_tokens": 80},
+            "total_cost_usd": 0.018568,
+            "session_id": "abc",
+        }
+        usage_file.write_text(json.dumps(payload))
+        r = run_cli([
+            "finish-run", "--root", self.tmp, "--run-id", "run1",
+            "--runner-status", "completed", "--usage-file", str(usage_file),
+            "--finished-at", "2026-07-22T14:00:05Z",
+        ])
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        conn = self.raw_conn()
+        row = conn.execute("SELECT * FROM runs WHERE run_id='run1'").fetchone()
+        self.assertEqual(row["tokens_input"], 200)
+        self.assertEqual(row["tokens_output"], 80)
+        self.assertEqual(row["tokens_total"], 280)
+        self.assertAlmostEqual(row["cost_usd"], 0.018568)
+
     def test_finish_run_usage_garbage_never_crashes(self):
         run_cli([
             "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",

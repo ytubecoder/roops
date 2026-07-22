@@ -44,8 +44,8 @@ Your final message MUST be a single JSON object conforming exactly to
 status_reason, headline, report_markdown, metrics, findings. No prose
 outside that JSON object.
 
-- `run_id` MUST equal the run id you were given for this invocation — never
-  invent your own.
+- `run_id` MUST equal the value from the `## RUN CONTEXT` block the runner
+  appends to this prompt — copy it exactly; never invent your own.
 - `metrics` MUST be a JSON **string** containing a serialized JSON object.
 - `findings` is required but MAY be an empty array (though in practice this
   loop only invokes you when there is something to report).

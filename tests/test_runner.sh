@@ -22,6 +22,22 @@ reset_fake_env() {
 }
 reset_fake_env
 
+# assert_before <desc> <haystack> <first> <second> — asserts <first> occurs
+# earlier in <haystack> than <second> (both must be present; relies on bash
+# %% suffix-removal matching the earliest occurrence to measure position).
+assert_before() {
+  local desc="$1" haystack="$2" first="$3" second="$4"
+  local before_first="${haystack%%"$first"*}"
+  local before_second="${haystack%%"$second"*}"
+  if [ "$before_first" = "$haystack" ] || [ "$before_second" = "$haystack" ]; then
+    tr_fail "$desc (one of the markers is missing)"
+  elif [ "${#before_first}" -lt "${#before_second}" ]; then
+    tr_ok
+  else
+    tr_fail "$desc (expected [$first] before [$second])"
+  fi
+}
+
 # break_db_finish_run <root> — replaces the hermetic root's copy of db.py
 # with a shim that forwards every verb to the real implementation EXCEPT
 # finish-run, which fails outright. Used to deterministically exercise
@@ -491,6 +507,9 @@ test_dry_run() {
   run_runner "$root" loopdry --dry-run
   assert_eq "dry-run: exit code" "0" "$RUNNER_EXIT"
   assert_contains "dry-run: stdout has prompt.md content" "$RUNNER_STDOUT" "Test loop prompt"
+  assert_contains "dry-run: stdout has RUN CONTEXT block" "$RUNNER_STDOUT" "## RUN CONTEXT"
+  assert_contains "dry-run: RUN CONTEXT shows dry-run placeholder run id" "$RUNNER_STDOUT" "run_id: <not assigned — dry run>"
+  assert_before "dry-run: RUN CONTEXT after prompt.md body" "$RUNNER_STDOUT" "Test loop prompt" "## RUN CONTEXT"
   assert_file_missing "dry-run: no sqlite db created" "$root/state/loops.sqlite"
   assert_file_missing "dry-run: no run dirs created" "$root/state/runs"
   rm -rf "$root"
@@ -517,6 +536,10 @@ EOF
   local composed1; composed1="$(cat "$root/state/runs/$run_id1/prompt.composed.md" 2>/dev/null || true)"
   assert_contains "prompt-composition: run1 has PRECHECK OUTPUT block" "$composed1" "## PRECHECK OUTPUT"
   assert_contains "prompt-composition: run1 precheck content present" "$composed1" "3 things found"
+  assert_contains "prompt-composition: run1 has RUN CONTEXT block" "$composed1" "## RUN CONTEXT"
+  assert_contains "prompt-composition: run1 RUN CONTEXT echoes exact run_id" "$composed1" "run_id: $run_id1"
+  assert_before "prompt-composition: run1 RUN CONTEXT after prompt.md body" "$composed1" "Test loop prompt" "## RUN CONTEXT"
+  assert_before "prompt-composition: run1 RUN CONTEXT before PRECHECK OUTPUT" "$composed1" "## RUN CONTEXT" "## PRECHECK OUTPUT"
 
   run_runner "$root" looppc
   unset FAKE_CONTRACT_FILE
@@ -524,6 +547,10 @@ EOF
   local composed2; composed2="$(cat "$root/state/runs/$run_id2/prompt.composed.md" 2>/dev/null || true)"
   assert_contains "prompt-composition: run2 has PRIOR FINDINGS block" "$composed2" "## PRIOR FINDINGS"
   assert_contains "prompt-composition: run2 prior findings mentions finding id" "$composed2" "subj:pccond"
+  assert_contains "prompt-composition: run2 has RUN CONTEXT block" "$composed2" "## RUN CONTEXT"
+  assert_contains "prompt-composition: run2 RUN CONTEXT echoes exact run_id" "$composed2" "run_id: $run_id2"
+  assert_before "prompt-composition: run2 RUN CONTEXT after prompt.md body" "$composed2" "Test loop prompt" "## RUN CONTEXT"
+  assert_before "prompt-composition: run2 RUN CONTEXT before PRIOR FINDINGS" "$composed2" "## RUN CONTEXT" "## PRIOR FINDINGS"
   rm -rf "$root"
 }
 

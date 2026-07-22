@@ -37,8 +37,10 @@ the mechanical memory that makes recurring findings not repeat themselves foreve
 honest v1 mapping").
   ▼
 Engine invocation — a FRESH session every time (no --resume/--continue, ever). The composed
-prompt = prompt.md + PRIOR FINDINGS block (if any) + PRECHECK OUTPUT block (if any). Runner-owned
-process-group timeout (TERM -> 10s grace -> KILL); partial engine.log is preserved either way.
+prompt = prompt.md + RUN CONTEXT block (always — this is the ONLY place the model learns the
+run_id it must echo back, §6.2) + PRIOR FINDINGS block (if any) + PRECHECK OUTPUT block (if any).
+Runner-owned process-group timeout (TERM -> 10s grace -> KILL); partial engine.log is preserved
+either way.
   ▼
 Contract validation — the engine's final JSON message is validated against
 contract/contract.schema.json. Invalid or missing -> contract-violation (alert), NOTHING IS
@@ -196,8 +198,10 @@ answers to all eleven questions if you want to see the shape a real answer takes
 
 This is the **entire** emission — the schema-enforced final message from the engine IS the
 report; there is no second free-text channel that can get lost or fall out of sync. `run_id` must
-equal the run id the runner gave you (this is injected as `RUN_ID` in the adapter environment and
-described to the model in every seeded `prompt.md`); a mismatch is a hard `contract-violation`.
+equal the run id the runner gave you — the runner always appends a `## RUN CONTEXT` block to the
+composed prompt (after `prompt.md`, before PRIOR FINDINGS/PRECHECK OUTPUT, §6.2) with the exact
+`run_id` value to copy in; the model has no other way to learn it. A mismatch is a hard
+`contract-violation`.
 
 **Findings rules (the three every `prompt.md` embeds, and why):**
 

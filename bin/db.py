@@ -216,6 +216,22 @@ def extract_usage(raw_text: str):
             result["cost_usd"] = float(cost)
         return result
 
+    # Try bare codex shape: a single flat JSON object (not JSONL, no "usage"
+    # sub-object) with top-level numeric input_tokens/output_tokens — this is
+    # what engines/codex.sh writes as usage.json (the bare turn.completed
+    # usage payload, unwrapped). Checked after the claude shape above so a
+    # claude-style object that happens to ALSO carry top-level input_tokens
+    # still parses as claude-style (richer shape wins).
+    if isinstance(obj, dict) and "input_tokens" in obj and "output_tokens" in obj:
+        input_tokens = obj.get("input_tokens")
+        output_tokens = obj.get("output_tokens")
+        if isinstance(input_tokens, (int, float)) and isinstance(output_tokens, (int, float)):
+            result["tokens_input"] = int(input_tokens)
+            result["tokens_output"] = int(output_tokens)
+            result["tokens_total"] = result["tokens_input"] + result["tokens_output"]
+            # bare codex object: no cost field — cost_usd stays NULL.
+            return result
+
     # Try JSONL (codex shape): scan lines for a turn.completed event.
     for line in text.splitlines():
         line = line.strip()

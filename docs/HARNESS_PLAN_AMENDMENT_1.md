@@ -1,20 +1,20 @@
 # Harness Plan — Amendment 1: close the human-in-the-loop arrow
 
-> **Status: AUTHORIZED AMENDMENT to `HARNESS_PLAN.md` REVISION 9.** Raised and approved by Generalissimo, 2026-07-22, in the loop-selection context.
+> **Status: AUTHORIZED AMENDMENT to `HARNESS_PLAN.md` REVISION 9.** Raised and approved by generalissimo, 2026-07-22, in the loop-selection context.
 >
-> `CLAUDE.md` tells you not to relitigate decisions settled in `HARNESS_PLAN.md`. That still holds. This is not relitigation — it is Generalissimo reopening one specific gap on purpose. Everything not named in "Unchanged" below stays exactly as REVISION 9 specifies.
+> `CLAUDE.md` tells you not to relitigate decisions settled in `HARNESS_PLAN.md`. That still holds. This is not relitigation — it is generalissimo reopening one specific gap on purpose. Everything not named in "Unchanged" below stays exactly as REVISION 9 specifies.
 >
 > **Timing: this lands before `bin/run-loop.sh`, `contract/contract.schema.json`, and the sqlite schema are written.** At the time of writing, the repo has `git init` + empty skeleton dirs and no code. Because nothing exists yet, this is **not a migration** — it is the initial schema. Contract stays `schema_version: 1`.
 
 ## Why
 
-Generalissimo's working definition of a loop (the one driving loop selection): **a loop needs repetition and a stop condition.** Judged against that, REVISION 9's design is a scheduled one-shot, not a loop:
+generalissimo's working definition of a loop (the one driving loop selection): **a loop needs repetition and a stop condition.** Judged against that, REVISION 9's design is a scheduled one-shot, not a loop:
 
 - Per launchd firing: lock → precheck → **one** engine invocation → validate → promote → exit.
 - Repetition is supplied entirely by launchd. There is no goal and no stop condition.
 - More importantly, **each run is blind to every run before it.** `state/loops.sqlite` records runs, but `prompt.md` is static and no prior state is injected.
 
-The consequence is concrete and predictable. Every loop is `report/propose-only`, i.e. the human-in-the-loop pattern *AI proposes → human approves → repeat* — but the **repeat** arrow does not exist. Run #12 of the security sweep re-reports, in identical words and with identical confidence, the finding Generalissimo dismissed on runs #1–#11. That is the mechanism by which the weekly/monthly advisory loops become noise Generalissimo stops opening, which would take the whole fleet with them.
+The consequence is concrete and predictable. Every loop is `report/propose-only`, i.e. the human-in-the-loop pattern *AI proposes → human approves → repeat* — but the **repeat** arrow does not exist. Run #12 of the security sweep re-reports, in identical words and with identical confidence, the finding generalissimo dismissed on runs #1–#11. That is the mechanism by which the weekly/monthly advisory loops become noise generalissimo stops opening, which would take the whole fleet with them.
 
 This amendment adds the missing arrow. That is all it does.
 
@@ -109,7 +109,7 @@ Prompt contract for every loop:
 
 **Suppression is enforced at the runner, not by prompt.** Consistent with REVISION 9's principle that guarantees are mechanical: the runner filters dismissed and unexpired-snoozed findings out of the promoted report and the dashboard, regardless of what the engine emits. `status` is computed from *unsuppressed* findings only — a loop whose only remaining finding is dismissed goes green.
 
-## Change 4 — an input channel (OPEN DECISION — Generalissimo to settle with the architect)
+## Change 4 — an input channel (OPEN DECISION — generalissimo to settle with the architect)
 
 Dispositions have to come from somewhere. The dashboard is specced as **static HTML** (`generate.py → loops.html`, atomic tmp→rename), which cannot accept input. Two options:
 
@@ -121,11 +121,11 @@ loopctl dismiss <loop> <finding_id> --note …  # note REQUIRED — it is the au
 loopctl snooze <loop> <finding_id> --until 2026-09-01
 loopctl reopen <loop> <finding_id>
 ```
-Dashboard renders recurrence and disposition as **text** ("3rd report · dismissed 2026-06-01"). Preserves every property three codex rounds hardened: static, atomic, no server, no moving parts, openable from anywhere. Generalissimo acts in the terminal.
+Dashboard renders recurrence and disposition as **text** ("3rd report · dismissed 2026-06-01"). Preserves every property three codex rounds hardened: static, atomic, no server, no moving parts, openable from anywhere. generalissimo acts in the terminal.
 
 **Option B — dashboard accepts input.** Buttons writing dispositions; requires a local server or a writable sidecar the generator merges. Costs the static/atomic guarantee and adds a runtime component to a system whose selling point is that it has none.
 
-**Recommendation: A for v1.** B stays possible later — the sqlite tables above are identical either way, so choosing A now forecloses nothing. Generalissimo has flagged the dashboard as the part he cares about most, so this is his call, not the architect's.
+**Recommendation: A for v1.** B stays possible later — the sqlite tables above are identical either way, so choosing A now forecloses nothing. generalissimo has flagged the dashboard as the part he cares about most, so this is his call, not the architect's.
 
 ## Downstream doc/verification updates
 
@@ -139,4 +139,4 @@ Dashboard renders recurrence and disposition as **text** ("3rd report · dismiss
 
 ## What this amendment does NOT authorize
 
-No auto-mutation. No iterate-until-stop. No widening of any permission axis. No change to engine adapters or the launchd path. If implementing the above appears to require any of those, stop and raise it with Generalissimo rather than widening scope.
+No auto-mutation. No iterate-until-stop. No widening of any permission axis. No change to engine adapters or the launchd path. If implementing the above appears to require any of those, stop and raise it with generalissimo rather than widening scope.

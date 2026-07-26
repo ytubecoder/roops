@@ -79,7 +79,7 @@ Dashboard regeneration (best-effort; a dashboard failure never changes the run's
 
 ## 2. The intake interview
 
-Before scaffolding anything, walk through these eleven questions — with Generalissimo if it's a real loop,
+Before scaffolding anything, walk through these eleven questions — with generalissimo if it's a real loop,
 or as a self-interview if you're an agent producing the `SPEC.md` yourself. Answer them **in this
 exact order**; `loopctl new` seeds `SPEC.md` with these same eleven headings (§7), so the
 interview and the spec file are the same document.
@@ -104,7 +104,7 @@ your `SPEC.md`) and **cross-run** (this maps onto the findings lifecycle — a f
 This isn't a simplification for the interview's sake, it's the actual architecture (Harness Plan
 Amendment 1): propose-only + dispositions (`loopctl ack/dismiss/snooze/reopen`) + findings memory
 (PRIOR FINDINGS injection, §1) together implement the "approve → repeat" arrow. A loop doesn't get
-to auto-fix, auto-retry-until-success, or iterate across firings — a human (Generalissimo, via `loopctl`) is
+to auto-fix, auto-retry-until-success, or iterate across firings — a human (generalissimo, via `loopctl`) is
 the repeat mechanism. ReAct and Plan-then-Execute can absolutely happen **inside** a single engine
 invocation, steered by how you structure `prompt.md` (e.g. "first enumerate X, then for each,
 check Y, then summarize") — that's fine and common. What's explicitly **out of v1** is a
@@ -209,7 +209,7 @@ composed prompt (after `prompt.md`, before PRIOR FINDINGS/PRECHECK OUTPUT, §6.2
    recurring condition. This is what lets the runner increment `times_seen` instead of creating a
    duplicate.
 2. **Do not re-argue a `DISMISSED` finding** unless the underlying situation has *materially*
-   changed — and if it has, say what changed. Generalissimo dismissed it once; don't make him read the same
+   changed — and if it has, say what changed. generalissimo dismissed it once; don't make him read the same
    argument every day.
 3. **Still emit `SNOOZED` findings if true.** Suppression is the runner's job (§1), not the
    model's — if the engine silently drops a snoozed finding, the runner has nothing to un-suppress
@@ -379,7 +379,7 @@ property, not a separate system:
 ## 7. Build process walkthrough
 
 ```
-1. Spec        — walk the eleven-question intake interview (§2) with Generalissimo (or self-interview).
+1. Spec        — walk the eleven-question intake interview (§2) with generalissimo (or self-interview).
 2. Scaffold     — `loopctl new <name> --type agent|watchdog --engine codex|claude`
                    (add `--from examples` if this is a pilot/regression fixture, not a real loop).
 3. Fill         — loop.conf, precheck.sh, prompt.md, dashboard.json, SPEC.md. No [FILL:] left.

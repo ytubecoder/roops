@@ -12,7 +12,7 @@ finding is even re-argued).
 
 2. Agentic pattern
 Outer shape is Human-in-the-loop, same as every v1 loop (Amendment 1): a
-failing probe proposes a diagnosis, Generalissimo reviews and dispositions it, and
+failing probe proposes a diagnosis, generalissimo reviews and dispositions it, and
 recurring probe failures re-propose with the same stable finding id rather
 than re-litigating. Inside the single diagnosis invocation (only fired on
 escalation) the pattern is pure interpretation — classify a curl exit code

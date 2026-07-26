@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bin/loopctl — §8 CLI surface for the loops harness. Generalissimo's daily interface:
+"""bin/loopctl — §8 CLI surface for the loops harness. generalissimo's daily interface:
 scaffold, validate, run, install/uninstall/pause/resume against launchd,
 regenerate the dashboard, and manage findings dispositions.
 

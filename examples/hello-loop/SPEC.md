@@ -11,7 +11,7 @@ the file is deleted — the findings-memory lifecycle (Amendment 1) marks it
 
 2. Agentic pattern
 Outer shape is Human-in-the-loop (Amendment 1): the engine proposes findings
-each firing, Generalissimo reviews the dashboard and dispositions (ack/dismiss/snooze)
+each firing, generalissimo reviews the dashboard and dispositions (ack/dismiss/snooze)
 via `loopctl`, and the propose→dispose→re-propose cycle across firings IS
 the approve/repeat arrow — there is no in-harness auto-fix. Inside the
 single engine invocation the pattern is trivial interpretation (no

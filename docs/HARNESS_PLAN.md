@@ -1,10 +1,10 @@
 # Custom Loop Harness — Plan (harness only)
 
-> **REVISION 9 (final)** — Scope: custom harness + dashboard + loop-authoring contract ONLY. Individual loops = separate context, seeded by **`~/projects/loops/docs/LOOPS_WARMSTART.md`** (companion file — loop selection/specification lives there, not here). Paperclip/hermes fully out of scope (Generalissimo explores Paperclip separately). Engine: codex default, claude switchable. Working directory: **`~/projects/loops`** (Generalissimo's choice). **Plan-checked: 3 rounds with Codex — final gate passed; all agreed findings incorporated** (marked ⊕): rounds 1–2 hardened runner/contract/permissions; round 3 gate added per-run contract atomicity, `report_markdown` in-schema emission, and real (credential/allowlist) enforcement for remote-capable CLIs.
+> **REVISION 9 (final)** — Scope: custom harness + dashboard + loop-authoring contract ONLY. Individual loops = separate context, seeded by **`~/projects/loops/docs/LOOPS_WARMSTART.md`** (companion file — loop selection/specification lives there, not here). Paperclip/hermes fully out of scope (generalissimo explores Paperclip separately). Engine: codex default, claude switchable. Working directory: **`~/projects/loops`** (generalissimo's choice). **Plan-checked: 3 rounds with Codex — final gate passed; all agreed findings incorporated** (marked ⊕): rounds 1–2 hardened runner/contract/permissions; round 3 gate added per-run contract atomicity, `report_markdown` in-schema emission, and real (credential/allowlist) enforcement for remote-capable CLIs.
 
 ## Context
 
-Generalissimo is standing up recurring automated "loops" across ~40 projects. Portfolio analysis found zero standing automation against real recurring pain (evidence in `docs/LOOPS_WARMSTART.md`). After evaluating Paperclip (token-heavy orchestration, CalVer churn) and hermes (redundant hop to the same codex backend), Generalissimo chose a **custom thin harness we fully understand**, with: a **dashboard (global + per-loop views)** fed by a **standard reporting contract** (tier 1, required) plus **loop-specific custom reporting** (tier 2, optional but fully displayed), and a defined **authoring process** so developer-agent teams integrate the contract correctly every time.
+generalissimo is standing up recurring automated "loops" across ~40 projects. Portfolio analysis found zero standing automation against real recurring pain (evidence in `docs/LOOPS_WARMSTART.md`). After evaluating Paperclip (token-heavy orchestration, CalVer churn) and hermes (redundant hop to the same codex backend), generalissimo chose a **custom thin harness we fully understand**, with: a **dashboard (global + per-loop views)** fed by a **standard reporting contract** (tier 1, required) plus **loop-specific custom reporting** (tier 2, optional but fully displayed), and a defined **authoring process** so developer-agent teams integrate the contract correctly every time.
 
 Verified environment facts (Codex round 1 double-checked): macOS has **no `flock`, no GNU `timeout`**; `codex exec` supports `--json` (JSONL events), `--output-last-message`, `--output-schema`; `claude -p` supports `--output-format json`, `--json-schema`.
 
@@ -81,7 +81,7 @@ Runner adds: timestamps, duration, engine, runner-status, tokens/cost (nullable)
 - **Per-loop sections:** declared panels + trends + recent-runs table (incl. runner-statuses) + report links + raw fallback.
 - ⊕ Schedule grammar defined once (subset mapping cleanly to launchd `StartCalendarInterval`/`StartInterval`); launchd sleep semantics documented (calendar events coalesce on wake; interval firings during sleep are missed) so "next run" is explicitly best-effort.
 - Reports/state dirs 0700, files 0600 ⊕; retention policy: reports + run artifacts pruned after N days (config), sqlite rows kept (small) ⊕.
-- Styling per Generalissimo's taste (bold/distinctive, not generic corporate); function first.
+- Styling per generalissimo's taste (bold/distinctive, not generic corporate); function first.
 
 ## Loop Authoring Process (`docs/LOOP_AUTHORING.md`)
 
@@ -115,7 +115,7 @@ Runner adds: timestamps, duration, engine, runner-status, tokens/cost (nullable)
 ## Out of Scope
 
 - The 13 candidate loops (separate context via warmstart; `examples/` don't count).
-- Paperclip (Generalissimo explores separately), hermes (future engine lever), WSL rollout (portability by construction — fcntl lock, bash/python, cron-install script later; ⊕ noted: cron minimal env, no catch-up, state must live on WSL ext4 not /mnt/c).
+- Paperclip (generalissimo explores separately), hermes (future engine lever), WSL rollout (portability by construction — fcntl lock, bash/python, cron-install script later; ⊕ noted: cron minimal env, no catch-up, state must live on WSL ext4 not /mnt/c).
 - Notifications/delivery channels (dashboard `needs_attention` is v1's escalation; local notifications later).
 - Any auto-mutation of projects (enforced by default permission axes, not just prompts).
 

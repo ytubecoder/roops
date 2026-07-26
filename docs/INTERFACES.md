@@ -623,7 +623,7 @@ loopctl snooze <loop> <finding_id> --until YYYY-MM-DD                #   --until
 loopctl reopen <loop> <finding_id>
 ```
 Disposition verbs are thin wrappers over `db.py dispose` (+ dashboard regen so the change is
-visible immediately). The dashboard stays static (Change 4, Option A — settled with Generalissimo
+visible immediately). The dashboard stays static (Change 4, Option A — settled with generalissimo
 2026-07-22): dispositions enter via this CLI only.
 Global flags: `--root R` (default `$LOOPS_ROOT`), `--json` (machine-readable output where sensible),
 `--from loops.d|examples`. Exit codes: `0` ok · `1` operation failed · `2` usage.

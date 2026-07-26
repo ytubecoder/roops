@@ -41,3 +41,8 @@
 
 ### Not done
 - **Token spend per change was not isolated.** Both changes ran inside one long session that was also building the Ticket Takeaway gates, so there is no clean per-change number to settle the "75k tokens to change a variable" concern. That measurement still needs a dedicated session: one trivial Lane C and one real Lane A feature, each in its own session, with spend recorded.
+
+## 2026-07-27 — Dashboard on the tailnet + name scrub
+- Dashboard now served at https://loops.example.ts.net via the existing dev-tailnet pattern: new userspace tailscaled node `loops` (com.generalissimo.dev-tailnet.tailscaled-loops launchd agent, statedir ~/.config/dev-tailnet/state/loops) forwarding HTTPS to the shared Caddy on 127.0.0.1:8443; Caddy @loops block file-serves dashboard/loops.html (ALL paths rewritten to it — generate.py never exposed). `loops` added to dev-tailnet register/install scripts.
+- GOTCHA discovered: BOTH caddy instances on this machine (dev-tailnet + ~/caddy-tailscale) bind admin localhost:2019, so `caddy reload --address localhost:2019` is a coin flip and can clobber the wrong instance's running config (it briefly restarted the caddy-tailscale one). Reliable path: `launchctl kickstart -k gui/$UID/com.generalissimo.dev-tailnet.caddy`.
+- Personal name replaced with "generalissimo" across all repo prose/templates (infra labels like com.generalissimo.* untouched — renaming would break running services).

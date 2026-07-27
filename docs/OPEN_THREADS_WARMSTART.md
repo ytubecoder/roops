@@ -90,7 +90,9 @@ known drift, deliberate, do not silently propagate.
   admin collision is gone (vane's caddy moved to :2029, so `caddy reload --address
   localhost:2019` now deterministically hits the dev-tailnet instance), and all 16 launchd
   labels are `com.generalissimo.dev-tailnet.*` (owner name in anything new: **generalissimo**).
-  **Only Job A1 remains**: migrate vane into the dev-tailnet pattern and retire
-  `~/caddy-tailscale`. It needs generalissimo at two gates — clicking the new node's auth URL
-  and deleting the old `vane` machine in the Tailscale admin console — plus a few minutes of
-  vane downtime. Delete this section when that warmstart's status log says A1 is done.
+  **Job A1 (migrate vane, retire `~/caddy-tailscale`) is BLOCKED — "dont touch vane at all"
+  (generalissimo, 2026-07-28).** There are **two vanes and they must never be consolidated**:
+  `vane` = 100.69.211.49 on **llm** (tsnet node fronting `~/projects/Vane` on :8347) and
+  `vane-mm` = 100.71.78.96 on **mm**. A1's "delete the old vane machine" step sits next to a
+  `vane-mm` row in the same admin console — match on IP, never the name, and only with a fresh
+  explicit go. Nothing actionable remains here; delete this section whenever you like.

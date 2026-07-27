@@ -17,11 +17,14 @@ Checks (stdlib only, per the harness ground rules):
   4. Register <-> briefs consistency: every OPEN (non-struck) register id has a
      brief at actions/<ID>.md, and every brief file id appears in the register.
   5. Every brief's first non-empty line is a `> generated:` stamp.
-  6. ID CONTINUITY (only with --continuity, written by precheck.sh): every id is
-     either carried forward from the prior set or strictly above the high-water
-     mark. This is the check that would have caught run aba304 restarting at
-     ADG-01 while ADG-01..04 were live — ids are never reused, even after a
-     strike.
+  6. ID CONTINUITY (only with --continuity, written by precheck.sh):
+     (a) REUSE — every id is either carried forward from the prior set or
+         strictly above the high-water mark. Catches the aba304-style ghost
+         reuse (ids burned by an unpersisted run handed to new actions).
+     (b) COMPLETENESS — every `prior_open_ids` entry appears in this register
+         (open or newly struck). A set is COMPLETE truth: a silent restart or
+         silent drop of a live action must fail even when its low ids collide
+         with genuinely-prior ids (reuse alone cannot see that case).
 
 Exit 0 = valid, 1 = invalid (reasons to stderr, one per line), 2 = usage.
 """
@@ -72,6 +75,19 @@ def _continuity_errors(register_ids: list[str], continuity: dict) -> list[str]:
                 f"{aid}: REUSED id — it is not in the prior set yet is at or below "
                 f"the high-water mark {high_water}. New actions must start at "
                 f"ADG-{high_water + 1:02d}. Ids are never reused, even after a strike."
+            )
+
+    # Completeness: every prior OPEN action must be carried forward (open or
+    # newly struck) — a set is the COMPLETE current truth, so silently dropping
+    # a live action (the "restart" failure mode) is an error even when the new
+    # set's ids collide with prior ids and the reuse arm cannot see it.
+    present = set(register_ids)
+    for pid in continuity.get("prior_open_ids") or []:
+        if pid not in present:
+            errors.append(
+                f"{pid}: prior OPEN action is missing from this register — a set "
+                "is complete truth: carry it forward under its id or strike it "
+                "with a struck_reason, never drop it."
             )
     return errors
 

@@ -364,16 +364,45 @@ def main(argv: list[str]) -> int:
         _write_brief(briefs_dir, a, generated)
     _write_context(set_dir, data, generated, ids)
 
-    errors = validate_action_set.validate(set_dir)
+    # Auto-discover precheck.sh's continuity.json (run-dir root) so the ID
+    # continuity guard runs in the AUTOMATIC flow, not only when a human
+    # remembers --continuity. A missing/unparseable file degrades to the
+    # non-continuity checks (defence in depth — same policy as the validator
+    # CLI), but it is warned about loudly.
+    continuity = None
+    cont_path = out_dir / "continuity.json"
+    if cont_path.is_file():
+        try:
+            continuity = json.loads(cont_path.read_text())
+        except (json.JSONDecodeError, ValueError) as exc:
+            sys.stderr.write(
+                f"warning: {cont_path} not parseable ({exc}) — continuity "
+                "check skipped\n"
+            )
+    else:
+        sys.stderr.write(
+            f"warning: no continuity.json at {cont_path} — ID continuity not "
+            "verified this run\n"
+        )
+
+    errors = validate_action_set.validate(set_dir, continuity)
     if errors:
         for e in errors:
             sys.stderr.write(e + "\n")
-        sys.stderr.write("action set FAILED validation — loop_status should be error\n")
+        sys.stderr.write(
+            "action set FAILED validation — fix the payload and re-emit; if it "
+            "still cannot be written, declare contract status=alert with "
+            "status_reason=action_set_invalid and ZERO findings (see the "
+            "validator REMEDY: no ADG- id enters findings without a durable "
+            "set behind it)\n"
+        )
         return 1
 
     sys.stdout.write(
         f"OK wrote + validated action set: {set_dir} "
-        f"({len(ids)} actions)\n"
+        f"({len(ids)} actions"
+        f"{'; continuity verified' if continuity else '; continuity NOT verified'}). "
+        "Include action_set.written: 1 in your contract metrics.\n"
     )
     return 0
 

@@ -137,9 +137,12 @@ The script writes `action-set/ACTIONS.md`, `action-set/actions/ADG-NN.md`, and
 `action-set/context.json` into this run's dir, then validates them. **If it
 exits non-zero, fix the payload and re-run it; if it still fails, set your
 contract `status` to `alert` with `status_reason=action_set_invalid` and say so.** A
-malformed set must fail the run visibly. (A second allowlisted command,
-`python3 loops.d/ads-google/bin/validate_action_set.py <dir>`, is available to
-re-check a set.)
+malformed set must fail the run visibly. The emit script automatically checks
+ID continuity against the run dir's `continuity.json` (written by precheck). A
+second allowlisted command is available to re-check a set — invoke it WITH the
+continuity file so the ID-reuse guard runs:
+`python3 loops.d/ads-google/bin/validate_action_set.py <run-dir>/action-set --continuity <run-dir>/continuity.json`
+(the run dir is `state/runs/<run_id>` for the RUN CONTEXT run_id).
 
 ## Output contract
 
@@ -160,12 +163,21 @@ braces — write it exactly as the schema requires.
 - `report_markdown`: a short human summary + the register (open ADG-NN titles).
 - `metrics` MUST be a JSON **string** containing a serialized JSON object
   (e.g. `"{\"actions.open\": 3, \"actions.struck\": 1, \"scope.variants\": 12}"`);
-  `"{}"` when nothing. Suggested keys: `actions.open`, `actions.struck`,
-  `scope.variants`, `scope.campaigns`, `inputs.missing`.
+  `"{}"` when nothing. Keys — emit ALL of these every run: `actions.open`,
+  `actions.struck`, `scope.variants`, `scope.campaigns`, `inputs.missing`, and
+  `action_set.written` (`1` when this run persisted a valid set, `0` when it
+  did not — every run, so the set-missing condition is queryable in sqlite).
 - `findings`: one finding per **OPEN** action (skip struck ones), with
-  `finding_id` = `ads-google:ADG-NN`, `title` = the action title, `severity`
-  (`warn` normally; `alert` for a critical delivery/spend/input problem;
-  `info` for pure observe-only actions), `detail` = the exception in one line.
+  `finding_id` = `ads-google:ADG-NN`, `title` = the action title, `severity`,
+  `detail` = the exception in one line. Severity rule:
+  - `warn` normally — INCLUDING any data-integrity caveat (no callable verdict,
+    broken CTR baseline, unverifiable ledger): a set must never surface green
+    while such a caveat is open, and effective status is computed from finding
+    severities, so an `info` caveat would let it go green if the other warns
+    strike.
+  - `alert` for a critical delivery/spend/input problem or an invalid set.
+  - `info` ONLY for pure observe-only watch items that could show green without
+    losing anything.
 
 ## Findings prompt contract
 

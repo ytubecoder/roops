@@ -319,11 +319,24 @@ print("- ids are NEVER reused, not even after a strike.")
 print()
 
 # Machine-readable continuity record for validate_action_set.py --continuity.
+# prior_open_ids = prior register headings NOT struck (~~...~~) — the ids the
+# next set MUST carry forward (open or newly struck); dropping one is the
+# "silent restart / silent drop" failure the completeness check exists for.
+prior_open_ids = []
+if prior:
+    _reg = prior[2] / "ACTIONS.md"
+    if _reg.is_file():
+        for _line in _reg.read_text().splitlines():
+            _s = _line.strip()
+            _m = HEAD_RE.match(_s)
+            if _m and not _s.startswith("## ~~"):
+                prior_open_ids.append(_m.group(1))
 try:
     (OUT_DIR / "continuity.json").write_text(json.dumps({
         "high_water": high_water,
         "next_id": next_id,
         "prior_ids": sorted((prior[3].get("action_ids") or []) if prior else []),
+        "prior_open_ids": sorted(prior_open_ids),
         "prior_run_id": (prior[3].get("run_id") if prior else None),
         "reserved_ids": sorted(state["reserved"]),
         "skipped": [{"run": r, "why": w} for r, w in skipped],

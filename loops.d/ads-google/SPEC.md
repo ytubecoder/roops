@@ -179,7 +179,11 @@ normally ignored.** Consequences that must be designed around, not worked around
   visibly" is only true if an alert-severity finding carries it.
 - A set whose actions are ALL `severity: info` surfaces as **`ok` (green)**, even
   though the loop declares `warn`. Reserve `info` for genuinely observe-only
-  actions that are fine to show green.
+  actions that are fine to show green. **Data-integrity caveats (no callable
+  verdict, broken CTR baseline, unverifiable ledger) are `warn`, never `info`**
+  (review round, 2026-07-28): if the other warns strike while such a caveat
+  persists, an `info` caveat would surface the set green under an active
+  data-integrity problem.
 - When every finding is dismissed/snoozed, `effective_status` is `ok` by design —
   that is the nag-stop working, not a lost signal.
 

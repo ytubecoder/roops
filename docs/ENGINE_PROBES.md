@@ -109,3 +109,59 @@ The committed `contract/contract.schema.json` — including `minLength:1` on `ru
 `finding_id` — was probed against `codex exec --output-schema` directly: accepted, exit 0,
 conformant emission. String `minLength` is fine in codex's strict mode; the schema file is
 verified as-committed.
+
+## claude Bash permission matcher — command classifier (probed 2026-07-28, v2.1.220)
+
+Loops that need the engine session to WRITE (action sets, generated files) must deliver a
+payload through an allowlisted local command. This classifier decides whether such a command
+is even eligible to match `--allowedTools "Bash(<pattern>)"`. Verified against the real binary
+at `~/.local/share/claude/versions/2.1.220` with `--permission-mode default`.
+
+Commands are classified `simple` | `too-complex` | `PARSE_ABORT`. **Only `simple` commands can
+match an allowlist pattern**; a `too-complex` verdict is denied outright, before the command
+runs. The rejection reasons are, verbatim from the binary's string table:
+`Contains lone surrogate`, `Contains control characters`, `Contains Unicode whitespace`,
+`Contains backslash-escaped whitespace`, `Contains zsh ~[ dynamic directory syntax`,
+`Contains zsh =cmd equals expansion`, `Contains zsh <N-M> numeric-range glob`,
+`Contains brace with quote character (expansion obfuscation)`, and
+`Parser aborted (timeout, resource limit, or over-length)`.
+
+Probe pair, allowlist `Bash(python3 s.py:*)`, permission-mode `default`:
+
+- **DENIED** — `python3 s.py <<'EOF'` / `{"id": "ADG-01", "t": "x"}` / `EOF`
+  → `Contains brace with quote character (expansion obfuscation)`. The script never runs.
+- **ALLOWED** — `python3 s.py <<'ACTIONSET'` / `id: ADG-01` / `title: …` / `ACTIONSET`
+  → executed, 141 bytes on stdin.
+
+⇒ **JSON can never be delivered on stdin from a claude engine session.** Quoted heredocs,
+double quotes, `[section]` brackets and `key: value` lines are all fine — a brace anywhere in
+the command text is not. Any loop whose engine must emit structured data needs a **brace-free**
+payload format (ads-google uses a flat `key: value` + `[action]` sectioned format). Length is
+not the binding constraint: a 12.8 KB brace-free command classifies `simple`.
+
+Two corollaries worth knowing:
+
+- **Repeated `--allowedTools` flags are cumulative, not last-wins.** Two flags, invoking the
+  pattern named FIRST → allowed. `engines/claude.sh`'s one-flag-per-`exec_allowlist`-entry
+  loop (§7.3 wiring) is therefore correct as written.
+- **The denial is invisible to the invoked script**, so a script-side brace check is only a
+  backstop for permissive-mode runs — it can never be the primary guard.
+
+### What the floor actually enforces (probed with the adapter's real flag set)
+All of the above was re-run with the exact flags `engines/claude.sh:81` passes —
+`--setting-sources "" --strict-mcp-config --no-session-persistence --disable-slash-commands` —
+because results differ without them:
+
+- **`--setting-sources ""` isolates the run from `~/.claude/settings.json`.** This matters: the
+  user's global settings currently carry `"permissions": {"defaultMode": "auto"}`, and a probe
+  run WITHOUT `--setting-sources ""` auto-approved a non-allowlisted `touch /tmp/breach.txt`.
+  With the adapter's real flags the same command is **blocked**. Never drop that flag — it is
+  what keeps the floor independent of whatever mode the machine happens to be in.
+- **Writes outside the run/working directory are blocked** ("may only create or modify files in
+  the allowed working directories for this session") — this, not `--allowedTools`, is what
+  actually contains an agent loop's filesystem reach.
+- **`--allowedTools` does NOT hard-narrow Bash to only the listed patterns.** With Bash granted
+  and one allowlist entry, a non-listed benign `echo` still ran. Allowlist patterns pre-approve
+  specific commands; they are not an exclusive whitelist. **Do not treat `exec_allowlist` as the
+  sole containment mechanism** — the write sandbox and `--tools` are the load-bearing parts.
+- The brace/quote denial holds identically under the faithful flag set (re-confirmed 2026-07-28).

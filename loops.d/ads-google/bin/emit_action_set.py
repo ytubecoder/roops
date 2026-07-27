@@ -20,11 +20,21 @@ as its final act, and the standalone validator is a second allowlist entry.
 
 PAYLOAD FORMATS (auto-detected on the first non-space character):
   1. FLAT sectioned format (the ENGINE's format — REQUIRED in the engine
-     session): Claude Code's Bash permission matcher hard-denies any command
-     whose text combines a brace character with a quote ("expansion
-     obfuscation" heuristic; verified empirically 2026-07-27 — heredocs,
-     quotes, and bracket sections all pass, JSON never does). So the engine
-     delivers a brace-free line format:
+     session): Claude Code's Bash permission matcher classifies any command
+     whose text combines a brace character with a quote as "too-complex" and
+     hard-denies it BEFORE this script runs, with "Contains brace with quote
+     character (expansion obfuscation)".
+
+     Re-verified 2026-07-28 against claude 2.1.220 with `--permission-mode
+     default` (probe pair, allowlist `Bash(python3 <script>:*)`):
+       DENIED : python3 s.py <<'EOF' / {"id": "ADG-01", "t": "x"} / EOF
+       ALLOWED: python3 s.py <<'ACTIONSET' / id: ADG-01 / title: … / ACTIONSET
+     Quoted heredocs, double quotes, `[section]` brackets and `key: value`
+     lines all pass; a brace anywhere in the command text does not. NOTE the
+     denial is permission-layer, so it is invisible to this script — the check
+     below only catches the case where the command was allowed anyway (e.g. an
+     ambient permissive `defaultMode`). So the engine delivers a brace-free
+     line format:
 
          loop: ads-google
          run_id: <RUN_ID>
@@ -311,9 +321,13 @@ def main(argv: list[str]) -> int:
     else:
         if "{" in raw or "}" in raw:
             sys.stderr.write(
-                "flat payload must not contain brace characters (the Bash "
-                "permission matcher denies brace+quote commands) — rephrase "
-                "without braces\n"
+                "flat payload must not contain brace characters — the Bash "
+                "permission matcher denies any command combining a brace with "
+                "a quote. Remove the brace and re-send the SAME plain command "
+                "(for 'no order', omit the order.* and placement: lines "
+                "entirely). Do NOT work around this with tr/sed/base64, hex or "
+                "octal escapes, $'...' strings, pipes, process substitution or "
+                "output redirection.\n"
             )
             return 2
         try:

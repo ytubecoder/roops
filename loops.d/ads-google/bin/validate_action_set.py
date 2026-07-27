@@ -7,7 +7,7 @@ hook, so validation is an allowlisted local command). It is also importable by
 emit_action_set.py (which calls it as its final step) and runnable standalone
 so a human can re-check any set:
 
-    python3 validate_action_set.py <action-set-dir>
+    python3 validate_action_set.py <action-set-dir> [--continuity <continuity.json>]
 
 Checks (stdlib only, per the harness ground rules):
   1. context.json exists, parses, and carries the required keys.
@@ -17,6 +17,11 @@ Checks (stdlib only, per the harness ground rules):
   4. Register <-> briefs consistency: every OPEN (non-struck) register id has a
      brief at actions/<ID>.md, and every brief file id appears in the register.
   5. Every brief's first non-empty line is a `> generated:` stamp.
+  6. ID CONTINUITY (only with --continuity, written by precheck.sh): every id is
+     either carried forward from the prior set or strictly above the high-water
+     mark. This is the check that would have caught run aba304 restarting at
+     ADG-01 while ADG-01..04 were live — ids are never reused, even after a
+     strike.
 
 Exit 0 = valid, 1 = invalid (reasons to stderr, one per line), 2 = usage.
 """
@@ -41,7 +46,37 @@ def _first_nonempty_line(text: str) -> str:
     return ""
 
 
-def validate(set_dir: Path) -> list[str]:
+ID_NUM_RE = re.compile(r"^ADG-(\d+)$")
+
+
+def _continuity_errors(register_ids: list[str], continuity: dict) -> list[str]:
+    """Ids must be carried forward from the prior set, or above the high-water mark.
+
+    `continuity` is precheck.sh's continuity.json: {high_water, prior_ids, ...}.
+    """
+    errors: list[str] = []
+    try:
+        high_water = int(continuity.get("high_water") or 0)
+    except (TypeError, ValueError):
+        return ["continuity: high_water is not an integer"]
+    prior_ids = set(continuity.get("prior_ids") or [])
+
+    for aid in register_ids:
+        m = ID_NUM_RE.match(aid)
+        if not m:
+            continue  # shape already reported by the id-pattern check
+        if aid in prior_ids:
+            continue  # legitimately carried forward
+        if int(m.group(1)) <= high_water:
+            errors.append(
+                f"{aid}: REUSED id — it is not in the prior set yet is at or below "
+                f"the high-water mark {high_water}. New actions must start at "
+                f"ADG-{high_water + 1:02d}. Ids are never reused, even after a strike."
+            )
+    return errors
+
+
+def validate(set_dir: Path, continuity: dict | None = None) -> list[str]:
     errors: list[str] = []
     set_dir = Path(set_dir)
 
@@ -137,22 +172,61 @@ def validate(set_dir: Path) -> list[str]:
                 f"register-only: {sorted(reg_set - ctx_ids)})"
             )
 
+    # 6. id continuity (opt-in: only when precheck's continuity.json is supplied)
+    if isinstance(continuity, dict):
+        errors.extend(_continuity_errors(register_ids, continuity))
+
     return errors
 
 
+# Printed on failure so the in-session engine gets the protocol at the point of
+# failure, not just a diagnosis. Product decision (generalissimo, 2026-07-28).
+FAILURE_PROTOCOL = (
+    "REMEDY: fix the payload and re-emit. If the set still cannot be written, "
+    "report the analysis anyway (full report_markdown + headline), set "
+    "status=alert with a precise status_reason, and emit ZERO findings "
+    "(findings: []). No ADG- id may enter the findings list without a durable "
+    "set behind it. Empty findings is also what lets the declared alert surface "
+    "— per INTERFACES.md 4.5 a non-empty findings array overrides the declared "
+    "status with the findings' max severity."
+)
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        sys.stderr.write("usage: validate_action_set.py <action-set-dir>\n")
+    args = argv[1:]
+    continuity = None
+    if "--continuity" in args:
+        i = args.index("--continuity")
+        if i + 1 >= len(args):
+            sys.stderr.write("--continuity requires a path\n")
+            return 2
+        cpath = Path(args[i + 1])
+        del args[i:i + 2]
+        if cpath.is_file():
+            try:
+                continuity = json.loads(cpath.read_text())
+            except (json.JSONDecodeError, ValueError) as exc:
+                sys.stderr.write(f"--continuity file not parseable: {exc}\n")
+                return 2
+        # A missing continuity file is not fatal: the check is defence in depth,
+        # and a first-ever run legitimately has none.
+
+    if len(args) != 1:
+        sys.stderr.write(
+            "usage: validate_action_set.py <action-set-dir> "
+            "[--continuity <continuity.json>]\n"
+        )
         return 2
-    set_dir = Path(argv[1])
+    set_dir = Path(args[0])
     if not set_dir.is_dir():
         sys.stderr.write(f"not a directory: {set_dir}\n")
         return 2
-    errors = validate(set_dir)
+    errors = validate(set_dir, continuity)
     if errors:
         for e in errors:
             sys.stderr.write(e + "\n")
         sys.stderr.write(f"INVALID: {len(errors)} problem(s) in {set_dir}\n")
+        sys.stderr.write(FAILURE_PROTOCOL + "\n")
         return 1
     sys.stdout.write(f"OK action set valid: {set_dir}\n")
     return 0

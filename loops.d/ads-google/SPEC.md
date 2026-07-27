@@ -11,8 +11,10 @@ Growth Console ads JSON surface, surfaces the exceptions a human should act on
 review/serving state), and distils them into a per-run **action set** of
 read-only, context-linked briefs (`ADG-NN`). It never applies anything.
 - **Per-firing "done":** a fresh, valid action set is written for this run and
-  the tier-1 status reflects it (`ok` = zero open actions, `warn` = open actions
-  to read, `alert` = critical delivery/spend problem or input gap or invalid set).
+  the status that actually SURFACES reflects it. Because this loop normally emits
+  findings, what surfaces is `effective_status` = max severity of the unsuppressed
+  findings (INTERFACES.md §4.5) — **not** the contract `status` this loop declares.
+  Read §9 before relying on either.
 - **Cross-run "done":** a finding (= one open action) gets `resolved_at` set when
   a later run observes its condition resolved and the set strikes the action.
 
@@ -122,17 +124,95 @@ when a later run observes the condition resolved (or generalissimo's decision lo
 so the loop keeps re-emitting `ads-google:ADG-NN` every run while it is still
 true. (Documented in prompt.md `## Finding identity`.)
 
+**Register + brief conventions (ads-local — state them here so nobody closes an
+action from the wrong side).** Required by the warmstart's "Action register +
+brief contract"; enforced by `bin/validate_action_set.py`:
+- **ID pattern `^ADG-\d{2,}$`** — two-or-more digits, because a daily loop
+  outlives 99 actions. Sibling loops use the same shape with their own prefix
+  (`ADI-` intl, `ADR-` reddit, `ADX-` x, `ADP-` program).
+- **IDs are NEVER reused after a strike.** A new id is always (max id ever seen)
+  + 1; the first run with no prior set starts at `ADG-01`.
+- **Register syntax deliberately mirrors the DMP register shape** (`## <ID> —
+  <title>` headings, the same strike convention) so the GC reader can borrow
+  `dmp_actions`'s regexes instead of inventing a dialect. These conventions are
+  **ads-local**: they are documented here and in the sibling loop SPECs, and must
+  NOT be entangled with digital-marketing-pro's `_conventions.md`.
+- **Each set is COMPLETE** — the latest set alone is the whole current truth, so
+  a human reads only the newest one and never catches up.
+- **Two directions of closure, one owner each.** A *strike* (robot) happens only
+  when a later run observes the condition resolved, or generalissimo's decision
+  log says so. A *dismissal/snooze* (human) is runner-side nag-stop only: it
+  suppresses the finding from `latest.json`/dashboard but leaves the action OPEN
+  in the set, and the verbatim emission stays in
+  `state/runs/<id>/contract.json`. Neither one performs the other's job.
+
 9. Tier-1 semantics
-- `ok` — zero open actions this run; the google program is quiet.
-- `warn` — one or more open actions for generalissimo to read (the normal daily state
-  while the message test is live). Not a harness problem; it is the deliverable.
+
+**Key names (verified against `contract/contract.schema.json` + two real runs).**
+The contract field the engine emits is **`status`** — there is NO `loop_status`
+key in the contract, and the schema is `additionalProperties: false`, so emitting
+one would be a `contract-violation`. `loop_status` is the *sqlite column* that
+stores the emitted `status` verbatim (`bin/run-loop.sh:824`, `bin/db.py:30`); it
+is a storage name, not a wire name. The enum is exactly `ok | warn | alert` —
+**there is no `error` status.** (The warmstart plan doc's "the engine reports
+loop_status=error" wording is wrong on both counts; do not copy it into the
+sibling loops.)
+
+**What the loop DECLARES vs what SURFACES.** Two different values are stored per
+run, and the dashboard/`loopctl` show the second:
+- `loop_status` — this loop's declared contract `status`, stored verbatim.
+- `effective_status` — per INTERFACES.md §4.5: **if the `findings` array is
+  non-empty, `effective_status` = max severity of the *unsuppressed* findings**
+  (`info`→`ok`, `warn`→`warn`, `alert`→`alert`; all suppressed → `ok`). Only when
+  `findings` is empty does `effective_status` fall back to the declared `status`.
+
+Because this loop emits one finding per open action, **the declared `status` is
+normally ignored.** Consequences that must be designed around, not worked around:
+
+- 🚨 **A run-integrity failure must ALSO be emitted as a finding with
+  `severity: alert`, or it is silently downgraded.** Verified on the first
+  supervised run (`20260726T190729Z-ads-google-58e835`): the engine correctly
+  declared `status=alert` with `status_reason=action_set_invalid` because the
+  action set was never written — but its four findings maxed at `warn`, so
+  §4.5 computed `effective_status=warn` and the dashboard showed AMBER for a run
+  that produced no action set at all. The claim "a malformed set fails the run
+  visibly" is only true if an alert-severity finding carries it.
+- A set whose actions are ALL `severity: info` surfaces as **`ok` (green)**, even
+  though the loop declares `warn`. Reserve `info` for genuinely observe-only
+  actions that are fine to show green.
+- When every finding is dismissed/snoozed, `effective_status` is `ok` by design —
+  that is the nag-stop working, not a lost signal.
+
+**Declared-status vocabulary** (still emitted, still stored, still the fallback
+when there are zero findings):
+- `ok` — zero open actions this run; the google program is quiet. With no
+  findings, this is also what surfaces.
+- `warn` — one or more open actions for generalissimo to read (the normal daily
+  state while the message test is live). Not a harness problem; it is the
+  deliverable.
 - `alert` — a critical delivery/spend problem (e.g. an ENABLED campaign serving
   zero, google actual MTD spend at the cap), a missing critical input in the
-  digest, or an action set that failed validation (`status_reason=
-  action_set_invalid`).
+  digest, or an action set that failed validation
+  (`status_reason=action_set_invalid`). **Always pair with an alert-severity
+  finding** per the rule above.
+
+`status_reason` is a short machine category (§9.1). Categories this loop uses:
+`action_set_invalid`, `input_gap_prior_action_set_not_persisted`,
+`input_gap_endpoints_missing`.
 
 10. Tier-2 metrics + panels
-`metrics` (JSON string) keys → `dashboard.json` panels:
+
+**Wire encoding (INTERFACES.md §9.1 — get this exactly right).** The `metrics`
+field is a **JSON string containing a serialized JSON object** (`"{}"` when
+empty) — the string encoding is forced by codex's strict structured-output mode.
+`validate_contract.py` rejects a non-parsing or non-object string as a
+`contract-violation`. The *values inside* that object should be **numbers**, not
+strings: `db.py flatten_metrics` routes numbers and booleans to the `num` column
+and everything else to `text` (`bin/db.py:276-289`), and the number/trend panels
+below read `num`. Stringifying the values would silently blank every panel.
+(Both real runs emitted integer values correctly.)
+
+Keys → `dashboard.json` panels:
 - `actions.open` — number panel (higher_is_worse, warn 1 / alert 5) + a 30-day
   trend panel (open-action count over time).
 - `actions.struck` — count of actions struck this run (raw fallback panel).
@@ -140,6 +220,10 @@ true. (Documented in prompt.md `## Finding identity`.)
 - `scope.campaigns` — count of in-scope campaigns (raw fallback).
 - `inputs.missing` — number panel (higher_is_worse, warn 1 / alert 2): how many
   of the four GC endpoints failed to fetch — a data-health signal.
+- `action_set.written` — `1` when this run persisted a valid set, `0` when it did
+  not (raw fallback panel; emitted by the first supervised run to record exactly
+  the failure §9 describes). Emit it every run so the "set missing" condition is
+  queryable in sqlite independently of the finding severity.
 
 11. Engine/model + budget
 `engine=claude` (forced — see §7), `model=` blank (claude default). Expected

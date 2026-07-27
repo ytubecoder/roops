@@ -56,23 +56,42 @@ digits). Continuity rules — use the `## Prior action set` block in the digest:
   no prior set starts at **ADG-01**.
 
 For each action, provide: `id`, `title`, `status` (`open`/`struck`), `outcome`
-(one line), `exception` (the observation WITH numbers and their source),
-`suggested_order` (in `record_and_apply` vocabulary — `network`, `verb`,
-`amount_usd`, `basis` = committed|actual, `guard_note`, and **`placements`
-listing EVERY leg's `campaign_external_id`** — a gN kill must list BOTH its
-search and DG legs, or the ambiguity is preserved; use `{}` for a pure
-observation with no order), `resolution_evidence` (what future evidence strikes
-it), and `sources`.
+(one line), `exception` (the observation WITH numbers and their source), the
+suggested order in `record_and_apply` vocabulary (the `order.*` lines —
+`order.network`, `order.verb`, `order.amount_usd`, `order.basis` =
+committed|actual, `order.guard_note`, and **one `placement:` line per leg,
+each carrying that leg's `campaign_external_id`** — a gN kill must list BOTH
+its search and DG legs, or the ambiguity is preserved; for a pure observation
+with no order, simply OMIT every `order.*` and `placement:` line),
+`resolution` (what future evidence strikes it), and `source` lines.
 
 ### Write the set with the allowlisted script
 
-Deliver the set to the emit script as a heredoc in the **FLAT sectioned
-format** below. 🚨 **The payload must contain NO brace characters (`{` or `}`)
-anywhere** — the Bash permission layer hard-denies any command combining a
-brace with a quote, so JSON can never be delivered; the emit script rejects
-braces with a clear error. Also avoid backticks and `$(` in the payload.
-Run the script from the working directory (it is the only write path you are
-permitted — your shell cannot write files any other way):
+Deliver the set to the emit script as a quoted heredoc in the **FLAT sectioned
+format** below. Run it from the working directory — it is the only write path
+you are permitted; your shell cannot write files any other way.
+
+🚨 **THE ONE HARD RULE: the command you send must contain NO brace character
+(`{` or `}`) ANYWHERE — not in the payload, not inside a prose value, not in a
+quoted example.** The Bash permission layer classifies any command text
+combining a brace with a quote as "too-complex" and hard-denies it before the
+script ever runs (verified 2026-07-28: an allowlisted command carrying
+`{"id": "ADG-01"}` is denied with *"Contains brace with quote character
+(expansion obfuscation)"*; the identical command in the flat format below is
+allowed). This is why the payload format is flat rather than JSON. Also avoid
+backticks and `$(` in the payload. If you need to express "no order", omit the
+lines — never write an empty pair of braces.
+
+🚨 **If the emit command is ever DENIED, do NOT invent a delivery workaround.**
+Do not use `tr`, `sed`, `base64`, hex or octal escapes, `$'…'` strings, pipes,
+process substitution, output redirection, or unquoted heredocs to smuggle
+characters past the permission layer. Every one of those has been tried and
+they either fail or defeat the point of the permission floor. The ONLY correct
+response to a denial is: remove the offending brace/backtick from the payload
+and re-send the same plain command. If it still fails after one such retry,
+stop, set your contract `status` to `alert` with
+`status_reason=action_set_invalid`, and report exactly which command was denied
+and what the denial message said.
 
 ```
 python3 loops.d/ads-google/bin/emit_action_set.py <<'ACTIONSET'
@@ -128,6 +147,10 @@ After the set is written and validated, your final message MUST be a single
 JSON object conforming exactly to `contract/contract.schema.json` —
 schema_version, run_id, status, status_reason, headline, report_markdown,
 metrics, findings. No prose outside that JSON object.
+
+ℹ️ The no-brace rule above applies ONLY to Bash **commands** you send. This
+final message is model output, not a shell command, so it is normal JSON with
+braces — write it exactly as the schema requires.
 
 - `run_id` MUST equal the value from the `## RUN CONTEXT` block — copy it exactly.
 - `status`: `ok` when there are zero open actions; `warn` when there is at least

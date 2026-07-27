@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ads-google/precheck.sh — the pre-engine FETCH + deterministic digest stage
+# ads-x/precheck.sh — the pre-engine FETCH + deterministic digest stage
 # (script->agent pattern, docs INTERFACES.md §4.1/§6.2). This script is a plain
 # unsandboxed runner-invoked script — it is NOT governed by the engine's
 # perm_network axis (§7.3 note), so it is where all network I/O for this loop
@@ -8,7 +8,12 @@
 #      dir ($OUT_DIR/inputs/*.json) — keeps every umami/ads read behind GC's
 #      single rate limiter; no Google/Reddit credentials in this loop.
 #   2. derives loop SCOPE from the experiments registry at RUN TIME (never
-#      hardcodes campaign ids) — google cards EXCEPT intl/retired.
+#      hardcodes campaign ids) — cards with an X leg (x-boost today, plus
+#      g-theme's pending x-take3 bring-up), excluding retired.
+#   NOTE: X has NO ads API. All X metrics are the LAST Ads Manager snapshot in
+#   x_cache; this loop labels the snapshot age (read-only sqlite peek) and when
+#   it exceeds ~3 days the FIRST action must be the manual scrape/CSV import.
+#   This loop NEVER touches CDP, the OpenTwins Chrome, or the browser lease.
 #   3. prints a compact, deterministic digest to stdout (impressions/CTR/spend/
 #      verdict per in-scope variant, journal tail, program events, budget
 #      headroom, verdict-due, prior action-set ids for stable-ID continuity).
@@ -74,30 +79,53 @@ prog = load("program-events")
 INPUT_STATE = {"scoreboard": sb, "campaigns": camp, "journal": jrnl, "program_events": prog}
 INPUTS_MISSING = sum(1 for v in INPUT_STATE.values() if not v)
 
-print("# ads-google — precheck digest")
+print("# ads-x — precheck digest")
 print(f"fetched_at: {FETCHED_AT}  (source: local Growth Console JSON surface)")
 print(f"inputs: scoreboard={'ok' if sb else 'MISSING'} "
       f"campaigns={'ok' if camp else 'MISSING'} "
       f"journal={'ok' if jrnl else 'MISSING'} "
       f"program_events={'ok' if prog else 'MISSING'}")
-print("x_cache_age: n/a (google network — no X CDP cache involved)")
+# ---- X snapshot age (read-only sqlite peek at GC's ads.db x_cache) ----
+snapshot_age_days = None
+snapshot_at = None
+try:
+    import sqlite3
+    _db = Path.home() / ".growth-console" / "ads.db"
+    if _db.is_file():
+        _con = sqlite3.connect(f"file:{_db}?mode=ro", uri=True, timeout=5)
+        _row = _con.execute("SELECT MAX(imported_at), source FROM x_cache").fetchone()
+        _con.close()
+        if _row and _row[0]:
+            snapshot_at = _row[0]
+            _dt = datetime.fromisoformat(str(_row[0]).replace("Z", "+00:00"))
+            snapshot_age_days = round((datetime.now(timezone.utc) - _dt).total_seconds() / 86400, 1)
+except Exception:
+    pass
+if snapshot_age_days is None:
+    print("x_cache_age: UNKNOWN — could not read x_cache (treat as stale; first action = manual X scrape/CSV import)")
+else:
+    _stale = "STALE (>3d) — FIRST action of this set MUST be: run the manual X scrape/CSV import" if snapshot_age_days > 3 else "fresh enough"
+    print(f"x_cache_age: {snapshot_age_days} days (last import {snapshot_at}; {_stale})")
+print("ALL X metrics below are a SNAPSHOT as of that import — never live. Writes are human checklists only.")
 print()
 
-# ---- SCOPE from the experiments registry (google cards except intl/retired) ----
-INTL_KEYS = {"g-intl"}
+# ---- SCOPE from the experiments registry (cards with an X leg) ----
 scope_variants, scope_campaigns, scope_cards = set(), {}, []
+pending_bringups = []
 if isinstance(camp, dict):
     for c in camp.get("cards", []):
         key = c.get("key", "")
-        if key in INTL_KEYS or c.get("status") == "retired":
+        if c.get("status") == "retired":
             continue
         google_leg = None
         for leg in c.get("legs", []):
-            if leg.get("network") == "google":
+            if leg.get("network") == "x":
                 google_leg = leg
                 break
         if not google_leg:
             continue
+        for pend in (google_leg.get("pending") or []):
+            pending_bringups.append((key, pend.get("name"), pend.get("note", "")))
         vids = [v for v in (google_leg.get("variant_ids") or [])]
         if not vids and not google_leg.get("campaigns"):
             continue
@@ -124,14 +152,16 @@ if scope_cards:
     print(f"- scope variant ids: {sorted(scope_variants)}")
 else:
     print("- NO scope cards resolved (campaigns payload missing/empty) — treat as input gap.")
-print("- EXCLUDED by design: g-intl (owned by ads-intl loop), retired.")
+for _k, _n, _note in pending_bringups:
+    print(f"- PENDING bring-up on card {_k}: {_n} — {_note[:140]} (no ids yet; observe-only)")
+print("- EXCLUDED by design: google (ads-google/ads-intl), reddit (ads-reddit), retired.")
 print()
 
 # ---- Per-variant metrics (in-scope google rows) ----
 print("## In-scope variant metrics (scoreboard)")
 EVAL_IMPR_GATE = 2000
 if isinstance(sb, dict):
-    grows = ((sb.get("networks") or {}).get("google") or {}).get("rows") or []
+    grows = ((sb.get("networks") or {}).get("x") or {}).get("rows") or []
     shown = 0
     for r in grows:
         vid = r.get("variant_id")
@@ -139,21 +169,18 @@ if isinstance(sb, dict):
             continue
         shown += 1
         ev = r.get("evaluator") or {}
-        verdict = ev.get("verdict") or ev.get("status") or "—"
+        verdict = ev.get("verdict") or ev.get("status") or "-"
         impr = r.get("impressions") or 0
-        gate = "EVAL-ELIGIBLE" if impr >= EVAL_IMPR_GATE else f"below {EVAL_IMPR_GATE}-impr gate"
+        gate = "EVAL" if impr >= EVAL_IMPR_GATE else "sub-gate"
         pls = r.get("placements") or []
-        legs = "; ".join(f"{p.get('leg')}=camp {p.get('campaign_external_id')}"
-                         + (f"/grp {p.get('ad_group_external_id')}" if p.get('ad_group_external_id') else "")
-                         for p in pls) or "(no placements)"
-        print(f"- {vid} [{r.get('angle')}] status={r.get('status')} verdict={verdict}")
-        print(f"    impr={impr} clicks={r.get('clicks')} ctr={r.get('ctr')} "
-              f"spend=${r.get('spend_usd')} cpc={r.get('cpc_usd')} "
-              f"landing_views={r.get('landing_views')} ({gate})")
-        print(f"    placements: {legs}")
+        ext = ";".join(str(p.get("external_id") or "") for p in pls) or r.get("external_id") or ""
+        # compact one-liner: 28+ x variants would bloat the digest at 3 lines each
+        print(f"- {vid} [{r.get('angle')}] st={r.get('status')} v={verdict} impr={impr} "
+              f"clk={r.get('clicks')} ctr={r.get('ctr')} spend=${r.get('spend_usd')} "
+              f"cpc={r.get('cpc_usd')} lv={r.get('landing_views')} ({gate}) grp={ext}")
     if shown == 0:
-        print("- no in-scope google variant rows found in scoreboard.")
-    print(f"- scoreboard window: last {sb.get('days')} days")
+        print("- no in-scope x variant rows found in scoreboard.")
+    print(f"- scoreboard window label: last {sb.get('days')} days — but X values are the SNAPSHOT, not the window")
 else:
     print("- scoreboard MISSING — cannot read per-variant metrics (input gap).")
 print()
@@ -167,24 +194,25 @@ if isinstance(camp, dict):
     cpa = camp.get("cpa") or {}
     print(f"- CPA readable={cpa.get('readable')} conversions_sitewide={cpa.get('conversions_sitewide')} "
           f"intent_sitewide={cpa.get('intent_sitewide')} (event={cpa.get('conversion_event')})")
-    print("- NOTE: the budget GUARD binds on COMMITTED basis first (monthly_cap), "
-          "then the google-network ACTUAL MTD-spend gate; a positive-spend order "
-          "may be refused even with paper headroom. Any positive-spend action "
-          "brief MUST state committed-vs-actual basis.")
+    print("- NOTE: the budget GUARD binds on COMMITTED basis first (monthly_cap); "
+          "X committed is a PAPER overcommit by design (group caps x 28). "
+          "x-boost is coasting to auto-stop under its $30/group caps — Generalissimo's "
+          "standing call: do NOT raise those caps. X writes are human "
+          "checklists (journaled manual_pending), never API calls.")
 else:
     print("- campaigns MISSING — no headroom read.")
 print()
 
 # ---- Journal tail (google only) ----
-print("## Journal tail (google rows, newest first)")
+print("## Journal tail (x rows, newest first — incl. manual_pending checklists)")
 if isinstance(jrnl, dict):
-    rows = [r for r in (jrnl.get("rows") or []) if r.get("network") == "google"]
+    rows = [r for r in (jrnl.get("rows") or []) if r.get("network") == "x"]
     for r in rows[:14]:
         print(f"- #{r.get('id')} {r.get('created_at')} {r.get('action')} "
               f"ext={r.get('external_id')} amt=${r.get('amount_usd')} "
               f"[{r.get('status')}] {(r.get('detail') or '')[:90]}")
     if not rows:
-        print("- no google journal rows in the last 60.")
+        print("- no x journal rows in the last 60.")
 else:
     print("- journal MISSING.")
 print()
@@ -203,14 +231,14 @@ print()
 #   (a) which set do I carry forward?  -> newest VALID set (chronological, by
 #       context.json `generated`, never by dir name — run ids are harness-named)
 #   (b) which ids are burned?          -> the HIGH-WATER MARK across every set
-#       AND every prior contract's finding ids. A run that emitted ADG-01..04
+#       AND every prior contract's finding ids. A run that emitted ADX-01..04
 #       into its contract but failed to persist a set (real: run 58e835) still
 #       burned those ids — the next run must NOT hand them to new actions.
-# Conflating them is what let run aba304 restart at ADG-01 and silently reuse
+# Conflating them is what let run aba304 restart at ADX-01 and silently reuse
 # four live ids.
-ID_RE = re.compile(r"^ADG-(\d{2,})$")
-HEAD_RE = re.compile(r"^##\s+(?:~~)?\s*(ADG-\d+)\b")
-LOOP_PREFIX = "ads-google:"
+ID_RE = re.compile(r"^ADX-(\d{2,})$")
+HEAD_RE = re.compile(r"^##\s+(?:~~)?\s*(ADX-\d+)\b")
+LOOP_PREFIX = "ads-x:"
 
 # Defense in depth: screen candidate sets with the shipped validator, so a
 # malformed set is never carried forward as if it were truth.
@@ -253,7 +281,7 @@ if LOOPS_ROOT:
         except Exception as exc:
             skipped.append((run_name, f"context.json unparseable ({type(exc).__name__})"))
             continue
-        if not isinstance(ctx, dict) or ctx.get("loop") != "ads-google":
+        if not isinstance(ctx, dict) or ctx.get("loop") != "ads-x":
             continue
         for aid in (ctx.get("action_ids") or []):
             _burn(aid, state)
@@ -275,7 +303,7 @@ if LOOPS_ROOT:
     # landed on disk. These have no set to carry forward but are still spent.
     for cpath in sorted(glob.glob(str(runs_root / "*" / "contract.json"))):
         run_name = Path(cpath).parent.name
-        if "ads-google" not in run_name:
+        if "ads-x" not in run_name:
             continue
         try:
             contract = json.loads(Path(cpath).read_text())
@@ -293,7 +321,7 @@ if LOOPS_ROOT:
 candidates.sort(key=lambda t: (t[0], t[1]))
 prior = candidates[-1] if candidates else None
 high_water = state["high_water"]
-next_id = f"ADG-{high_water + 1:02d}"
+next_id = f"ADX-{high_water + 1:02d}"
 
 print("## Prior action set (keep ids of still-open actions; strike resolved)")
 if prior:
@@ -308,7 +336,7 @@ if prior:
                 print(f"    {s[3:]}")
 elif high_water:
     print("- ⚠️ NO usable prior set, but PRIOR RUNS EXIST. This is NOT a first run.")
-    print("- Do NOT restart at ADG-01 — those ids are live/spent. Carry nothing")
+    print("- Do NOT restart at ADX-01 — those ids are live/spent. Carry nothing")
     print("  forward (no set to read), and number every new action from the")
     print("  high-water mark below. Raise the gap itself as an action.")
 elif skipped:
@@ -316,7 +344,7 @@ elif skipped:
     print("  SKIPPED below), so the high-water mark may UNDERSTATE what is spent.")
     print("  Treat the unreadable sets as an input gap and raise it as an action.")
 else:
-    print("- NO prior set and no prior ids — this is genuinely the first ads-google run.")
+    print("- NO prior set and no prior ids — this is genuinely the first ads-x run.")
 for run_name, why in skipped:
     print(f"- SKIPPED {run_name}: {why}")
 if ghost_ids:
@@ -368,7 +396,7 @@ print()
 print("## If the action set cannot be written or fails validation")
 print("- Emit the analysis anyway: full `report_markdown` + a `headline` saying so.")
 print("- Set `status: alert` with a precise `status_reason`.")
-print("- Emit **ZERO findings** — `findings: []`. No ADG- id may enter the findings")
+print("- Emit **ZERO findings** — `findings: []`. No ADX- id may enter the findings")
 print("  list without a durable set behind it, or it becomes an un-openable brief.")
 print("- This is deliberate (settled 2026-07-28) and it is also what makes the")
 print("  alert surface: per INTERFACES.md §4.5, a non-empty findings array overrides")

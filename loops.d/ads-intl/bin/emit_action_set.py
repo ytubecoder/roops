@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""emit_action_set.py — write the ads-google action set into the run dir.
+"""emit_action_set.py — write the ads-intl action set into the run dir.
 
 Reads ONE action-set payload from stdin and materializes it as
     <out-dir>/action-set/ACTIONS.md          (register, DMP shape)
-    <out-dir>/action-set/actions/<ADG-NN>.md (one framing brief per action)
+    <out-dir>/action-set/actions/<ADI-NN>.md (one framing brief per action)
     <out-dir>/action-set/context.json        (loop / run / windows / freshness)
 then runs validate_action_set.py over the result and exits non-zero if the set
 is malformed.
@@ -27,8 +27,8 @@ PAYLOAD FORMATS (auto-detected on the first non-space character):
 
      Re-verified 2026-07-28 against claude 2.1.220 with `--permission-mode
      default` (probe pair, allowlist `Bash(python3 <script>:*)`):
-       DENIED : python3 s.py <<'EOF' / {"id": "ADG-01", "t": "x"} / EOF
-       ALLOWED: python3 s.py <<'ACTIONSET' / id: ADG-01 / title: … / ACTIONSET
+       DENIED : python3 s.py <<'EOF' / {"id": "ADI-01", "t": "x"} / EOF
+       ALLOWED: python3 s.py <<'ACTIONSET' / id: ADI-01 / title: … / ACTIONSET
      Quoted heredocs, double quotes, `[section]` brackets and `key: value`
      lines all pass; a brace anywhere in the command text does not. NOTE the
      denial is permission-layer, so it is invisible to this script — the check
@@ -36,7 +36,7 @@ PAYLOAD FORMATS (auto-detected on the first non-space character):
      ambient permissive `defaultMode`). So the engine delivers a brace-free
      line format:
 
-         loop: ads-google
+         loop: ads-intl
          run_id: <RUN_ID>
          engine: claude
          generated: 2026-07-27T03:00:00Z
@@ -47,7 +47,7 @@ PAYLOAD FORMATS (auto-detected on the first non-space character):
          scope: g-theme campaigns 24043161296 24043160774 24038115258
 
          [action]
-         id: ADG-01
+         id: ADI-01
          title: ...one line...
          status: open
          outcome: ...one line...
@@ -181,10 +181,10 @@ def _write_register(set_dir: Path, data: dict, generated: str) -> list[str]:
     lines = []
     lines.append(_stamp(generated).rstrip("\n"))
     lines.append("")
-    lines.append(f"# Action register — ads-google · run {data.get('run_id', '')}")
+    lines.append(f"# Action register — ads-intl · run {data.get('run_id', '')}")
     lines.append("")
     lines.append(
-        f"Generated {generated} by the ads-google loop (report-only). "
+        f"Generated {generated} by the ads-intl loop (report-only). "
         f"{len(actions)} actions ({open_n} open · {struck_n} struck). "
         "IDs are stable and NEVER reused after a strike. Read the per-action "
         "brief under `actions/`, not this index. These are suggested orders in "
@@ -211,7 +211,7 @@ def _write_register(set_dir: Path, data: dict, generated: str) -> list[str]:
 def _write_context(set_dir: Path, data: dict, generated: str, ids: list[str]) -> None:
     actions = data.get("actions") or []
     ctx = {
-        "loop": data.get("loop", "ads-google"),
+        "loop": data.get("loop", "ads-intl"),
         "run_id": data.get("run_id", os.environ.get("RUN_ID", "")),
         "generated": generated,
         "engine": data.get("engine", "claude"),
@@ -399,7 +399,7 @@ def main(argv: list[str]) -> int:
             "action set FAILED validation — fix the payload and re-emit; if it "
             "still cannot be written, declare contract status=alert with "
             "status_reason=action_set_invalid and ZERO findings (see the "
-            "validator REMEDY: no ADG- id enters findings without a durable "
+            "validator REMEDY: no ADI- id enters findings without a durable "
             "set behind it)\n"
         )
         return 1

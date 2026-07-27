@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""validate_action_set.py — validate a produced ads-google action set.
+"""validate_action_set.py — validate a produced ads-intl action set.
 
-Ships with the ads-google loop and is run INSIDE the engine session via the
+Ships with the ads-intl loop and is run INSIDE the engine session via the
 loop's exec allowlist (docs LOOP_AUTHORING.md — the harness has no post-engine
 hook, so validation is an allowlisted local command). It is also importable by
 emit_action_set.py (which calls it as its final step) and runnable standalone
@@ -12,7 +12,7 @@ so a human can re-check any set:
 Checks (stdlib only, per the harness ground rules):
   1. context.json exists, parses, and carries the required keys.
   2. ACTIONS.md exists and its first non-empty line is a `> generated:` stamp.
-  3. Every register heading id matches ^ADG-\\d{2,}$ (two-or-more digits;
+  3. Every register heading id matches ^ADI-\\d{2,}$ (two-or-more digits;
      daily loops outlive 99), with no duplicate ids.
   4. Register <-> briefs consistency: every OPEN (non-struck) register id has a
      brief at actions/<ID>.md, and every brief file id appears in the register.
@@ -35,9 +35,9 @@ import re
 import sys
 from pathlib import Path
 
-ID_RE = re.compile(r"^ADG-\d{2,}$")
-# Register heading: "## ADG-07 — title"  (open)  or  "## ~~ADG-07 — title~~" (struck)
-HEADING_RE = re.compile(r"^##\s+(~~)?\s*(ADG-\d+)\s+[—-]\s+(.*?)(~~)?\s*$")
+ID_RE = re.compile(r"^ADI-\d{2,}$")
+# Register heading: "## ADI-07 — title"  (open)  or  "## ~~ADI-07 — title~~" (struck)
+HEADING_RE = re.compile(r"^##\s+(~~)?\s*(ADI-\d+)\s+[—-]\s+(.*?)(~~)?\s*$")
 STAMP_RE = re.compile(r"^>\s*generated:\s*\S")
 REQUIRED_CONTEXT_KEYS = {"loop", "run_id", "generated", "engine", "action_ids"}
 
@@ -49,7 +49,7 @@ def _first_nonempty_line(text: str) -> str:
     return ""
 
 
-ID_NUM_RE = re.compile(r"^ADG-(\d+)$")
+ID_NUM_RE = re.compile(r"^ADI-(\d+)$")
 
 
 def _continuity_errors(register_ids: list[str], continuity: dict) -> list[str]:
@@ -74,7 +74,7 @@ def _continuity_errors(register_ids: list[str], continuity: dict) -> list[str]:
             errors.append(
                 f"{aid}: REUSED id — it is not in the prior set yet is at or below "
                 f"the high-water mark {high_water}. New actions must start at "
-                f"ADG-{high_water + 1:02d}. Ids are never reused, even after a strike."
+                f"ADI-{high_water + 1:02d}. Ids are never reused, even after a strike."
             )
 
     # Completeness: every prior OPEN action must be carried forward (open or
@@ -149,7 +149,7 @@ def validate(set_dir: Path, continuity: dict | None = None) -> list[str]:
         current_struck_id = aid if struck else None
         struck_reason_seen = not struck
         if not ID_RE.match(aid):
-            errors.append(f"ACTIONS.md: id {aid!r} does not match ^ADG-\\d{{2,}}$")
+            errors.append(f"ACTIONS.md: id {aid!r} does not match ^ADI-\\d{{2,}}$")
         if aid in register_ids:
             errors.append(f"ACTIONS.md: duplicate id {aid}")
         register_ids.append(aid)
@@ -171,7 +171,7 @@ def validate(set_dir: Path, continuity: dict | None = None) -> list[str]:
         )
         if not declared_empty:
             errors.append(
-                "ACTIONS.md: no `## ADG-NN — title` register headings found "
+                "ACTIONS.md: no `## ADI-NN — title` register headings found "
                 "(and context.json does not declare an empty set)"
             )
 
@@ -183,7 +183,7 @@ def validate(set_dir: Path, continuity: dict | None = None) -> list[str]:
             bid = p.stem
             brief_ids.add(bid)
             if not ID_RE.match(bid):
-                errors.append(f"actions/{p.name}: id does not match ^ADG-\\d{{2,}}$")
+                errors.append(f"actions/{p.name}: id does not match ^ADI-\\d{{2,}}$")
             if not STAMP_RE.match(_first_nonempty_line(p.read_text())):
                 errors.append(
                     f"actions/{p.name}: first non-empty line is not a `> generated:` stamp"
@@ -219,7 +219,7 @@ FAILURE_PROTOCOL = (
     "REMEDY: fix the payload and re-emit. If the set still cannot be written, "
     "report the analysis anyway (full report_markdown + headline), set "
     "status=alert with a precise status_reason, and emit ZERO findings "
-    "(findings: []). No ADG- id may enter the findings list without a durable "
+    "(findings: []). No ADI- id may enter the findings list without a durable "
     "set behind it. Empty findings is also what lets the declared alert surface "
     "— per INTERFACES.md 4.5 a non-empty findings array overrides the declared "
     "status with the findings' max severity."

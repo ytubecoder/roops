@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ads-google/precheck.sh — the pre-engine FETCH + deterministic digest stage
+# ads-reddit/precheck.sh — the pre-engine FETCH + deterministic digest stage
 # (script->agent pattern, docs INTERFACES.md §4.1/§6.2). This script is a plain
 # unsandboxed runner-invoked script — it is NOT governed by the engine's
 # perm_network axis (§7.3 note), so it is where all network I/O for this loop
@@ -8,7 +8,8 @@
 #      dir ($OUT_DIR/inputs/*.json) — keeps every umami/ads read behind GC's
 #      single rate limiter; no Google/Reddit credentials in this loop.
 #   2. derives loop SCOPE from the experiments registry at RUN TIME (never
-#      hardcodes campaign ids) — google cards EXCEPT intl/retired.
+#      hardcodes campaign ids) — cards with a REDDIT leg (r-boost today),
+#      excluding retired.
 #   3. prints a compact, deterministic digest to stdout (impressions/CTR/spend/
 #      verdict per in-scope variant, journal tail, program events, budget
 #      headroom, verdict-due, prior action-set ids for stable-ID continuity).
@@ -74,26 +75,25 @@ prog = load("program-events")
 INPUT_STATE = {"scoreboard": sb, "campaigns": camp, "journal": jrnl, "program_events": prog}
 INPUTS_MISSING = sum(1 for v in INPUT_STATE.values() if not v)
 
-print("# ads-google — precheck digest")
+print("# ads-reddit — precheck digest")
 print(f"fetched_at: {FETCHED_AT}  (source: local Growth Console JSON surface)")
 print(f"inputs: scoreboard={'ok' if sb else 'MISSING'} "
       f"campaigns={'ok' if camp else 'MISSING'} "
       f"journal={'ok' if jrnl else 'MISSING'} "
       f"program_events={'ok' if prog else 'MISSING'}")
-print("x_cache_age: n/a (google network — no X CDP cache involved)")
+print("x_cache_age: n/a (reddit network — no X CDP cache involved)")
 print()
 
-# ---- SCOPE from the experiments registry (google cards except intl/retired) ----
-INTL_KEYS = {"g-intl"}
+# ---- SCOPE from the experiments registry (cards with a REDDIT leg) ----
 scope_variants, scope_campaigns, scope_cards = set(), {}, []
 if isinstance(camp, dict):
     for c in camp.get("cards", []):
         key = c.get("key", "")
-        if key in INTL_KEYS or c.get("status") == "retired":
+        if c.get("status") == "retired":
             continue
         google_leg = None
         for leg in c.get("legs", []):
-            if leg.get("network") == "google":
+            if leg.get("network") == "reddit":
                 google_leg = leg
                 break
         if not google_leg:
@@ -124,14 +124,14 @@ if scope_cards:
     print(f"- scope variant ids: {sorted(scope_variants)}")
 else:
     print("- NO scope cards resolved (campaigns payload missing/empty) — treat as input gap.")
-print("- EXCLUDED by design: g-intl (owned by ads-intl loop), retired.")
+print("- EXCLUDED by design: google (ads-google/ads-intl), X (ads-x), retired campaigns.")
 print()
 
 # ---- Per-variant metrics (in-scope google rows) ----
 print("## In-scope variant metrics (scoreboard)")
 EVAL_IMPR_GATE = 2000
 if isinstance(sb, dict):
-    grows = ((sb.get("networks") or {}).get("google") or {}).get("rows") or []
+    grows = ((sb.get("networks") or {}).get("reddit") or {}).get("rows") or []
     shown = 0
     for r in grows:
         vid = r.get("variant_id")
@@ -152,7 +152,7 @@ if isinstance(sb, dict):
               f"landing_views={r.get('landing_views')} ({gate})")
         print(f"    placements: {legs}")
     if shown == 0:
-        print("- no in-scope google variant rows found in scoreboard.")
+        print("- no in-scope reddit variant rows found in scoreboard.")
     print(f"- scoreboard window: last {sb.get('days')} days")
 else:
     print("- scoreboard MISSING — cannot read per-variant metrics (input gap).")
@@ -168,23 +168,24 @@ if isinstance(camp, dict):
     print(f"- CPA readable={cpa.get('readable')} conversions_sitewide={cpa.get('conversions_sitewide')} "
           f"intent_sitewide={cpa.get('intent_sitewide')} (event={cpa.get('conversion_event')})")
     print("- NOTE: the budget GUARD binds on COMMITTED basis first (monthly_cap), "
-          "then the google-network ACTUAL MTD-spend gate; a positive-spend order "
-          "may be refused even with paper headroom. Any positive-spend action "
-          "brief MUST state committed-vs-actual basis.")
+          "then per-network gates; a positive-spend order may be refused even "
+          "with paper headroom. Reddit is CBO (one campaign budget, ~$8/day, "
+          "$0.75 CPC cap; campaign-pause IS the kill switch). Any positive-spend "
+          "action brief MUST state committed-vs-actual basis.")
 else:
     print("- campaigns MISSING — no headroom read.")
 print()
 
 # ---- Journal tail (google only) ----
-print("## Journal tail (google rows, newest first)")
+print("## Journal tail (reddit rows, newest first)")
 if isinstance(jrnl, dict):
-    rows = [r for r in (jrnl.get("rows") or []) if r.get("network") == "google"]
+    rows = [r for r in (jrnl.get("rows") or []) if r.get("network") == "reddit"]
     for r in rows[:14]:
         print(f"- #{r.get('id')} {r.get('created_at')} {r.get('action')} "
               f"ext={r.get('external_id')} amt=${r.get('amount_usd')} "
               f"[{r.get('status')}] {(r.get('detail') or '')[:90]}")
     if not rows:
-        print("- no google journal rows in the last 60.")
+        print("- no reddit journal rows in the last 60.")
 else:
     print("- journal MISSING.")
 print()
@@ -203,14 +204,14 @@ print()
 #   (a) which set do I carry forward?  -> newest VALID set (chronological, by
 #       context.json `generated`, never by dir name — run ids are harness-named)
 #   (b) which ids are burned?          -> the HIGH-WATER MARK across every set
-#       AND every prior contract's finding ids. A run that emitted ADG-01..04
+#       AND every prior contract's finding ids. A run that emitted ADR-01..04
 #       into its contract but failed to persist a set (real: run 58e835) still
 #       burned those ids — the next run must NOT hand them to new actions.
-# Conflating them is what let run aba304 restart at ADG-01 and silently reuse
+# Conflating them is what let run aba304 restart at ADR-01 and silently reuse
 # four live ids.
-ID_RE = re.compile(r"^ADG-(\d{2,})$")
-HEAD_RE = re.compile(r"^##\s+(?:~~)?\s*(ADG-\d+)\b")
-LOOP_PREFIX = "ads-google:"
+ID_RE = re.compile(r"^ADR-(\d{2,})$")
+HEAD_RE = re.compile(r"^##\s+(?:~~)?\s*(ADR-\d+)\b")
+LOOP_PREFIX = "ads-reddit:"
 
 # Defense in depth: screen candidate sets with the shipped validator, so a
 # malformed set is never carried forward as if it were truth.
@@ -253,7 +254,7 @@ if LOOPS_ROOT:
         except Exception as exc:
             skipped.append((run_name, f"context.json unparseable ({type(exc).__name__})"))
             continue
-        if not isinstance(ctx, dict) or ctx.get("loop") != "ads-google":
+        if not isinstance(ctx, dict) or ctx.get("loop") != "ads-reddit":
             continue
         for aid in (ctx.get("action_ids") or []):
             _burn(aid, state)
@@ -275,7 +276,7 @@ if LOOPS_ROOT:
     # landed on disk. These have no set to carry forward but are still spent.
     for cpath in sorted(glob.glob(str(runs_root / "*" / "contract.json"))):
         run_name = Path(cpath).parent.name
-        if "ads-google" not in run_name:
+        if "ads-reddit" not in run_name:
             continue
         try:
             contract = json.loads(Path(cpath).read_text())
@@ -293,7 +294,7 @@ if LOOPS_ROOT:
 candidates.sort(key=lambda t: (t[0], t[1]))
 prior = candidates[-1] if candidates else None
 high_water = state["high_water"]
-next_id = f"ADG-{high_water + 1:02d}"
+next_id = f"ADR-{high_water + 1:02d}"
 
 print("## Prior action set (keep ids of still-open actions; strike resolved)")
 if prior:
@@ -308,7 +309,7 @@ if prior:
                 print(f"    {s[3:]}")
 elif high_water:
     print("- ⚠️ NO usable prior set, but PRIOR RUNS EXIST. This is NOT a first run.")
-    print("- Do NOT restart at ADG-01 — those ids are live/spent. Carry nothing")
+    print("- Do NOT restart at ADR-01 — those ids are live/spent. Carry nothing")
     print("  forward (no set to read), and number every new action from the")
     print("  high-water mark below. Raise the gap itself as an action.")
 elif skipped:
@@ -316,7 +317,7 @@ elif skipped:
     print("  SKIPPED below), so the high-water mark may UNDERSTATE what is spent.")
     print("  Treat the unreadable sets as an input gap and raise it as an action.")
 else:
-    print("- NO prior set and no prior ids — this is genuinely the first ads-google run.")
+    print("- NO prior set and no prior ids — this is genuinely the first ads-reddit run.")
 for run_name, why in skipped:
     print(f"- SKIPPED {run_name}: {why}")
 if ghost_ids:
@@ -368,7 +369,7 @@ print()
 print("## If the action set cannot be written or fails validation")
 print("- Emit the analysis anyway: full `report_markdown` + a `headline` saying so.")
 print("- Set `status: alert` with a precise `status_reason`.")
-print("- Emit **ZERO findings** — `findings: []`. No ADG- id may enter the findings")
+print("- Emit **ZERO findings** — `findings: []`. No ADR- id may enter the findings")
 print("  list without a durable set behind it, or it becomes an un-openable brief.")
 print("- This is deliberate (settled 2026-07-28) and it is also what makes the")
 print("  alert surface: per INTERFACES.md §4.5, a non-empty findings array overrides")

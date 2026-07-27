@@ -1,0 +1,38 @@
+{
+  "panels": [
+    {
+      "title": "Open program actions",
+      "metric": "actions.open",
+      "type": "number",
+      "unit": "actions",
+      "direction": "higher_is_worse",
+      "thresholds": {"warn": 1, "alert": 5},
+      "missing": "gap"
+    },
+    {
+      "title": "Open actions (trend)",
+      "metric": "actions.open",
+      "type": "trend",
+      "window_days": 30,
+      "missing": "hold"
+    },
+    {
+      "title": "Stale upstream sets",
+      "metric": "sets.stale",
+      "type": "number",
+      "unit": "sets",
+      "direction": "higher_is_worse",
+      "thresholds": {"warn": 1, "alert": 3},
+      "missing": "gap"
+    },
+    {
+      "title": "Missing inputs",
+      "metric": "inputs.missing",
+      "type": "number",
+      "unit": "endpoints",
+      "direction": "higher_is_worse",
+      "thresholds": {"warn": 1, "alert": 2},
+      "missing": "gap"
+    }
+  ]
+}

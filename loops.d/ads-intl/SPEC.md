@@ -1,15 +1,16 @@
-# ads-google — intake spec
+# ads-intl — intake spec
 
 Build-order STEP 2 of `docs/ads-actions-loops-warmstart.md` (in the
 maguyva-marketing repo). One of five planned per-network ads check loops; this
 is the first, built end-to-end before cloning to intl/reddit/x/program.
 
 1. Purpose & stop condition
-This loop is the scheduled Google-network (non-intl) ads check-in. It reads the
-Growth Console ads JSON surface, surfaces the exceptions a human should act on
-(CTR/spend/verdict movement, delivery anomalies, budget-guard headroom,
-review/serving state), and distils them into a per-run **action set** of
-read-only, context-linked briefs (`ADG-NN`). It never applies anything.
+This loop is the scheduled check-in for the Google INTERNATIONAL geo screen
+(the `g-intl` experiment). It reads the Growth Console ads JSON surface,
+surfaces the exceptions a human should act on (CPC vs the scan band, geo
+delivery, budget-guard headroom, paused-probe state), and distils them into a
+per-run **action set** of read-only, context-linked briefs (`ADI-NN`). It
+never applies anything.
 - **Per-firing "done":** a fresh, valid action set is written for this run and
   the status that actually SURFACES reflects it. Because this loop normally emits
   findings, what surfaces is `effective_status` = max severity of the unsuppressed
@@ -38,28 +39,30 @@ deterministic digest (per-variant impr/CTR/spend/cpc/verdict, evaluator-gate
 flag, budget headroom + committed-vs-actual note, google journal tail, program
 events, and the PRIOR action set's register for stable-ID continuity). The
 **engine** only interprets that digest: judges which lines are genuine
-exceptions, assigns/keeps `ADG-NN` ids, writes suggested orders with full
+exceptions, assigns/keeps `ADI-NN` ids, writes suggested orders with full
 placement ids, and emits the contract. All umami/ads reads stay behind GC's
 single rate limiter (never imports `console.ads.service`).
 
 4. Cadence
-`daily:18:00` (Manila local = ~06:00 EDT), first in the morning stagger so the
-downstream loops read a fresh google set. Daily because the program moves
-daily and the design is "a complete fresh set each day so Generalissimo reads the latest,
-never catches up." **NOT installed in this phase** — supervised `loopctl run`
-only. launchd sleep coalesces missed calendar firings into one at wake (best-
-effort); the freshness guarantees live in the set/registry logic, not timing.
+`daily:18:25` (Manila local = ~06:25 EDT), SECOND in the morning stagger
+(google → intl → reddit → x → ads-program). Daily because the program moves
+daily and the design is "a complete fresh set each day so Generalissimo reads the
+latest, never catches up." Installed via `loopctl install` in phase 4. launchd
+sleep coalesces missed calendar firings into one at wake (best-effort); the
+freshness guarantees live in the set/registry logic, not timing.
 
 5. Scope & exclusions
-**In scope:** Google-network experiments EXCEPT intl — derived at run time from
-the `/api/ads/campaigns` registry (google cards minus `g-intl` and `retired`).
-Today: `g-msg` (g1–g8; google-search-jul26, google-dg-jul26) + `g-theme`
-(g13–g16; google-build/-memory/-dg2-jul26). Scope is NEVER hardcoded — a new
-google campaign appears automatically; an intl one never does.
-**Explicitly excluded:** `g-intl` (g9–g12, owned by the future `ads-intl`
-loop); X / Reddit networks; the `retired` card; any WRITE (record_and_apply,
-ads API, git, CDP/browser). No cross-network/program checks — those are the
-future `ads-program` loop.
+**In scope:** the intl google experiments ONLY — derived at run time from the
+`/api/ads/campaigns` registry (the `g-intl` card, plus any future card whose
+utm_campaigns contain "intl"). Today: g9–g12; google-intl-en-jul26 (ENABLED,
+13 geos) + google-ja-jul26 / google-ko-jul26 (PAUSED — the native-script probe
+failed and was killed; reviving them needs new evidence and Generalissimo's call). Intl
+is a geo screen — market varies, message constant — never merged into the
+message test.
+**Explicitly excluded:** every non-intl google card (g-msg, g-theme — owned by
+`ads-google`); X / Reddit networks; the `retired` card; any WRITE
+(record_and_apply, ads API, git, CDP/browser). No cross-network/program checks
+— those are `ads-program`.
 
 6. Guardrails (verbatim, from the warmstart + repo memory)
 - "Write policy: strictly read-only. No scheduled process ever calls
@@ -115,23 +118,23 @@ These are embedded in `prompt.md` AND enforced by the permission axes (§7).
 
 8. Finding identity (what a finding IS + finding_id derivation)
 A **finding** is one still-open action in this run's set. `finding_id` =
-`ads-google:<ADG-NN>`. The `ADG-NN` id is the durable per-exception identity:
+`ads-intl:<ADI-NN>`. The `ADI-NN` id is the durable per-exception identity:
 stable across runs for the same real-world condition (carried forward from the
 prior set), never reused after a strike, embedding NO volatile data. A struck
 (resolved) action emits no finding. **Dismissal ≠ strike:** dismissing a finding
 is a runner-side nag-stop; it does NOT strike the action. Striking happens only
 when a later run observes the condition resolved (or Generalissimo's decision log says so),
-so the loop keeps re-emitting `ads-google:ADG-NN` every run while it is still
+so the loop keeps re-emitting `ads-intl:ADI-NN` every run while it is still
 true. (Documented in prompt.md `## Finding identity`.)
 
 **Register + brief conventions (ads-local — state them here so nobody closes an
 action from the wrong side).** Required by the warmstart's "Action register +
 brief contract"; enforced by `bin/validate_action_set.py`:
-- **ID pattern `^ADG-\d{2,}$`** — two-or-more digits, because a daily loop
+- **ID pattern `^ADI-\d{2,}$`** — two-or-more digits, because a daily loop
   outlives 99 actions. Sibling loops use the same shape with their own prefix
   (`ADI-` intl, `ADR-` reddit, `ADX-` x, `ADP-` program).
 - **IDs are NEVER reused after a strike.** A new id is always (max id ever seen)
-  + 1; the first run with no prior set starts at `ADG-01`.
+  + 1; the first run with no prior set starts at `ADI-01`.
 - **Register syntax deliberately mirrors the DMP register shape** (`## <ID> —
   <title>` headings, the same strike convention) so the GC reader can borrow
   `dmp_actions`'s regexes instead of inventing a dialect. These conventions are
@@ -171,7 +174,7 @@ normally ignored.** Consequences that must be designed around, not worked around
 
 - 🚨 **A run-integrity failure must ALSO be emitted as a finding with
   `severity: alert`, or it is silently downgraded.** Verified on the first
-  supervised run (`20260726T190729Z-ads-google-58e835`): the engine correctly
+  supervised run (`20260726T190729Z-ads-intl-58e835`): the engine correctly
   declared `status=alert` with `status_reason=action_set_invalid` because the
   action set was never written — but its four findings maxed at `warn`, so
   §4.5 computed `effective_status=warn` and the dashboard showed AMBER for a run

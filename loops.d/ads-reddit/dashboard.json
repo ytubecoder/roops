@@ -1,0 +1,37 @@
+{
+  "panels": [
+    {
+      "title": "Open google actions",
+      "metric": "actions.open",
+      "type": "number",
+      "unit": "actions",
+      "direction": "higher_is_worse",
+      "thresholds": {"warn": 1, "alert": 5},
+      "missing": "gap"
+    },
+    {
+      "title": "Open actions (trend)",
+      "metric": "actions.open",
+      "type": "trend",
+      "window_days": 30,
+      "missing": "hold"
+    },
+    {
+      "title": "In-scope variants",
+      "metric": "scope.variants",
+      "type": "number",
+      "unit": "variants",
+      "direction": "neutral",
+      "missing": "hold"
+    },
+    {
+      "title": "Missing inputs",
+      "metric": "inputs.missing",
+      "type": "number",
+      "unit": "endpoints",
+      "direction": "higher_is_worse",
+      "thresholds": {"warn": 1, "alert": 2},
+      "missing": "gap"
+    }
+  ]
+}

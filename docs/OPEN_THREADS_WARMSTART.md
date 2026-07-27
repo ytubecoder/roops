@@ -38,3 +38,12 @@ Wanted regardless of #1's answer: count approvals per `finding_id`; at some thre
 - **Ticket consolidation loop** (he asked for it): proposed cross-project triage where killing tickets is half the output; ticket IDs give free finding identity → best pilot candidate. Lead question never answered: is the report "what do I work on next" or "what should I stop pretending I'll do"?
 - Project-specific coding loops: proposed generic loop + per-repo `.loops/checks.md` overlay (push-not-pull). Not yet accepted.
 - Parked for its own session: the coding work unit (CI/security/secrets/quality + OpenSpec pipeline) — one unit, don't spec loops individually. Background only, do not reopen: paperclip/hermes/openclaw as alternative host.
+
+## Machine infra (not loops, but blocks nothing — has its own warmstart)
+- **Caddy consolidation + launchd rename:** `~/.config/dev-tailnet/WARMSTART_CADDY_CLEANUP.md`
+  (written 2026-07-28, nothing executed yet). Covers: why two caddy instances exist (dev-tailnet
+  vs the older vane/tsnet stack), the localhost:2019 admin collision (bit us 2026-07-26; same
+  family as vane's 2026-07-04 incident), the A0 quick patch → A1 vane migration → retire
+  `~/caddy-tailscale`, and the `com.generalissimo.dev-tailnet.*` → `com.generalissimo.dev-tailnet.*` label
+  rename (16 plists + 2 bin scripts; owner name in anything new: generalissimo). Delete this
+  section when that warmstart's status log says done.

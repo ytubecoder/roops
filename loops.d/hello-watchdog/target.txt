@@ -1,0 +1,10 @@
+# hello-watchdog probe target.
+# precheck.sh reads the first non-comment, non-blank line as the URL to
+# probe with `curl --max-time 5`. Lines starting with # are ignored.
+#
+# Default below MUST succeed on a bare machine with no setup: curl reading
+# /dev/null via the file:// scheme exits 0 on macOS (verified) and is
+# side-effect-free / zero-network. See README.md for how to point this at
+# a real http(s) target instead (a local `python3 -m http.server`, or any
+# URL you own) and how to flip it to a failing target on purpose.
+file:///dev/null

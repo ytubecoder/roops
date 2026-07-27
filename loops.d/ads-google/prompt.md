@@ -52,8 +52,13 @@ digits). Continuity rules — use the `## Prior action set` block in the digest:
 - A still-true condition from the prior set **keeps its same id**.
 - A prior condition the digest shows is **resolved** → include it with
   `"status":"struck"` and a `struck_reason` (ids are NEVER reused after a strike).
-- A genuinely new exception → next id = (max id ever seen) + 1. First run with
-  no prior set starts at **ADG-01**.
+- A genuinely new exception → use the digest's stated **`next NEW action id`**,
+  then increment from there. That value comes from the id high-water mark across
+  ALL history — every persisted set AND every prior run's emitted findings — so
+  ids stay unique even when an earlier run emitted findings but failed to persist
+  its set. NEVER compute `max+1` from the prior set alone, and NEVER start at
+  `ADG-01` merely because no prior set was found; the digest says when a run is
+  genuinely the first.
 
 For each action, provide: `id`, `title`, `status` (`open`/`struck`), `outcome`
 (one line), `exception` (the observation WITH numbers and their source), the
@@ -135,9 +140,24 @@ lines plus `empty_set: yes`.
 
 The script writes `action-set/ACTIONS.md`, `action-set/actions/ADG-NN.md`, and
 `action-set/context.json` into this run's dir, then validates them. **If it
-exits non-zero, fix the payload and re-run it; if it still fails, set your
-contract `status` to `alert` with `status_reason=action_set_invalid` and say so.** A
-malformed set must fail the run visibly. The emit script automatically checks
+exits non-zero, fix the payload and re-run it.**
+
+**If the set still cannot be written or still fails validation, use this exact
+protocol — do NOT improvise around it:**
+
+1. Emit the analysis anyway: a full `report_markdown` and a `headline`. The
+   reasoning is not wasted just because the artifact is missing.
+2. Set `status` to `alert` with a precise `status_reason` (e.g.
+   `action_set_invalid`) naming what failed.
+3. Emit **zero findings** — `"findings": []`. This is load-bearing, not a
+   detail: per INTERFACES.md §4.5 a NON-empty findings array overrides your
+   declared status with the max severity of those findings, so an `alert` run
+   whose findings top out at `warn` would surface as amber. With findings empty,
+   `effective_status = status` and the alert actually reaches the reader. It also
+   prevents ADG-NN ids appearing in the findings list with no brief file behind
+   them.
+
+A malformed set must fail the run visibly. The emit script automatically checks
 ID continuity against the run dir's `continuity.json` (written by precheck). A
 second allowlisted command is available to re-check a set — invoke it WITH the
 continuity file so the ID-reuse guard runs:
@@ -167,6 +187,10 @@ braces — write it exactly as the schema requires.
   `actions.struck`, `scope.variants`, `scope.campaigns`, `inputs.missing`, and
   `action_set.written` (`1` when this run persisted a valid set, `0` when it
   did not — every run, so the set-missing condition is queryable in sqlite).
+  Take `inputs.missing`, `scope.variants` and `scope.campaigns` **verbatim** from
+  the digest's `## METRICS (authoritative …)` block — precheck computed them from
+  what it actually fetched; do NOT recount or estimate them. The inner values are
+  numbers, never strings (the surrounding `metrics` field is the JSON string).
 - `findings`: one finding per **OPEN** action (skip struck ones), with
   `finding_id` = `ads-google:ADG-NN`, `title` = the action title, `severity`,
   `detail` = the exception in one line. Severity rule:

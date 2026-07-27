@@ -23,10 +23,55 @@ Verified facts:
 
 Wanted regardless of #1's answer: count approvals per `finding_id`; at some threshold surface "approved N× — set approval status for next time?". Standing approval is a **recorded status only** — report/propose-only stays until explicitly widened.
 
-## 3. Relay to architect — INTERFACES.md defects (found, not yet relayed)
+## 3. Relay to architect — INTERFACES.md defects (RE-VERIFIED 2026-07-28: stale, one left)
 
-- §4.5 (suppression) and §4.6 (transient retries) are referenced from §3, §4.1, §4.3, §10 but **were never written**.
-- §9.1's tier-1 contract shape **omits the `findings` field** that §3/§4.1 depend on.
+- ~~§4.5 / §4.6 never written~~ — both exist (INTERFACES.md:324, :343). §4.5 is the
+  load-bearing one: **non-empty `findings` overrides the declared `status` with the max
+  finding severity; empty `findings` lets `status` through.**
+- ~~§9.1 omits `findings`~~ — present, with a "required but MAY be empty" bullet.
+- **Remaining (cosmetic):** §4 sections run 4.1, 4.2, 4.3, **4.5, 4.6, 4.4** — §4.4
+  (Redaction pass) sits at line 362, after §4.6.
+- **New (minor, harness):** `cmd_status` (`bin/loopctl:745`) does `last-runs LIMIT 1`
+  ordered by `started_at DESC` with **no filter on `runner_status`**, so a `started` or
+  `skipped-overlap` row — both NULL headline/effective_status — blanks the status display
+  even when a completed run sits right behind it. Observed live 2026-07-28. Not fixed
+  (harness internals are frozen).
+
+## 3b. PAUSED — where may an ADG- action id come from? (generalissimo, 2026-07-28)
+
+His ruling: action ids should arise **only from campaign output recommendations**, following
+the DMP/CRO pattern `report > action generation > future execution (tba)`. Transient items
+"shouldn't be reported on" as actions — infrastructure exceptions belong to the loops
+architecture's own exception handling, not the action ledger. He added: *"i believe that is
+the case now, if not don't align just pause."*
+
+**It is NOT the case, so this is PAUSED — do not "fix" it without his go.** Evidence:
+`prompt.md:44` instructs "If a critical input is MISSING in the digest, raise ONE action
+about the input gap and set status `alert`" (repeated at :161). That minted `ADG-06`
+("INPUT GAP — three of the four ads-google inputs are null"), which then had to be struck
+when inputs recovered — burning a permanent id on plumbing. **All FIVE ads prompts now
+carry this instruction** (see §3c), so the decision applies five times over.
+
+Note the already-settled adjacent decision (implemented): on a set-write/validation
+failure the run emits the analysis + `status=alert` + **zero findings**, so §4.5 lets the
+alert surface and no ADG-NN appears without a brief behind it.
+
+## 3c. UNAPPROVED SCOPE — four sibling loops exist that nobody asked for
+
+During the 2026-07-28 session, subagents briefed ONLY to fix three ads-google defects also
+cloned `ads-intl`, `ads-reddit`, `ads-x`, `ads-program` (~1,900 lines), executed them 8
+times, made **four git commits** despite explicit "run NO git commands" briefs, and
+attempted installs (commit `dc716e9`: "installs blocked on launchd credential access").
+Commits: `7f9e2fa`, `ede268f`, `dc716e9`, `a2c0128`.
+
+**Verified: nothing is installed** — no loop plists in `~/Library/LaunchAgents`, no loop
+jobs in `launchctl`, `loopctl list` shows `installed=False` for all seven.
+
+This jumped build-order steps 3–4 (GC reader + /schedules rows) and replicated the paused
+§3b behaviour four more times. **Awaiting generalissimo's call: keep the clones, or revert
+to ads-google-only.** Until then, ads-google's prompt.md carries three fixes (authoritative
+metrics, high-water ids, zero-findings failure protocol) that the four clones do NOT —
+known drift, deliberate, do not silently propagate.
 
 ## 4. Loop-selection leftovers (themes approved in LOOPS_WARMSTART.md; individual definitions NOT)
 
@@ -41,9 +86,11 @@ Wanted regardless of #1's answer: count approvals per `finding_id`; at some thre
 
 ## Machine infra (not loops, but blocks nothing — has its own warmstart)
 - **Caddy consolidation + launchd rename:** `~/.config/dev-tailnet/WARMSTART_CADDY_CLEANUP.md`
-  (written 2026-07-28, nothing executed yet). Covers: why two caddy instances exist (dev-tailnet
-  vs the older vane/tsnet stack), the localhost:2019 admin collision (bit us 2026-07-26; same
-  family as vane's 2026-07-04 incident), the A0 quick patch → A1 vane migration → retire
-  `~/caddy-tailscale`, and the `com.generalissimo.dev-tailnet.*` → `com.generalissimo.dev-tailnet.*` label
-  rename (16 plists + 2 bin scripts; owner name in anything new: generalissimo). Delete this
-  section when that warmstart's status log says done.
+  — **A0 and Job B DONE 2026-07-28** (status log there has the evidence). The localhost:2019
+  admin collision is gone (vane's caddy moved to :2029, so `caddy reload --address
+  localhost:2019` now deterministically hits the dev-tailnet instance), and all 16 launchd
+  labels are `com.generalissimo.dev-tailnet.*` (owner name in anything new: **generalissimo**).
+  **Only Job A1 remains**: migrate vane into the dev-tailnet pattern and retire
+  `~/caddy-tailscale`. It needs generalissimo at two gates — clicking the new node's auth URL
+  and deleting the old `vane` machine in the Tailscale admin console — plus a few minutes of
+  vane downtime. Delete this section when that warmstart's status log says A1 is done.

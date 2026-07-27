@@ -85,6 +85,11 @@ print("x_cache_age: n/a (intl google (intl campaigns ride the google network acc
 print()
 
 # ---- SCOPE from the experiments registry (INTL google cards ONLY) ----
+# Shared intl predicate — BYTE-IDENTICAL in ads-google/precheck.sh and
+# ads-intl/precheck.sh (review 2026-07-28): ads-intl INCLUDES a card when true,
+# ads-google EXCLUDES it — complementary by construction, so a future intl card
+# with a new key (e.g. g-intl-jp) is claimed by exactly one loop. Edit BOTH
+# copies together or the fleet double-claims/orphans a campaign.
 INTL_KEYS = {"g-intl"}
 def _is_intl(c):
     if c.get("key", "") in INTL_KEYS:

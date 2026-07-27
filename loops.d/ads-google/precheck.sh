@@ -84,12 +84,21 @@ print("x_cache_age: n/a (google network — no X CDP cache involved)")
 print()
 
 # ---- SCOPE from the experiments registry (google cards except intl/retired) ----
+# Shared intl predicate — BYTE-IDENTICAL in ads-google/precheck.sh and
+# ads-intl/precheck.sh (review 2026-07-28): ads-intl INCLUDES a card when true,
+# ads-google EXCLUDES it — complementary by construction, so a future intl card
+# with a new key (e.g. g-intl-jp) is claimed by exactly one loop. Edit BOTH
+# copies together or the fleet double-claims/orphans a campaign.
 INTL_KEYS = {"g-intl"}
+def _is_intl(c):
+    if c.get("key", "") in INTL_KEYS:
+        return True
+    return any("intl" in str(u or "") for u in (c.get("utm_campaigns") or []))
 scope_variants, scope_campaigns, scope_cards = set(), {}, []
 if isinstance(camp, dict):
     for c in camp.get("cards", []):
         key = c.get("key", "")
-        if key in INTL_KEYS or c.get("status") == "retired":
+        if _is_intl(c) or c.get("status") == "retired":
             continue
         google_leg = None
         for leg in c.get("legs", []):

@@ -344,7 +344,11 @@ def main(argv: list[str]) -> int:
             return 2
         data["actions"] = []
 
-    generated = data.get("generated") or os.environ.get("GENERATED_TS")
+    # The stamp is WRITE-TIME, computed here — a model-supplied `generated:` is
+    # accepted in the payload but deliberately ignored (review 2026-07-28: model
+    # clocks drift/round; the stamp must be when the set actually hit disk).
+    # GENERATED_TS env override exists for tests only.
+    generated = os.environ.get("GENERATED_TS")
     if not generated:
         from datetime import datetime, timezone
 

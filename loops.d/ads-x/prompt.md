@@ -111,7 +111,7 @@ python3 loops.d/ads-x/bin/emit_action_set.py <<'ACTIONSET'
 loop: ads-x
 run_id: <the RUN CONTEXT run_id>
 engine: claude
-generated: <ISO-8601 Z timestamp used everywhere this run>
+generated: optional — the emit script stamps write-time itself and ignores this
 window.scoreboard: last 7 days
 window.journal: last 60 orders
 freshness.fetched_at: <copy from the digest header>
@@ -135,6 +135,12 @@ source: scoreboard
 source: program_events 2026-07-21
 ACTIONSET
 ```
+
+NOTE on targeting/device recommendations (e.g. reverting platforms, re-running
+mobile-off): targeting has NO `record_and_apply` verb and is NOT journalable —
+label such a suggested order as a **manual console/API action (non-journalable —
+log it in the runbook)** via `order.verb: manual-targeting-change`, never as
+`record_and_apply` vocabulary.
 
 Rules: one `[action]` section per action; `scope`, `placement`, `source` are
 repeatable; add `struck_reason:` when `status: struck`; omit all `order.*` and

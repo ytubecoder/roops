@@ -1,5 +1,24 @@
 # Session Log
 
+## 2026-07-28 — Machine infra: caddy admin-port split + launchd label rename; repo gets a remote; README rewrite
+
+### Summary
+- **Machine infra (outside this repo, runbook at `~/.config/dev-tailnet/WARMSTART_CADDY_CLEANUP.md`):** resolved the two-caddy `localhost:2019` admin collision by moving the vane caddy's admin API to `:2029`, and renamed all 16 `com.generalissimo.dev-tailnet.*` launchd labels to `com.generalissimo.dev-tailnet.*`. Both verified: one listener on 2019, full FQDN sweep answering on 15 hosts, 16/16 services loaded with live pids, zero `com.generalissimo` references left in plists or `dev-tailnet/bin`.
+- **This repo gained a remote.** Was local-only for 33 commits; now private at `https://github.com/ytubecoder/loops`, `main` tracking `origin/main`. Secret-scanned tree and full history before creating it — every hit was a fake fixture in the harness's own redaction tests.
+- **README rewritten** in the style of `~/projects/ticket-takeaway/README.md`: badge row, ASCII banner, blockquote tagline, install one-liner + agent-facing variant, run-flow diagram with a gate table, report-only rationale, command reference, docs table.
+
+### Lessons Learned
+- **Gotcha (test counting):** `tests/run-tests.sh` runs BOTH the shell suites and `python3 -m unittest discover`. Summing only `passed: N` lines undercounts badly — unittest reports `Ran N tests`, not `passed:`. True total is **593** (285 python + 308 shell). A first pass at this session's README published "308" and had to be corrected; `CLAUDE.md`'s older "~530" was closer to right than the "measured" number that replaced it. Measure with both patterns or trust the existing figure.
+- **Gotcha (zsh word splitting):** an ad-hoc verification loop `for l in $labels` silently tested one 16-line string as a single filename, reporting a false "MISSING plist". zsh does not word-split unquoted parameters. Verification harnesses need the same scrutiny as the thing they verify — a false alarm from a checking script wastes exactly as much time as a real bug.
+- **Accepted (verify-then-act on an inherited runbook):** the caddy runbook was written by a prior session and turned out accurate, but re-verifying it live surfaced four defects — `com.vane.*` is 4 plists not 2 (an unrelated `searxng` that must survive), the stale-LABELS list was missing 4 entries not 5, an 8s curl timeout yields false `000`s on cold tailnet nodes (25s is honest), and the doc's own grep-verify could never pass because the doc lives in the directory it greps.
+- **Accepted (prove the failure mode, not just the config):** after splitting the admin ports, confirming the on-disk config equalled the running config made a real `caddy reload --address localhost:2019` a safe no-op — which then proved determinism on the exact operation that misfired on 2026-07-26, rather than merely asserting it from a port listing.
+
+### Decisions
+- **Job A1 (migrate vane into the dev-tailnet pattern, retire `~/caddy-tailscale`) is BLOCKED** — "dont touch vane at all". There are **two vanes**: `vane` = 100.69.211.49 on llm (tsnet node fronting `~/projects/Vane` on :8347) and `vane-mm` = 100.71.78.96 on mm. They are different services and must never be consolidated. A1's "delete the old vane machine" step sits beside a `vane-mm` row in the Tailscale console — if ever unblocked, match on IP, never on name. Saved to auto-memory as `two-vanes-never-consolidate`.
+- **The two-caddy situation persists by decision**, now collision-free. A0 was always designed as a complete stopping point; A1 was the only step that would have retired the second instance.
+- **README omits license and release badges** (ticket-takeaway has both) because this repo has no `LICENSE` file and no releases — fabricating them was rejected. Also omits the four `ads-*` sibling loops, which are uninstalled and carry known drift from `ads-google`; the README says "seven loops defined, none installed" and uses `hello-loop`/`hello-watchdog` as the worked examples.
+- **No dashboard screenshots in the README** — `dashboard/loops.html` is gitignored as generated output, so there's nothing committed to link. Deferred as not worth it yet.
+
 ## 2026-07-22 — Project founded (planning only)
 
 ### Summary

@@ -1,6 +1,6 @@
 # Loops — recurring automation harness
 
-Custom thin harness for scheduled agent "loops" (recurring maintenance/monitoring jobs across ~/projects). **Status: BUILT + live-verified 2026-07-22** (real launchd firing, codex AND claude, findings memory/dispositions, enforcement denial, full dashboard matrix; ~530 hermetic tests via `bash tests/run-tests.sh`).
+Custom thin harness for scheduled agent "loops" (recurring maintenance/monitoring jobs across ~/projects). **Status: BUILT + live-verified 2026-07-22** (real launchd firing, codex AND claude, findings memory/dispositions, enforcement denial, full dashboard matrix; 593 hermetic tests via `bash tests/run-tests.sh` — 285 python + 308 shell, measured 2026-07-28).
 
 ## Start here (cold start)
 - **Building a LOOP:** `docs/LOOP_AUTHORING.md` + `bin/loopctl new` — run the intake interview first (11 questions, in the doc); fill SPEC.md; `loopctl validate` gates it.

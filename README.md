@@ -2,7 +2,7 @@
 
 ![Python 3](https://img.shields.io/badge/python-3-blue)
 ![Platform: macOS / launchd](https://img.shields.io/badge/platform-macOS%20%2F%20launchd-lightgrey)
-![Tests: 308 passing](https://img.shields.io/badge/tests-308%20passing-brightgreen)
+![Tests: 593 passing](https://img.shields.io/badge/tests-593%20passing-brightgreen)
 ![Works with Codex CLI](https://img.shields.io/badge/works%20with-Codex%20CLI-orange)
 ![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-blueviolet)
 
@@ -135,7 +135,7 @@ examples/                # hello-loop (daily agent) · hello-watchdog (15m inter
 state/loops.sqlite       # runs · heartbeats · metrics · findings · dispositions (WAL)
 reports/<name>/          # per-run markdown + atomically-promoted latest.* (suppression-filtered)
 dashboard/loops.html     # static: fleet view + per-loop panels + findings
-tests/run-tests.sh       # 308 hermetic tests — no network, no real engines
+tests/run-tests.sh       # 593 hermetic tests — no network, no real engines
 ```
 
 ## Docs

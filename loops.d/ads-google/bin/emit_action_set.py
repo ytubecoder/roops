@@ -47,7 +47,7 @@ PAYLOAD FORMATS (auto-detected on the first non-space character):
          scope: g-theme campaigns 24043161296 24043160774 24038115258
 
          [action]
-         id: ADG-01
+         id: ADG-CMP-08
          title: ...one line...
          status: open
          outcome: ...one line...
@@ -66,6 +66,10 @@ PAYLOAD FORMATS (auto-detected on the first non-space character):
      Repeatable keys: scope, placement, source. `struck_reason:` only when
      `status: struck`. Omit order.* entirely for a pure observation. Any
      brace character in the payload is REJECTED with a clear error.
+     NEW action ids use the two-part grammar `ADG-<SRC>-NN` (SRC one of
+     EV/CMP/JRN/BUD/INP — the provenance of the finding); the single-part
+     legacy shape `ADG-NN` is accepted only for ids carried forward from the
+     prior set. The source is derived from the id, not a separate field.
   2. A JSON object (kept for tests/manual use; first non-space char is `{`).
 
 Run dir resolution order: --out DIR | $OUT_DIR | $LOOPS_ROOT/state/runs/$RUN_ID.
@@ -73,6 +77,7 @@ Run dir resolution order: --out DIR | $OUT_DIR | $LOOPS_ROOT/state/runs/$RUN_ID.
 Usage:
     python3 emit_action_set.py [--out <run-dir>] < action-set.payload
 """
+
 from __future__ import annotations
 
 import json
@@ -82,6 +87,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import validate_action_set  # noqa: E402
+
+LOOP = "ads-google"
+PREFIX = "ADG"
+SOURCE_LABELS = {
+    "EV": "evaluator verdict",
+    "CMP": "campaign/delivery evaluation",
+    "JRN": "journal/guard reconciliation",
+    "BUD": "budget/caps",
+    "INP": "input freshness/data integrity",
+    "PRG": "cross-network program policy",
+}
 
 
 def _resolve_out_dir(argv: list[str]) -> Path:
@@ -154,6 +170,10 @@ def _write_brief(briefs_dir: Path, action: dict, generated: str) -> None:
     body.append(f"# {aid} — {title}")
     body.append("")
     body.append(f"- **Status:** {status}")
+    src = validate_action_set.ID_SRC_RE.match(aid)
+    if src:
+        label = SOURCE_LABELS.get(src.group(1), src.group(1))
+        body.append(f"- **Source:** {src.group(1)} — {label}")
     if action.get("outcome"):
         body.append(f"- **Outcome:** {action['outcome']}")
     srcs = action.get("sources") or []
@@ -181,10 +201,10 @@ def _write_register(set_dir: Path, data: dict, generated: str) -> list[str]:
     lines = []
     lines.append(_stamp(generated).rstrip("\n"))
     lines.append("")
-    lines.append(f"# Action register — ads-google · run {data.get('run_id', '')}")
+    lines.append(f"# Action register — {LOOP} · run {data.get('run_id', '')}")
     lines.append("")
     lines.append(
-        f"Generated {generated} by the ads-google loop (report-only). "
+        f"Generated {generated} by the {LOOP} loop (report-only). "
         f"{len(actions)} actions ({open_n} open · {struck_n} struck). "
         "IDs are stable and NEVER reused after a strike. Read the per-action "
         "brief under `actions/`, not this index. These are suggested orders in "
@@ -211,7 +231,7 @@ def _write_register(set_dir: Path, data: dict, generated: str) -> list[str]:
 def _write_context(set_dir: Path, data: dict, generated: str, ids: list[str]) -> None:
     actions = data.get("actions") or []
     ctx = {
-        "loop": data.get("loop", "ads-google"),
+        "loop": data.get("loop", LOOP),
         "run_id": data.get("run_id", os.environ.get("RUN_ID", "")),
         "generated": generated,
         "engine": data.get("engine", "claude"),
@@ -219,6 +239,14 @@ def _write_context(set_dir: Path, data: dict, generated: str, ids: list[str]) ->
         "input_freshness": data.get("input_freshness", {}),
         "scope_campaigns": data.get("scope_campaigns", []),
         "action_ids": ids,
+        "action_sources": {
+            a["id"]: (
+                validate_action_set.ID_SRC_RE.match(a["id"]).group(1)
+                if validate_action_set.ID_SRC_RE.match(a["id"])
+                else None
+            )
+            for a in actions
+        },
         "open_count": sum(1 for a in actions if a.get("status") != "struck"),
         "struck_count": sum(1 for a in actions if a.get("status") == "struck"),
     }
@@ -241,20 +269,24 @@ def _parse_placement(rest: str) -> dict:
     # name= is greedy to end of line
     if " name=" in f" {rest2}":
         idx = f" {rest2}".index(" name=")
-        pl["name"] = f" {rest2}"[idx + len(" name="):].strip()
+        pl["name"] = f" {rest2}"[idx + len(" name=") :].strip()
         rest2 = f" {rest2}"[:idx].strip()
     for tok in rest2.split():
         if tok.startswith("campaign="):
-            pl["campaign_external_id"] = tok[len("campaign="):]
+            pl["campaign_external_id"] = tok[len("campaign=") :]
         elif tok.startswith("ad_group="):
-            pl["ad_group_external_id"] = tok[len("ad_group="):]
+            pl["ad_group_external_id"] = tok[len("ad_group=") :]
     return pl
 
 
 def parse_flat(text: str) -> dict:
     """Parse the brace-free sectioned format into the internal dict shape."""
-    data: dict = {"data_windows": {}, "input_freshness": {}, "scope_campaigns": [],
-                  "actions": []}
+    data: dict = {
+        "data_windows": {},
+        "input_freshness": {},
+        "scope_campaigns": [],
+        "actions": [],
+    }
     current: dict | None = None  # None = header section
     for rawline in text.splitlines():
         line = rawline.strip()
@@ -271,9 +303,9 @@ def parse_flat(text: str) -> dict:
         val = val.strip()
         if current is None:
             if key.startswith("window."):
-                data["data_windows"][key[len("window."):]] = val
+                data["data_windows"][key[len("window.") :]] = val
             elif key.startswith("freshness."):
-                data["input_freshness"][key[len("freshness."):]] = val
+                data["input_freshness"][key[len("freshness.") :]] = val
             elif key in _HEADER_LIST_KEYS:
                 data["scope_campaigns"].append(val)
             else:
@@ -281,7 +313,7 @@ def parse_flat(text: str) -> dict:
         else:
             if key.startswith("order."):
                 order = current.setdefault("suggested_order", {})
-                okey = key[len("order."):]
+                okey = key[len("order.") :]
                 if okey == "amount_usd":
                     try:
                         order[okey] = float(val)
@@ -358,7 +390,10 @@ def main(argv: list[str]) -> int:
         if "id" not in a:
             sys.stderr.write("every action needs an id\n")
             return 2
-        if a.get("status") == "struck" and not str(a.get("struck_reason") or "").strip():
+        if (
+            a.get("status") == "struck"
+            and not str(a.get("struck_reason") or "").strip()
+        ):
             sys.stderr.write(
                 f"{a['id']}: status is struck but struck_reason is missing — "
                 "every strike must say why (add a struck_reason: line)\n"

@@ -56,8 +56,9 @@ all live in that file, each with its re-check command. Work from it, not from he
   metrics, high-water ids, zero-findings failure protocol) that the four siblings do not.
 
 Repo hygiene, still true: subagents made 4 commits here (`7f9e2fa`, `ede268f`, `dc716e9`,
-`a2c0128`) and 22 in `maguyva-marketing` despite "run no git commands" briefs. Nothing is
-pushed; this repo has no remote.
+`a2c0128`) and 22 in `maguyva-marketing` despite "run no git commands" briefs. Those commits are now
+pushed: as of 2026-07-28 this repo has a **private** remote at
+`https://github.com/ytubecoder/loops` (`origin`, `main` tracking `origin/main`).
 
 ## 4. Loop-selection leftovers (themes approved in LOOPS_WARMSTART.md; individual definitions NOT)
 

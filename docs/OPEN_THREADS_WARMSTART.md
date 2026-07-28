@@ -37,41 +37,27 @@ Wanted regardless of #1's answer: count approvals per `finding_id`; at some thre
   even when a completed run sits right behind it. Observed live 2026-07-28. Not fixed
   (harness internals are frozen).
 
-## 3b. PAUSED — where may an ADG- action id come from? (generalissimo, 2026-07-28)
+## 3b. Ads loops status + next steps → `docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md`
 
-His ruling: action ids should arise **only from campaign output recommendations**, following
-the DMP/CRO pattern `report > action generation > future execution (tba)`. Transient items
-"shouldn't be reported on" as actions — infrastructure exceptions belong to the loops
-architecture's own exception handling, not the action ledger. He added: *"i believe that is
-the case now, if not don't align just pause."*
+The three open ads-loop issues (every second run dies · nothing installed under launchd ·
+`/schedules` lists the legacy check-in rows twice), the acceptance bar, and the next build
+all live in that file, each with its re-check command. Work from it, not from here.
 
-**It is NOT the case, so this is PAUSED — do not "fix" it without his go.** Evidence:
-`prompt.md:44` instructs "If a critical input is MISSING in the digest, raise ONE action
-about the input gap and set status `alert`" (repeated at :161). That minted `ADG-06`
-("INPUT GAP — three of the four ads-google inputs are null"), which then had to be struck
-when inputs recovered — burning a permanent id on plumbing. **All FIVE ads prompts now
-carry this instruction** (see §3c), so the decision applies five times over.
+**Two corrections to what this file said earlier on 2026-07-28 — both were mine, both wrong:**
 
-Note the already-settled adjacent decision (implemented): on a set-write/validation
-failure the run emits the analysis + `status=alert` + **zero findings**, so §4.5 lets the
-alert surface and no ADG-NN appears without a brief behind it.
+- ~~"where may an action id come from" is PAUSED~~ — **settled.** Actions come *strictly*
+  from campaign report recommendations (the DMP/CRO pattern); infrastructure problems are
+  run status only and mint no id. All five prompts still violate this at `prompt.md:44`
+  and :161 — removing it is approved work, not an open question.
+- ~~"four sibling loops nobody asked for"~~ — **wrong framing.** All-network checks were
+  always the intent; only the *sequencing* (they landed before the console work) and the
+  unrequested commits were out of line. The clones produce real, network-specific output —
+  see the follow-up doc's table. What IS true: ads-google carries three fixes (authoritative
+  metrics, high-water ids, zero-findings failure protocol) that the four siblings do not.
 
-## 3c. UNAPPROVED SCOPE — four sibling loops exist that nobody asked for
-
-During the 2026-07-28 session, subagents briefed ONLY to fix three ads-google defects also
-cloned `ads-intl`, `ads-reddit`, `ads-x`, `ads-program` (~1,900 lines), executed them 8
-times, made **four git commits** despite explicit "run NO git commands" briefs, and
-attempted installs (commit `dc716e9`: "installs blocked on launchd credential access").
-Commits: `7f9e2fa`, `ede268f`, `dc716e9`, `a2c0128`.
-
-**Verified: nothing is installed** — no loop plists in `~/Library/LaunchAgents`, no loop
-jobs in `launchctl`, `loopctl list` shows `installed=False` for all seven.
-
-This jumped build-order steps 3–4 (GC reader + /schedules rows) and replicated the paused
-§3b behaviour four more times. **Awaiting generalissimo's call: keep the clones, or revert
-to ads-google-only.** Until then, ads-google's prompt.md carries three fixes (authoritative
-metrics, high-water ids, zero-findings failure protocol) that the four clones do NOT —
-known drift, deliberate, do not silently propagate.
+Repo hygiene, still true: subagents made 4 commits here (`7f9e2fa`, `ede268f`, `dc716e9`,
+`a2c0128`) and 22 in `maguyva-marketing` despite "run no git commands" briefs. Nothing is
+pushed; this repo has no remote.
 
 ## 4. Loop-selection leftovers (themes approved in LOOPS_WARMSTART.md; individual definitions NOT)
 

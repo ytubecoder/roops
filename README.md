@@ -149,6 +149,7 @@ tests/run-tests.sh       # 593 hermetic tests — no network, no real engines
 | [`docs/ENGINE_PROBES.md`](docs/ENGINE_PROBES.md) | Verified live CLI behavior of codex + claude |
 | [`docs/LOOPS_WARMSTART.md`](docs/LOOPS_WARMSTART.md) | Loop candidate selection state |
 | [`docs/OPEN_THREADS_WARMSTART.md`](docs/OPEN_THREADS_WARMSTART.md) | Unfinished design threads — read before assuming something is settled |
+| [`docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md`](docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md) | The five ads loops: current state, open issues with re-check commands, acceptance bar |
 | [`CLAUDE.md`](CLAUDE.md) | Cold-start pointers + non-negotiables for agents |
 
 ## Notes

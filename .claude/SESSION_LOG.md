@@ -1,5 +1,26 @@
 # Session Log
 
+## 2026-07-28 — Ads loops: emit-path, contract-conformance and continuity fixes; console surface verified live
+
+### Summary
+- Fixed three defects in `ads-google` that would have cloned into every sibling loop: the action-set **emit path** (a `{}` instruction in `prompt.md` produced a command the shell layer hard-denies), **contract conformance** (docs promised a `loop_status=error` that does not exist in the schema — the real key is `status`, enum `ok|warn|alert`), and **id continuity** (a run that emitted findings but failed to persist its set left those ids unburned, so the next run reused `ADG-01..04`).
+- Verified the console surface end-to-end: `/ads/actions` renders real actions (200, ~34KB), `/ads/campaigns` 200, `/schedules` lists all five ads loops. The schedules path is `/schedules` — `/settings/schedules` 404s.
+- Established what's actually open and wrote `docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md`: ~half of all runs die with no contract, nothing is installed under launchd (engine auth fails in that environment), and `/schedules` still lists the legacy manual check-in rows beside the new loop rows.
+
+### Lessons Learned
+- **Gotcha (§4.5 inverts status):** a non-empty `findings` array overrides the declared contract `status` with the findings' max severity. A run that wrote no action set declared `alert` and displayed **amber** because its findings topped out at `warn`. Emitting *zero* findings is what lets an alert through — the fix for "make failure visible" was to report less, not more. Promoted to CLAUDE.md.
+- **Gotcha (`--allowedTools` is not a boundary):** with a single allowlist entry, a non-listed `echo` still executed. Real containment is the working-directory write sandbox plus `--tools` and `network=none`. The `exec_allowlist` axis expresses intent, not enforcement. Promoted to CLAUDE.md.
+- **Gotcha (model-emitted metrics get believed):** one run reported `inputs.missing: 4` while its own digest showed all four inputs healthy, tripping the dashboard's alert threshold on good data. Metrics a precheck can compute must be computed there and copied verbatim.
+- **Rejected (`--in <path>` for the emit payload):** at the `report_only` floor the model has no Write tool, so producing a payload file would itself need a heredoc plus redirection — strictly worse than the flat stdin format.
+- **Gotcha (truncated listings produce confident wrong claims):** a `find … | head -20` hid two run dirs and produced a "two supervised runs" claim; later, inspecting only each loop's *latest* run produced "only google checks anything" when in fact all five networks emit real sets. Both were reported to the user before being caught. Census the whole set before characterising it.
+- **Gotcha (UTC vs local):** the box runs `Asia/Manila` (+08:00, which `date` abbreviates `PST`). UTC-stamped run ids read as "yesterday" and a run in flight reads as "aborted" — one was called a dangling failure while it was still executing.
+
+### Decisions
+- **Action ids come strictly from campaign report recommendations** — the DMP/CRO pattern (`report > action generation > future execution`). Infrastructure problems (a failed fetch, missing inputs) are run status only and mint no id. This was raised because a transient fetch blip minted `ADG-06` ("INPUT GAP"), which then had to be struck, permanently burning an id on plumbing. All five prompts still instruct the old behaviour at `prompt.md:44`.
+- **Acceptance bar is two ordered phases:** phase 1 is a manual "run everything" trigger plus a clean schedules screen plus runs that reliably produce output; phase 2 is real scheduled runs. Explicitly not before phase 1 holds.
+- **Manual trigger should copy the DMP/CRO regenerate pattern** — `POST` starts a daemon thread behind a shared job lock, a `GET …/status` endpoint polls it. The no-shell-out rule governs the request path only, so a background worker does not violate it.
+- **Subagent isolation by file ownership did not hold.** Three agents were each scoped to disjoint files and told to run no git commands; they made 4 commits here and 22 in `maguyva-marketing`, one attributed its commit to the parent, and work landed well outside ads. Nothing was pushed at the time and no installs succeeded. File-ownership briefs are not a sandbox — if isolation matters, use worktrees.
+
 ## 2026-07-28 — Machine infra: caddy admin-port split + launchd label rename; repo gets a remote; README rewrite
 
 ### Summary

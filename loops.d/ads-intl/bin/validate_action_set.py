@@ -12,8 +12,10 @@ so a human can re-check any set:
 Checks (stdlib only, per the harness ground rules):
   1. context.json exists, parses, and carries the required keys.
   2. ACTIONS.md exists and its first non-empty line is a `> generated:` stamp.
-  3. Every register heading id matches ^ADI-\\d{2,}$ (two-or-more digits;
-     daily loops outlive 99), with no duplicate ids.
+  3. Every register heading id matches the two-part grammar
+     ^ADI-(?:(?:EV|CMP|JRN|BUD|INP)-)?\\d{2,}$ (legacy single-part ids stay
+     valid only while carried forward), with no duplicate ids and one shared
+     number sequence across sources.
   4. Register <-> briefs consistency: every OPEN (non-struck) register id has a
      brief at actions/<ID>.md, and every brief file id appears in the register.
   5. Every brief's first non-empty line is a `> generated:` stamp.
@@ -28,6 +30,7 @@ Checks (stdlib only, per the harness ground rules):
 
 Exit 0 = valid, 1 = invalid (reasons to stderr, one per line), 2 = usage.
 """
+
 from __future__ import annotations
 
 import json
@@ -35,11 +38,26 @@ import re
 import sys
 from pathlib import Path
 
-ID_RE = re.compile(r"^ADI-\d{2,}$")
-# Register heading: "## ADI-07 — title"  (open)  or  "## ~~ADI-07 — title~~" (struck)
-HEADING_RE = re.compile(r"^##\s+(~~)?\s*(ADI-\d+)\s+[—-]\s+(.*?)(~~)?\s*$")
+LOOP = "ads-intl"
+PREFIX = "ADI"
+# Provenance designators this loop may mint (docs/actionator-warmstart.md in
+# the marketing repo): EV evaluator · CMP campaign/delivery · JRN journal/
+# guard · BUD budget/caps · INP input gap. ads-program instead mints
+# PRG · BUD · INP. New ids are two-part `PREFIX-SRC-NN`; single-part legacy
+# ids remain valid ONLY while carried forward — never minted anew.
+ALLOWED_SOURCES = ("EV", "CMP", "JRN", "BUD", "INP")
+_SRC_ALT = "|".join(ALLOWED_SOURCES)
+ID_RE = re.compile(rf"^{PREFIX}-(?:(?:{_SRC_ALT})-)?\d{{2,}}$")
+# Heading capture is deliberately looser ([A-Z]+) so an id with an INVALID
+# source still parses as an id and fails the ID_RE check with a clear error,
+# instead of vanishing from the register.
+HEADING_RE = re.compile(
+    rf"^##\s+(~~)?\s*({PREFIX}-(?:[A-Z]+-)?\d+)\s+[—-]\s+(.*?)(~~)?\s*$"
+)
 STAMP_RE = re.compile(r"^>\s*generated:\s*\S")
 REQUIRED_CONTEXT_KEYS = {"loop", "run_id", "generated", "engine", "action_ids"}
+ID_NUM_RE = re.compile(rf"^{PREFIX}-(?:[A-Z]+-)?(\d+)$")
+ID_SRC_RE = re.compile(rf"^{PREFIX}-([A-Z]+)-\d+$")
 
 
 def _first_nonempty_line(text: str) -> str:
@@ -47,9 +65,6 @@ def _first_nonempty_line(text: str) -> str:
         if line.strip():
             return line.rstrip("\n")
     return ""
-
-
-ID_NUM_RE = re.compile(r"^ADI-(\d+)$")
 
 
 def _continuity_errors(register_ids: list[str], continuity: dict) -> list[str]:
@@ -70,11 +85,19 @@ def _continuity_errors(register_ids: list[str], continuity: dict) -> list[str]:
             continue  # shape already reported by the id-pattern check
         if aid in prior_ids:
             continue  # legitimately carried forward
+        if not ID_SRC_RE.match(aid):
+            errors.append(
+                f"{aid}: NEW ids must carry a source designator — "
+                f"{PREFIX}-<SRC>-NN with SRC one of "
+                f"{', '.join(ALLOWED_SOURCES)}. Only ids carried forward from "
+                "the prior set may keep the legacy single-part shape."
+            )
         if int(m.group(1)) <= high_water:
             errors.append(
                 f"{aid}: REUSED id — it is not in the prior set yet is at or below "
                 f"the high-water mark {high_water}. New actions must start at "
-                f"ADI-{high_water + 1:02d}. Ids are never reused, even after a strike."
+                f"{PREFIX}-<SRC>-{high_water + 1:02d}. Ids are never reused, even "
+                "after a strike."
             )
 
     # Completeness: every prior OPEN action must be carried forward (open or
@@ -135,9 +158,12 @@ def validate(set_dir: Path, continuity: dict | None = None) -> list[str]:
     for line in reg_text.splitlines():
         m = HEADING_RE.match(line)
         if not m:
-            if current_struck_id and line.strip().startswith("- **Struck:**"):
-                if line.strip()[len("- **Struck:**"):].strip():
-                    struck_reason_seen = True
+            if (
+                current_struck_id
+                and line.strip().startswith("- **Struck:**")
+                and line.strip()[len("- **Struck:**") :].strip()
+            ):
+                struck_reason_seen = True
             continue
         if current_struck_id and not struck_reason_seen:
             errors.append(
@@ -149,7 +175,7 @@ def validate(set_dir: Path, continuity: dict | None = None) -> list[str]:
         current_struck_id = aid if struck else None
         struck_reason_seen = not struck
         if not ID_RE.match(aid):
-            errors.append(f"ACTIONS.md: id {aid!r} does not match ^ADI-\\d{{2,}}$")
+            errors.append(f"ACTIONS.md: id {aid!r} does not match {ID_RE.pattern}")
         if aid in register_ids:
             errors.append(f"ACTIONS.md: duplicate id {aid}")
         register_ids.append(aid)
@@ -160,6 +186,22 @@ def validate(set_dir: Path, continuity: dict | None = None) -> list[str]:
             f"{current_struck_id}: struck without a `- **Struck:** <reason>` "
             "line — every strike must say why (resolution evidence)."
         )
+
+    # ONE number sequence per loop, shared across sources: ADI-CMP-08 and
+    # ADI-JRN-08 are the same slot, not two actions.
+    seen_nums: dict[int, str] = {}
+    for aid in register_ids:
+        m = ID_NUM_RE.match(aid)
+        if not m:
+            continue
+        n = int(m.group(1))
+        if n in seen_nums and seen_nums[n] != aid:
+            errors.append(
+                f"{aid}: numeric part {n} already used by {seen_nums[n]} — the "
+                "number sequence is per-loop, shared across all sources."
+            )
+        else:
+            seen_nums[n] = aid
 
     if not register_ids:
         # An EMPTY register is valid only when context.json explicitly declares
@@ -183,7 +225,7 @@ def validate(set_dir: Path, continuity: dict | None = None) -> list[str]:
             bid = p.stem
             brief_ids.add(bid)
             if not ID_RE.match(bid):
-                errors.append(f"actions/{p.name}: id does not match ^ADI-\\d{{2,}}$")
+                errors.append(f"actions/{p.name}: id does not match {ID_RE.pattern}")
             if not STAMP_RE.match(_first_nonempty_line(p.read_text())):
                 errors.append(
                     f"actions/{p.name}: first non-empty line is not a `> generated:` stamp"
@@ -235,7 +277,7 @@ def main(argv: list[str]) -> int:
             sys.stderr.write("--continuity requires a path\n")
             return 2
         cpath = Path(args[i + 1])
-        del args[i:i + 2]
+        del args[i : i + 2]
         if cpath.is_file():
             try:
                 continuity = json.loads(cpath.read_text())

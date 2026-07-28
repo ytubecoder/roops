@@ -120,23 +120,29 @@ These are embedded in `prompt.md` AND enforced by the permission axes (§7).
 
 8. Finding identity (what a finding IS + finding_id derivation)
 A **finding** is one still-open action in this run's set. `finding_id` =
-`ads-x:<ADX-NN>`. The `ADX-NN` id is the durable per-exception identity:
-stable across runs for the same real-world condition (carried forward from the
-prior set), never reused after a strike, embedding NO volatile data. A struck
-(resolved) action emits no finding. **Dismissal ≠ strike:** dismissing a finding
-is a runner-side nag-stop; it does NOT strike the action. Striking happens only
-when a later run observes the condition resolved (or Generalissimo's decision log says so),
-so the loop keeps re-emitting `ads-x:ADX-NN` every run while it is still
-true. (Documented in prompt.md `## Finding identity`.)
+`ads-x:<action id verbatim>` — two-part `ADX-<SRC>-NN` for actions minted
+after 2026-07-28, legacy `ADX-NN` for carried ones. The action id is the durable
+per-exception identity: stable across runs for the same real-world condition
+(carried forward from the prior set), never reused after a strike, embedding NO
+volatile data. A struck (resolved) action emits no finding. **Dismissal ≠
+strike:** dismissing a finding is a runner-side nag-stop; it does NOT strike the
+action. Striking happens only when a later run observes the condition resolved
+(or Generalissimo's decision log says so), so the loop keeps re-emitting the
+finding under its id every run while it is still true. (Documented in prompt.md
+`## Finding identity`.)
 
 **Register + brief conventions (ads-local — state them here so nobody closes an
 action from the wrong side).** Required by the warmstart's "Action register +
 brief contract"; enforced by `bin/validate_action_set.py`:
-- **ID pattern `^ADX-\d{2,}$`** — two-or-more digits, because a daily loop
-  outlives 99 actions. Sibling loops use the same shape with their own prefix
-  (`ADI-` intl, `ADR-` reddit, `ADX-` x, `ADP-` program).
-- **IDs are NEVER reused after a strike.** A new id is always (max id ever seen)
-  + 1; the first run with no prior set starts at `ADX-01`.
+- **ID pattern `^ADX-(?:(?:EV|CMP|JRN|BUD|INP)-)?\d{2,}$`** — new ids are
+  two-part `ADX-<SRC>-NN` (source = provenance designator; the number is ONE
+  per-loop sequence shared across sources); single-part legacy ids remain
+  valid only while carried forward. Sibling loops use the same shape with
+  their own prefix (`ADG-` google, `ADI-` intl, `ADR-` reddit, `ADP-` program — ADP's allowed sources are `PRG|BUD|INP`).
+- **IDs are NEVER reused after a strike.** A new id's number is always (max
+  number ever seen) + 1, with the minter's chosen source designator; a
+  genuinely-first run starts at `ADX-<SRC>-01`. Bare single-part ids are never
+  minted anew.
 - **Register syntax deliberately mirrors the DMP register shape** (`## <ID> —
   <title>` headings, the same strike convention) so the GC reader can borrow
   `dmp_actions`'s regexes instead of inventing a dialect. These conventions are

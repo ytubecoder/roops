@@ -54,14 +54,35 @@ and set status `alert`.
 
 ## Building the action set (the required final artifact)
 
-Each exception becomes one **action** with a stable id `ADR-NN` (two-or-more
-digits). Continuity rules — use the `## Prior action set` block in the digest:
+Each exception becomes one **action** with a stable two-part id
+`ADR-<SRC>-NN`. `<SRC>` is the PROVENANCE — the kind of evidence that raised
+the exception (pick from what raised it, not where it might be fixed):
 
-- A still-true condition from the prior set **keeps its same id**.
+- `EV`  — an evaluator verdict (kill/watch) is the trigger.
+- `CMP` — campaign/delivery evaluation: CTR/spend movement, starved or zeroed
+  legs, serving-state anomalies on in-scope campaigns.
+- `JRN` — journal/guard reconciliation: applied/rejected/errored orders,
+  ledger anomalies.
+- `BUD` — budget/caps: headroom, committed-vs-actual, guard refusals.
+- `INP` — input freshness/data integrity: missing or stale digest inputs.
+
+`NN` continues ONE per-loop number sequence shared across all sources
+(two-or-more digits; ids are NEVER reused). Continuity rules — use the
+`## Prior action set` block in the digest:
+
+- A still-true condition from the prior set **keeps its same id verbatim** —
+  including prior legacy single-part ids (`ADR-NN`); do NOT rename them to the
+  two-part shape (renaming breaks finding identity).
 - A prior condition the digest shows is **resolved** → include it with
   `"status":"struck"` and a `struck_reason` (ids are NEVER reused after a strike).
-- A genuinely new exception → next id = (max id ever seen) + 1. First run with
-  no prior set starts at **ADR-01**.
+- A genuinely new exception → take the digest's stated **`next NEW action id`**
+  number, substitute your source designator (e.g. `ADR-CMP-08`), then increment
+  from there. That value comes from the id high-water mark across ALL history —
+  every persisted set AND every prior run's emitted findings — so ids stay
+  unique even when an earlier run emitted findings but failed to persist its
+  set. NEVER compute `max+1` from the prior set alone, and NEVER start at 01
+  merely because no prior set was found; the digest says when a run is
+  genuinely the first.
 
 For each action, provide: `id`, `title`, `status` (`open`/`struck`), `outcome`
 (one line), `exception` (the observation WITH numbers and their source), the
@@ -114,7 +135,7 @@ freshness.x_cache_age: n/a
 scope: r-boost campaigns 2544048968977849491
 
 [action]
-id: ADR-01
+id: ADR-CMP-08
 title: one line
 status: open
 outcome: one line
@@ -145,7 +166,7 @@ is fine). `placement` grammar: `<leg> campaign=<id> [ad_group=<id>]
 from the digest. If a run genuinely has zero actions, send just the header
 lines plus `empty_set: yes`.
 
-The script writes `action-set/ACTIONS.md`, `action-set/actions/ADR-NN.md`, and
+The script writes `action-set/ACTIONS.md`, `action-set/actions/<id>.md`, and
 `action-set/context.json` into this run's dir, then validates them. **If it
 exits non-zero, fix the payload and re-run it; if it still fails, set your
 contract `status` to `alert` with `status_reason=action_set_invalid` and say so.** A
@@ -180,7 +201,7 @@ braces — write it exactly as the schema requires.
   `action_set.written` (`1` when this run persisted a valid set, `0` when it
   did not — every run, so the set-missing condition is queryable in sqlite).
 - `findings`: one finding per **OPEN** action (skip struck ones), with
-  `finding_id` = `ads-reddit:ADR-NN`, `title` = the action title, `severity`,
+  `finding_id` = `ads-reddit:ADR-CMP-08`, `title` = the action title, `severity`,
   `detail` = the exception in one line. Severity rule:
   - `warn` normally — INCLUDING any data-integrity caveat (no callable verdict,
     broken CTR baseline, unverifiable ledger): a set must never surface green
@@ -202,9 +223,10 @@ braces — write it exactly as the schema requires.
 ## Finding identity
 
 A **finding** is one still-open action in this run's set. `finding_id` =
-`ads-reddit:<ADR-NN>` — the durable per-action id, stable across runs for the
-same real-world exception, carried forward from the prior set per the continuity
-rules above. It embeds NO volatile data (no timestamps, run ids, counts, or line
+`ads-reddit:<action id verbatim>` — two-part `ADR-<SRC>-NN` for actions minted
+after 2026-07-28, legacy `ADR-NN` for carried ones — the durable per-action id,
+stable across runs for the same real-world exception, carried forward from the
+prior set per the continuity rules above. It embeds NO volatile data (no timestamps, run ids, counts, or line
 numbers). A struck (resolved) action emits NO finding. **Dismissing a finding
 (runner-side nag-stop) does NOT strike the action** — striking happens only when
 a later run observes the condition resolved (or a human decision log says so);

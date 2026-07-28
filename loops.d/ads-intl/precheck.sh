@@ -218,8 +218,8 @@ print()
 #       burned those ids — the next run must NOT hand them to new actions.
 # Conflating them is what let run aba304 restart at ADI-01 and silently reuse
 # four live ids.
-ID_RE = re.compile(r"^ADI-(\d{2,})$")
-HEAD_RE = re.compile(r"^##\s+(?:~~)?\s*(ADI-\d+)\b")
+ID_RE = re.compile(r"^ADI-(?:[A-Z]+-)?(\d{2,})$")
+HEAD_RE = re.compile(r"^##\s+(?:~~)?\s*(ADI-(?:[A-Z]+-)?\d+)\b")
 LOOP_PREFIX = "ads-intl:"
 
 # Defense in depth: screen candidate sets with the shipped validator, so a
@@ -303,7 +303,7 @@ if LOOPS_ROOT:
 candidates.sort(key=lambda t: (t[0], t[1]))
 prior = candidates[-1] if candidates else None
 high_water = state["high_water"]
-next_id = f"ADI-{high_water + 1:02d}"
+next_id = f"ADI-<SRC>-{high_water + 1:02d}"
 
 print("## Prior action set (keep ids of still-open actions; strike resolved)")
 if prior:
@@ -332,6 +332,9 @@ for run_name, why in skipped:
 if ghost_ids:
     print(f"- BURNED (emitted as findings, set never persisted): {sorted(ghost_ids)}")
 print(f"- id high-water mark: {high_water}  →  next NEW action id = {next_id}")
+print("- replace <SRC> with the source designator that raised the exception:")
+print("  EV evaluator · CMP campaign/delivery · JRN journal/guard · BUD budget/caps · INP input gap.")
+print("- prior legacy single-part ids (ADI-NN) are carried VERBATIM — never renamed.")
 print("- ids are NEVER reused, not even after a strike.")
 print()
 

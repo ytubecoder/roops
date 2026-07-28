@@ -12,8 +12,10 @@ so a human can re-check any set:
 Checks (stdlib only, per the harness ground rules):
   1. context.json exists, parses, and carries the required keys.
   2. ACTIONS.md exists and its first non-empty line is a `> generated:` stamp.
-  3. Every register heading id matches ^ADG-\\d{2,}$ (two-or-more digits;
-     daily loops outlive 99), with no duplicate ids.
+  3. Every register heading id matches the two-part grammar
+     ^ADG-(?:(?:EV|CMP|JRN|BUD|INP)-)?\\d{2,}$ (legacy single-part ids stay
+     valid only while carried forward), with no duplicate ids and one shared
+     number sequence across sources.
   4. Register <-> briefs consistency: every OPEN (non-struck) register id has a
      brief at actions/<ID>.md, and every brief file id appears in the register.
   5. Every brief's first non-empty line is a `> generated:` stamp.

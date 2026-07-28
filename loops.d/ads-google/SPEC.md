@@ -127,9 +127,12 @@ true. (Documented in prompt.md `## Finding identity`.)
 **Register + brief conventions (ads-local — state them here so nobody closes an
 action from the wrong side).** Required by the warmstart's "Action register +
 brief contract"; enforced by `bin/validate_action_set.py`:
-- **ID pattern `^ADG-\d{2,}$`** — two-or-more digits, because a daily loop
-  outlives 99 actions. Sibling loops use the same shape with their own prefix
-  (`ADI-` intl, `ADR-` reddit, `ADX-` x, `ADP-` program).
+- **ID pattern `^ADG-(?:(?:EV|CMP|JRN|BUD|INP)-)?\d{2,}$`** — new ids are
+  two-part `ADG-<SRC>-NN` (source = provenance designator; the number is ONE
+  per-loop sequence shared across sources); single-part legacy ids remain
+  valid only while carried forward. Sibling loops use the same shape with
+  their own prefix (`ADI-` intl, `ADR-` reddit, `ADX-` x, `ADP-` program —
+  ADP's allowed sources are `PRG|BUD|INP`).
 - **IDs are NEVER reused after a strike.** A new id is always (max id ever seen)
   + 1; the first run with no prior set starts at `ADG-01`.
 - **Register syntax deliberately mirrors the DMP register shape** (`## <ID> —

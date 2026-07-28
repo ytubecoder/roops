@@ -76,7 +76,7 @@ class TestGrammar(unittest.TestCase):
             checked += 1
             self.assertEqual(v.PREFIX, prefix)
             self.assertEqual(set(v.ALLOWED_SOURCES), sources)
-            src = sorted(sources)[0]
+            src = min(sources)
             for good in (f"{prefix}-03", f"{prefix}-{src}-08"):
                 self.assertTrue(v.ID_RE.match(good), (loop, good))
             self.assertFalse(v.ID_RE.match(f"{prefix}-ZZ-08"), loop)
@@ -155,7 +155,8 @@ class TestEmit(unittest.TestCase):
             ],
         }
         with tempfile.TemporaryDirectory() as tmp:
-            import io, os
+            import io
+            import os
 
             os.environ["GENERATED_TS"] = "2026-07-28T00:00:00Z"
             old_stdin = sys.stdin

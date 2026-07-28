@@ -156,9 +156,12 @@ def validate(set_dir: Path, continuity: dict | None = None) -> list[str]:
     for line in reg_text.splitlines():
         m = HEADING_RE.match(line)
         if not m:
-            if current_struck_id and line.strip().startswith("- **Struck:**"):
-                if line.strip()[len("- **Struck:**") :].strip():
-                    struck_reason_seen = True
+            if (
+                current_struck_id
+                and line.strip().startswith("- **Struck:**")
+                and line.strip()[len("- **Struck:**") :].strip()
+            ):
+                struck_reason_seen = True
             continue
         if current_struck_id and not struck_reason_seen:
             errors.append(

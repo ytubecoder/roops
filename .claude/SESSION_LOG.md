@@ -1,5 +1,18 @@
 # Session Log
 
+## 2026-07-30 — Roops rebrand: brand system, public site, full UI concept (separate repo)
+
+### Summary
+- Explored and shipped the "Roops" rebrand candidate (ループス — "loops" as the Japanese loanword, re-borrowed): design system (washi/sumi, one vermillion accent, ensō mark, hanko stamps), a public landing page, and a full UI concept for a re-skinned dashboard — all in a NEW repo `~/projects/roops` (github.com/ytubecoder/roops, live on Pages). This repo untouched; detailed log in that repo's `.claude/SESSION_LOG.md`.
+- UI concepts established there that imply future harness work (none started, each an explicit INTERFACES amendment): timestamped `metrics` table in the existing sqlite for graphable loop-reported numbers; pancake/retroactive-apply + stale-out semantics on finding identity; read-only SSE tail of a running round ("engawa" view); per-loop enable/disable surfaced in UI (maps to install/uninstall).
+
+### Lessons Learned
+- **User correction (copy-level but load-bearing):** never present the harness as flatly "report-only / never acts" — rounds are read-only, but findings are actions-in-waiting and approval (distinct from ack, per OPEN_THREADS) turns them into orders on a separate audited path. Presenting the absolute version reads as wrong to the owner.
+
+### Decisions
+- Rebrand stays a candidate: site lives in its own public repo precisely so nothing here renames; if adopted, the rename starts with a `loopctl` alias.
+- Public site uses genericized loop names — internal `ads-*` names kept off it deliberately.
+
 ## 2026-07-28 — Ads loops: emit-path, contract-conformance and continuity fixes; console surface verified live
 
 ### Summary

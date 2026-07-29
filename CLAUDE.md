@@ -1,6 +1,10 @@
 # Loops — recurring automation harness
 
-Custom thin harness for scheduled agent "loops" (recurring maintenance/monitoring jobs across ~/projects). **Status: BUILT + live-verified 2026-07-22** (real launchd firing, codex AND claude, findings memory/dispositions, enforcement denial, full dashboard matrix; 593 hermetic tests via `bash tests/run-tests.sh` — 285 python + 308 shell, measured 2026-07-28).
+Custom thin harness for scheduled agent "loops" (recurring maintenance/monitoring jobs across ~/projects). **Status: BUILT + live-verified 2026-07-22** (real launchd firing, codex AND claude, findings memory/dispositions, enforcement denial, full dashboard matrix; 615 hermetic tests via `bash tests/run-tests.sh` — 307 python + 308 shell, measured 2026-07-30).
+
+**Fleet state (2026-07-30):** `loop-sensei` (the fleet examiner — diagnoses failed loops, proposes fixes as findings) is the FIRST and only loop installed to launchd (`daily:20:00` local). Everything else is supervised-only. Install state is machine-local: `launchd/*.plist` is gitignored, so a fresh clone shows installed=False for everything until reinstalled.
+
+**Naming new loops:** follow the roops Japanese theme (rebrand in flight by another agent — https://ytubecoder.github.io/roops/): loop-sensei, not loop-doctor.
 
 ## Start here (cold start)
 - **Building a LOOP:** `docs/LOOP_AUTHORING.md` + `bin/loopctl new` — run the intake interview first (11 questions, in the doc); fill SPEC.md; `loopctl validate` gates it.
@@ -8,6 +12,7 @@ Custom thin harness for scheduled agent "loops" (recurring maintenance/monitorin
 - **Choosing/specifying loops:** work from `docs/LOOPS_WARMSTART.md`.
 - **Ads loops (five per-network checks + the `/ads/actions` console surface):** `docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md` — current state, the three open issues with their re-check commands, and the acceptance bar (a manual "run everything" trigger is phase 1; launchd scheduling is phase 2, explicitly not before).
 - **Open threads / unfinished design work:** `docs/OPEN_THREADS_WARMSTART.md` — main open thread is the approve→action bridge (ack ≠ approval; DMP id-space gap; Google Ads OAuth blocker). Check it before assuming a thread is settled; delete sections there as they resolve.
+- **Roops rebrand (candidate, NOT applied):** brand + UI-concept site at https://ytubecoder.github.io/roops/ — repo `~/projects/roops` (its CLAUDE.md holds the design system). Harness/CLI names unchanged. The UI concepts imply harness follow-ups (timestamped metrics table in sqlite, pancake/stale finding semantics, read-only live-run tail) — each would be an explicit INTERFACES amendment; none started.
 - Findings/disposition flow (the human arrow): `loopctl findings <loop>` → `ack|dismiss --note|snooze --until|reopen`. Dismissed/snoozed findings are suppressed by the RUNNER (latest.json + dashboard); the engine still emits them; audit copy stays in `state/runs/<id>/contract.json`.
 
 ## Non-negotiables (from the plan — full rationale in docs/HARNESS_PLAN.md)

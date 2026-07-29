@@ -4,6 +4,15 @@
 
 ## For Review
 
+### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)
+Priority: medium | Status: for-review
+
+### B-05: Dashboard failure surfacing: error_detail on page, agent-handoff block, inline report drawer
+Priority: medium | Status: for-review
+
+### B-06: loop-sensei: fleet examiner loop — built, verified (real-engine planted-failure runs), installed to launchd
+Priority: medium | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1: reliable runs + manual run-everything trigger + clean schedules screen

@@ -562,6 +562,31 @@ class TestValidateDangerousCombos(LoopsRootTestCase):
         errors = json.loads(r.stdout)["bad6c"]["errors"]
         self.assertTrue(any("schedule" in e for e in errors), errors)
 
+    def test_validate_fails_on_non_executable_render_sh(self):
+        # Amendment 2: present-but-not-executable render.sh is always a mistake.
+        loop_dir = self.fixture.minimal_valid_loop("pageloop")
+        self.fixture.write_spec("pageloop", "filled\n" * 11)
+        render = os.path.join(loop_dir, "render.sh")
+        with open(render, "w") as f:
+            f.write("#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(render, 0o644)  # present, NOT executable
+        r = self._validate("pageloop")
+        self.assertEqual(r.returncode, 1)
+        errors = json.loads(r.stdout)["pageloop"]["errors"]
+        self.assertIn("render.sh present but not executable", errors)
+
+    def test_validate_passes_with_executable_render_sh(self):
+        loop_dir = self.fixture.minimal_valid_loop("pageloop2")
+        self.fixture.write_spec("pageloop2", "filled\n" * 11)
+        render = os.path.join(loop_dir, "render.sh")
+        with open(render, "w") as f:
+            f.write("#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(render, 0o755)
+        r = self._validate("pageloop2")
+        self.assertEqual(r.returncode, 0)
+        errors = json.loads(r.stdout)["pageloop2"]["errors"]
+        self.assertEqual(errors, [])
+
 
 # ---------------------------------------------------------------------------
 # loopctl validate — Finding identity / SPEC checks in isolation

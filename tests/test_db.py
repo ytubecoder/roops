@@ -23,6 +23,7 @@ spec.loader.exec_module(db)
 def run_cli(args, **kwargs):
     return subprocess.run(
         [sys.executable, str(BIN)] + args,
+        check=False,
         capture_output=True,
         text=True,
         **kwargs,

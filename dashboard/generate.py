@@ -18,7 +18,6 @@ those files exist. Callers (and tests) may inject fake parsers via generate()'s 
 """
 
 import argparse
-import glob
 import html as html_lib
 import importlib.util
 import json
@@ -698,7 +697,7 @@ def _render_panel_table_or_list(panel, metric_row):
     if panel.get("type") == "table" and data and isinstance(data[0], dict):
         cols = []
         for row in data:
-            for k in row.keys():
+            for k in row:
                 if k not in cols:
                     cols.append(k)
         thead = "".join(f"<th>{e(c)}</th>" for c in cols)
@@ -1007,7 +1006,7 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
     try:
         sched = schedule_parse(schedule_spec)
         expected_interval_s = sched.get("expected_interval_s", 0)
-    except Exception:
+    except Exception:  # noqa: BLE001 — §10: a bad schedule must degrade, never crash the page
         expected_interval_s = 0
 
     died = False

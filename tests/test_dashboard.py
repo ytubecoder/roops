@@ -267,7 +267,7 @@ class PureFunctionTests(unittest.TestCase):
         self.assertIsNone(marker)
 
     def test_skipped_precheck_is_amber(self):
-        color, marker = generate.compute_light("skipped-precheck", "ok")
+        color, _marker = generate.compute_light("skipped-precheck", "ok")
         self.assertEqual(color, "amber")
 
     def test_skipped_overlap_is_amber_even_if_effective_status_would_be_alert(self):
@@ -282,11 +282,11 @@ class PureFunctionTests(unittest.TestCase):
         self.assertIsNone(marker)
 
     def test_engine_failed_is_red(self):
-        color, marker = generate.compute_light("engine-failed", None)
+        color, _marker = generate.compute_light("engine-failed", None)
         self.assertEqual(color, "red")
 
     def test_engine_timeout_is_red(self):
-        color, marker = generate.compute_light("engine-timeout", None)
+        color, _marker = generate.compute_light("engine-timeout", None)
         self.assertEqual(color, "red")
 
     def test_auth_failed_is_red_with_harness_marker(self):
@@ -312,7 +312,7 @@ class PureFunctionTests(unittest.TestCase):
     def test_effective_status_wins_over_loop_status(self):
         # effective_status is what colours the light; a completed run with loop_status=alert
         # but effective_status=ok (all findings suppressed) must render green.
-        color, marker = generate.compute_light("completed", "ok")
+        color, _marker = generate.compute_light("completed", "ok")
         self.assertEqual(color, "green")
 
     def test_stale_true_when_overdue_past_1_5x(self):

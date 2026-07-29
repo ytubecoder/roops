@@ -150,10 +150,9 @@ def _parse_value(rest: str):
         # whitespace is the value; whitespace must then be followed
         # (after more whitespace) by a comment '#' or end of line.
         m = re.match(r"^(\S*)(\s*)(.*)$", rest)
-        value, ws, remainder = m.group(1), m.group(2), m.group(3)
-        if remainder:
-            if not remainder.lstrip().startswith("#"):
-                raise _LineError("bare value must not contain spaces")
+        value, _ws, remainder = m.group(1), m.group(2), m.group(3)
+        if remainder and not remainder.lstrip().startswith("#"):
+            raise _LineError("bare value must not contain spaces")
         return value
 
 
@@ -260,17 +259,19 @@ def parse(path: str):
     if (
         conf.get("perm_local_exec") == "allowlist"
         or conf.get("perm_remote_mutation") == "allowlist"
-    ):
-        if not conf.get("exec_allowlist"):
-            errors.append(
-                "exec_allowlist is required when perm_local_exec=allowlist or perm_remote_mutation=allowlist"
-            )
+    ) and not conf.get("exec_allowlist"):
+        errors.append(
+            "exec_allowlist is required when perm_local_exec=allowlist or perm_remote_mutation=allowlist"
+        )
 
-    if conf.get("perm_remote_mutation") and conf.get("perm_remote_mutation") != "none":
-        if not conf.get("remote_mutation_justification"):
-            errors.append(
-                "remote_mutation_justification is required when perm_remote_mutation != none"
-            )
+    if (
+        conf.get("perm_remote_mutation")
+        and conf.get("perm_remote_mutation") != "none"
+        and not conf.get("remote_mutation_justification")
+    ):
+        errors.append(
+            "remote_mutation_justification is required when perm_remote_mutation != none"
+        )
 
     return conf, errors
 
@@ -366,11 +367,11 @@ def main(argv=None) -> int:
 
     if args.verb == "get":
         if args.key not in FIELDS:
-            print("", end="")
+            print(end="")
             return 1
         conf, errors = parse(args.file)
         if args.key not in conf:
-            print("", end="")
+            print(end="")
             return 1
         value = conf[args.key]
         if isinstance(value, list):
@@ -378,7 +379,7 @@ def main(argv=None) -> int:
         elif isinstance(value, bool):
             print("true" if value else "false")
         elif value is None:
-            print("")
+            print()
         else:
             print(value)
         return 0

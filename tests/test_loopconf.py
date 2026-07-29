@@ -2,10 +2,10 @@
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
-import shutil
 import unittest
 from pathlib import Path
 
@@ -55,7 +55,7 @@ class TestLoopConfParsing(unittest.TestCase):
     def test_comments_and_blank_lines_ignored(self):
         content = MINIMAL_VALID + "\n# a comment\n\n   # indented comment\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertEqual(errors, [])
 
     def test_inline_comment_after_whitespace(self):
@@ -90,19 +90,19 @@ class TestLoopConfParsing(unittest.TestCase):
         # Bare (unquoted) values may not contain spaces per grammar.
         content = MINIMAL_VALID + "notes=hello world unquoted\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(errors)
 
     def test_unknown_key_is_error(self):
         content = MINIMAL_VALID + "bogus_key=1\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("bogus_key" in e for e in errors))
 
     def test_missing_required_key_is_error(self):
         content = "description=x\ntype=agent\nengine=codex\nschedule=manual\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("name" in e for e in errors))
 
     def test_never_sourced_no_shell_expansion(self):
@@ -136,31 +136,31 @@ class TestLoopConfParsing(unittest.TestCase):
     def test_name_regex_enforced(self):
         content = MINIMAL_VALID.replace("name=hello-loop", "name=Bad_Name!")
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("name" in e for e in errors))
 
     def test_type_enum_enforced(self):
         content = MINIMAL_VALID.replace("type=agent", "type=bogus")
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("type" in e for e in errors))
 
     def test_engine_enum_enforced(self):
         content = MINIMAL_VALID.replace("engine=codex", "engine=bogus")
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("engine" in e for e in errors))
 
     def test_timeout_s_range_low(self):
         content = MINIMAL_VALID + "timeout_s=10\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("timeout_s" in e for e in errors))
 
     def test_timeout_s_range_high(self):
         content = MINIMAL_VALID + "timeout_s=99999\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("timeout_s" in e for e in errors))
 
     def test_timeout_s_in_range_ok(self):
@@ -173,13 +173,13 @@ class TestLoopConfParsing(unittest.TestCase):
     def test_retry_transient_range(self):
         content = MINIMAL_VALID + "retry_transient=5\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("retry_transient" in e for e in errors))
 
     def test_perm_fs_write_enum(self):
         content = MINIMAL_VALID + "perm_fs_write=bogus\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("perm_fs_write" in e for e in errors))
 
     def test_enabled_bool_parses(self):
@@ -192,13 +192,13 @@ class TestLoopConfParsing(unittest.TestCase):
     def test_enabled_bad_value_is_error(self):
         content = MINIMAL_VALID + "enabled=nope\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("enabled" in e for e in errors))
 
     def test_key_regex_rejects_uppercase(self):
         content = MINIMAL_VALID + "BADKEY=1\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(errors)
 
     def test_credential_env_comma_separated(self):
@@ -211,7 +211,7 @@ class TestLoopConfParsing(unittest.TestCase):
     def test_exec_allowlist_required_when_perm_local_exec_allowlist(self):
         content = MINIMAL_VALID + "perm_local_exec=allowlist\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("exec_allowlist" in e for e in errors))
 
     def test_exec_allowlist_present_ok(self):
@@ -231,13 +231,13 @@ class TestLoopConfParsing(unittest.TestCase):
             + 'remote_mutation_justification="needed for X"\n'
         )
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("exec_allowlist" in e for e in errors))
 
     def test_remote_mutation_justification_required(self):
         content = MINIMAL_VALID + "perm_remote_mutation=allowlist\n"
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertTrue(any("remote_mutation_justification" in e for e in errors))
 
     def test_remote_mutation_justification_present_ok(self):
@@ -248,11 +248,11 @@ class TestLoopConfParsing(unittest.TestCase):
             + 'exec_allowlist="gh pr list"\n'
         )
         path = self.write(content)
-        conf, errors = loopconf.parse(path)
+        _conf, errors = loopconf.parse(path)
         self.assertEqual(errors, [])
 
     def test_nonexistent_file_returns_error(self):
-        conf, errors = loopconf.parse(str(Path(self.tmp) / "missing.conf"))
+        _conf, errors = loopconf.parse(str(Path(self.tmp) / "missing.conf"))
         self.assertTrue(errors)
 
     def test_omitted_workdir_defaults_to_loops_root_env(self):
@@ -326,6 +326,7 @@ class TestLoopConfCLI(unittest.TestCase):
             [sys.executable, str(BIN)] + args,
             capture_output=True,
             text=True,
+            check=False,
         )
 
     def test_parse_json_exit_0(self):
@@ -374,6 +375,7 @@ class TestLoopConfCLI(unittest.TestCase):
             capture_output=True,
             text=True,
             env=env,
+            check=False,
         )
         self.assertEqual(proc.returncode, 0)
         self.assertNotEqual(proc.stdout.strip(), "$LOOPS_ROOT")

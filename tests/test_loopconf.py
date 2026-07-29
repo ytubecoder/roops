@@ -385,11 +385,10 @@ class TestLoopConfCLI(unittest.TestCase):
 class TestTags(unittest.TestCase):
     def _parse_with(self, tags_line):
         d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
         p = os.path.join(d, "loop.conf")
         with open(p, "w") as f:
-            f.write(
-                "name=t1\ndescription=x\ntype=agent\nengine=codex\nschedule=manual\n"
-            )
+            f.write(MINIMAL_VALID)
             if tags_line is not None:
                 f.write(tags_line + "\n")
         return loopconf.parse(p)

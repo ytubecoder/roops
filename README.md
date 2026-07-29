@@ -12,8 +12,8 @@
                  │  ═════════                                       │
    ⏰ 09:00 ─────▶│  precheck ─▶ engine ─▶ contract ─▶ findings      │─────┐
                  └──────────────────────────────────────────────────┘     │
-                            ▲                                             │
-                            │          it reports. it never acts.         ▼
+                            ▲       your script, then a model             │
+                            │       that can't act on its own             ▼
                             │                                    ┌─────────────────┐
                             └──── ack · dismiss · snooze ────────│   you decide    │
                                        · reopen                  └─────────────────┘
@@ -21,13 +21,13 @@
 
 > Scheduled agents that watch your machine and shut up when told.
 
-A thin harness for recurring agent jobs. You describe a job in plain markdown, `launchd` fires it on a schedule, a headless model runs it, and what comes back is a list of **findings** — not a diff, not a commit, not an API call.
+A thin harness for putting work you already do by hand onto a schedule. You describe the job in plain markdown, `launchd` fires it, a deterministic script of yours gathers the facts, a headless model interprets them, and what comes back is a **contract** — findings, metrics, and a report that land on a static dashboard.
 
-Every loop is report-only, and that's enforced at the engine's permission layer, not by asking the model nicely in a prompt.
+Capability is **per-loop and opt-in**. The default floor gives the model no filesystem write, no network, and no tools at all, so a loop you leave running unattended can't surprise you. Widening any axis is a config change with a written justification — never something the model can grant itself.
 
 Findings keep the same ID across runs, so the same problem is the same row tomorrow. When you dismiss one, the **runner** stops showing it — the model is never trusted to remember it dropped the subject.
 
-**Status: harness built and live-verified (2026-07-22).** Real launchd firing, both engines, findings memory and dispositions, enforcement denial, and the full dashboard state matrix have all been proven on this machine. Seven loops are defined; none are installed yet.
+**Status: harness built and live-verified (2026-07-22).** Real launchd firing, both engines, findings memory and dispositions, enforcement denial, and the full dashboard state matrix have all been proven on this machine. Seven loops are defined and every one of them sits at or near the report-only floor; none are installed yet.
 
 ## Install
 
@@ -66,26 +66,70 @@ Authoring guide: [`docs/LOOP_AUTHORING.md`](docs/LOOP_AUTHORING.md)
 | Step | What happens | Gate |
 |------|-------------|------|
 | **1. Fire** | `launchd` starts `bin/run-loop.sh <name>` on the loop's schedule. An fcntl lock means a slow run never overlaps its own next firing. | Loop `enabled` + not already running |
-| **2. Precheck** | `precheck.sh` bails cheaply when inputs are absent — no point paying for a model to discover a file is missing. | Exit 0 to proceed |
+| **2. Precheck** | `precheck.sh` — your own bash, run unsandboxed — gathers the facts and bails cheaply when inputs are absent. No point paying for a model to discover a file is missing. | Exit 0 to proceed |
 | **3. Inject** | Prior findings and run context are composed into the prompt, so the model knows what it already told you. | — |
-| **4. Run** | The engine runs headless under permission axes that deny writes. Report-only is a property of the sandbox, not the prompt. | Engine-level denial |
+| **4. Run** | The engine runs headless under the loop's four permission axes. Whatever the model can and can't do is a property of the sandbox, not the prompt. | Engine-level denial |
 | **5. Validate** | Output must satisfy the contract in `docs/INTERFACES.md`. Malformed output fails the run rather than silently reporting nothing. | Schema + finding-identity check |
 | **6. Promote** | Findings upsert by stable ID, dispositions apply, reports promote atomically, dashboard regenerates, old runs retire. | Suppression filter |
 
 **Stage change** = the runner's job. **Disposition change** = yours, via `loopctl`. The model never does either.
 
-## Report-Only, and Why It's Structural
+## What Can Actually Change Things
 
-The whole point is a job you can leave running unattended, which only works if it *cannot* surprise you.
+A loop has three lanes with very different power, and it's worth knowing which is which before you write one.
+
+| Lane | Sandboxed? | In practice |
+|---|---|---|
+| **`precheck.sh`** | **No.** Plain bash, `exec`'d directly by the runner under a timeout | Where network and file I/O belong. Trusted code *you* wrote, at full user privilege |
+| **The engine** | **Yes**, by four permission axes | Default floor `report_only / none / none / none`: codex gets `-s read-only`, claude gets `--tools ""` |
+| **Findings → you** | n/a | `ack` · `dismiss` · `snooze` · `reopen` via `loopctl`. The model never sets a disposition |
+
+So the invariant is not "loops don't change things." It's **deterministic code you wrote gets full power; the model gets a sandbox.** `loops.d/ads-google/precheck.sh` curls four HTTP endpoints on every run — that's the design, not a leak. What's contained is the part you didn't write line by line.
+
+### The four axes
+
+Set per loop in `loop.conf`; semantics in [`docs/INTERFACES.md`](docs/INTERFACES.md) §5.2.
+
+| Axis | Values | Default |
+|---|---|---|
+| `perm_fs_write` | `none` · `report_only` · `workdir` | `report_only` (its own run dir only) |
+| `perm_network` | `none` · `full` | `none` |
+| `perm_local_exec` | `none` · `allowlist` · `full` | `none` |
+| `perm_remote_mutation` | `none` · `allowlist` | `none` |
+
+A write-capable loop — one that fixes a bug, cleans up code, updates a database — is therefore a **config change, not a harness change**. `loopctl validate` hard-fails seven dangerous combinations rather than warning about them, so widening is deliberate and reviewed.
+
+Four things to know before you widen:
+
+- **`exec_allowlist` is intent, not a boundary.** A non-allowlisted `echo` still ran under a one-entry allowlist (probed 2026-07-28). Real containment is the write sandbox, the exposed tool set, and `perm_network=none`.
+- **`perm_fs_write=workdir` is spec'd and adapter-mapped but not live-verified** — no loop in the current fleet uses it.
+- **`credential_env` is reserved and not implemented**; `validate` hard-fails a non-empty value. A loop needing secrets reads them in the precheck, from the plist's `EnvironmentVariables`.
+- **`perm_remote_mutation != none` requires a written `remote_mutation_justification`** — the harness refuses to let you spend money or push anywhere anonymously.
+
+### What holds regardless of the axes
 
 | Layer | What it guarantees |
 |-------|-------------------|
-| **Permission axes** | The engine is launched without write capability. A model that decides to "just fix it" is denied by the sandbox. |
-| **Contract validation** | Output that doesn't match the schema fails the run. No half-parsed findings. |
-| **Stable finding IDs** | The same issue is the same row across runs — findings accumulate a history instead of re-arriving as new noise. |
-| **Runner-side suppression** | Dismissed and snoozed findings are filtered by the runner, before you see them. The model still emits them; an audit copy stays in `state/runs/<id>/contract.json`. |
+| **Contract validation** | Output that doesn't match the schema fails the run. No half-parsed findings, and no promotion — a failed run leaves the previous `latest.*` untouched. |
+| **Stable finding IDs** | The same issue is the same row across runs, accumulating a history instead of re-arriving as new noise. |
+| **Runner-side suppression** | Dismissed and snoozed findings are filtered by the runner before you see them. The model still emits them; an audit copy stays in `state/runs/<id>/contract.json`. |
 
-That last row is the one that matters most in practice. "Stop nagging me about this" is enforced by code, not by trusting a fresh session to honor a note in its prompt.
+That last row matters most in practice. "Stop nagging me about this" is enforced by code, not by trusting a fresh session to honor a note in its prompt.
+
+## What Lands on the Dashboard
+
+`dashboard/loops.html` is a single static self-contained file (inline CSS/JS, no network, opened as `file://`), rewritten via tmp-file + rename after every run. A loop feeds it through four channels:
+
+| Channel | Contract field | Rendered as |
+|---|---|---|
+| **Status + headline** | `status`, `headline` | Precedence-resolved light and one-line summary on the fleet row |
+| **Report** | `report_markdown` | Promoted to `reports/<name>/latest.md`, linked from the row |
+| **Metrics** | `metrics` | Panels declared in the loop's `dashboard.json` — `number` · `table` · `list` · `trend` (sparkline over N days) |
+| **Findings** | `findings` | Per-loop list with recurrence and disposition text — `3rd report · dismissed 2026-06-01 ("note")` |
+
+Undeclared metrics are **never hidden** — they render in a capped raw-fallback panel, so a loop can start emitting something new without a dashboard change. The page also carries fleet counts, a `needs_attention` roll-up, 7-day token spend, stale-loop and died-run detection, and a recent-runs table per loop.
+
+One gotcha worth internalizing before you write a loop that wants to show red: **a non-empty `findings` array discards the declared `status`** and the light becomes the max severity of the unsuppressed findings (§4.5). A run that must surface red emits zero findings.
 
 ## Commands
 
@@ -112,7 +156,7 @@ That last row is the one that matters most in practice. "Stop nagging me about t
 ./bin/loopctl reopen <finding-id>          # it's back
 ```
 
-`ack` means *stop nagging* — it does **not** mean *the recommendation was accepted*. Approval is a separate concept and deliberately isn't overloaded onto this verb.
+`ack` means *stop nagging* — it does **not** mean *the recommendation was accepted*. Approval is a separate concept and deliberately isn't overloaded onto this verb. Wiring an approved finding through to something that executes it is still an open design thread ([`docs/OPEN_THREADS_WARMSTART.md`](docs/OPEN_THREADS_WARMSTART.md) §1), so today the arrow stops at you.
 
 ## Engines
 

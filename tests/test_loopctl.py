@@ -96,12 +96,13 @@ def run_cli(args, env_overrides=None, cwd=None):
         text=True,
         env=env,
         cwd=cwd,
+        check=False,
     )
 
 
 def run_db(args):
     return subprocess.run(
-        [sys.executable, str(DB_PY)] + args, capture_output=True, text=True
+        [sys.executable, str(DB_PY)] + args, capture_output=True, text=True, check=False
     )
 
 
@@ -174,6 +175,7 @@ class LoopsRoot:
             [sys.executable, str(DB_PY), "init", "--root", self.root],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert run_cli_init.returncode == 0, run_cli_init.stderr
 
@@ -738,6 +740,7 @@ class TestRun(LoopsRootTestCase):
             capture_output=True,
             text=True,
             env=env,
+            check=False,
         )
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         with open(recorder) as f:

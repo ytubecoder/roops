@@ -80,7 +80,7 @@ def _dashboard_module():
 
 def _db_run_raw(args_list):
     return subprocess.run(
-        [sys.executable, _DB_BIN] + args_list, capture_output=True, text=True
+        [sys.executable, _DB_BIN] + args_list, capture_output=True, text=True, check=False
     )
 
 
@@ -192,7 +192,7 @@ def _launchctl(args_list):
     so tests can redirect to a recording stub and never touch the real
     launchd."""
     return subprocess.run(
-        [_launchctl_bin()] + args_list, capture_output=True, text=True
+        [_launchctl_bin()] + args_list, capture_output=True, text=True, check=False
     )
 
 
@@ -719,7 +719,7 @@ def cmd_run(args):
         return 1
     cmd = ["bash", runner, args.name, "--trigger", args.trigger, "--from", args.from_dir]
     env = {**os.environ, "LOOPS_ROOT": str(args.root)}
-    proc = subprocess.run(cmd, env=env)
+    proc = subprocess.run(cmd, env=env, check=False)
     return proc.returncode
 
 
@@ -1014,7 +1014,7 @@ def cmd_disposition(args, action):
     dash = _dashboard_module()
     try:
         dash.generate(root=root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
-    except Exception as e:  # dashboard regen is best-effort; the disposition itself succeeded
+    except Exception as e:  # noqa: BLE001 — dashboard regen is best-effort; disposition succeeded
         print(f"warning: dashboard regen failed: {e}", file=sys.stderr)
 
     print(f"{action} {args.loop} {args.finding_id}")

@@ -1267,12 +1267,14 @@ class TestLoopEvents(DbTestCase):
             args += ["--detail", detail]
         return run_cli(args)
 
-    def query_events(self, loop=None, limit=None):
+    def query_events(self, loop=None, limit=None, events=None):
         args = ["query", "loop-events", "--root", self.tmp]
         if loop is not None:
             args += ["--loop", loop]
         if limit is not None:
             args += ["--limit", str(limit)]
+        if events is not None:
+            args += ["--events", events]
         r = run_cli(args)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         return json.loads(r.stdout)
@@ -1330,6 +1332,37 @@ class TestLoopEvents(DbTestCase):
         out = self.query_events()
         loops = {row["loop_name"] for row in out}
         self.assertEqual(loops, {"l1", "l2"})
+
+    def test_events_filter_restricts_to_named_events(self):
+        self.record_event("l1", "created", "t")
+        self.record_event("l1", "paused", "t")
+        self.record_event("l1", "resumed", "t")
+        out = self.query_events(loop="l1", events="created,imported")
+        self.assertEqual([row["event"] for row in out], ["created"])
+
+    def test_events_filter_combines_with_loop_filter(self):
+        self.record_event("l1", "created", "t")
+        self.record_event("l2", "created", "t")
+        out = self.query_events(loop="l1", events="created,imported")
+        self.assertEqual([row["loop_name"] for row in out], ["l1"])
+
+    def test_events_filter_unknown_event_rejected(self):
+        r = run_cli(["query", "loop-events", "--root", self.tmp, "--events", "bogus"])
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_events_filter_no_window_loss_beyond_limit(self):
+        # Regression: a naive "scan the newest N rows for a matching event"
+        # loses the founding event once enough later events push it out of
+        # the window. The events filter must apply in SQL (WHERE event IN
+        # (...)) so limit=1 still returns the true most-recent match,
+        # regardless of how many non-matching events came after it.
+        self.record_event("l1", "created", "t")
+        for _ in range(12):
+            self.record_event("l1", "paused", "t")
+            self.record_event("l1", "resumed", "t")
+        out = self.query_events(loop="l1", events="created,imported", limit=1)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["event"], "created")
 
 
 if __name__ == "__main__":

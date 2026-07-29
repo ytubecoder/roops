@@ -1574,6 +1574,50 @@ class TestListStatus(LoopsRootTestCase):
         rows = json.loads(r.stdout)
         self.assertIsNone(rows[0]["provenance"])
 
+    def test_status_json_provenance_survives_beyond_ten_later_events(self):
+        # Regression: a loop paused/resumed 10+ times must not push its
+        # founding `created` event out of a naive "scan the newest 10 rows"
+        # window — provenance must still resolve it via a SQL-side events
+        # filter, not a client-side scan of a limited row set.
+        name = "provwin"
+        self.fixture.minimal_valid_loop(name)
+        r_created = run_db(
+            [
+                "record-event",
+                "--root",
+                self.root,
+                "--loop",
+                name,
+                "--event",
+                "created",
+                "--actor",
+                "claude/t",
+            ]
+        )
+        self.assertEqual(r_created.returncode, 0, msg=r_created.stderr)
+        for _ in range(12):
+            for ev in ("paused", "resumed"):
+                r_ev = run_db(
+                    [
+                        "record-event",
+                        "--root",
+                        self.root,
+                        "--loop",
+                        name,
+                        "--event",
+                        ev,
+                        "--actor",
+                        "t",
+                    ]
+                )
+                self.assertEqual(r_ev.returncode, 0, msg=r_ev.stderr)
+
+        r = run_cli(["status", name, "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)
+        self.assertEqual(rows[0]["provenance"]["event"], "created")
+        self.assertEqual(rows[0]["provenance"]["actor"], "claude/t")
+
 
 # ---------------------------------------------------------------------------
 # loopctl lifecycle events (Amendment 2) — --actor + _record_event call sites

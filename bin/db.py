@@ -847,10 +847,19 @@ def query_spend(conn, args):
 
 def query_loop_events(conn, args):
     sql = "SELECT * FROM loop_events"
+    clauses = []
     params = []
     if args.loop:
-        sql += " WHERE loop_name = ?"
+        clauses.append("loop_name = ?")
         params.append(args.loop)
+    events = getattr(args, "events", None)
+    if events:
+        names = [e.strip() for e in events.split(",") if e.strip()]
+        placeholders = ",".join("?" for _ in names)
+        clauses.append(f"event IN ({placeholders})")
+        params.extend(names)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY ts DESC, id DESC LIMIT ?"
     params.append(args.limit)
     return _rows_to_dicts(conn.execute(sql, params).fetchall())
@@ -872,6 +881,16 @@ def cmd_query(args) -> int:
     if fn is None:
         print(f"unknown query: {args.query_name}", file=sys.stderr)
         return 2
+    events = getattr(args, "events", None)
+    if events:
+        requested = [e.strip() for e in events.split(",") if e.strip()]
+        bad = [e for e in requested if e not in LOOP_EVENTS]
+        if bad:
+            print(
+                f"unknown event(s) {bad} (allowed: {', '.join(LOOP_EVENTS)})",
+                file=sys.stderr,
+            )
+            return 1
     conn = connect(args.root)
     try:
         init_db(conn)
@@ -976,6 +995,7 @@ def build_parser():
     query_p.add_argument("--limit", default=50, type=int)
     query_p.add_argument("--key", default=None)
     query_p.add_argument("--days", default=30, type=int)
+    query_p.add_argument("--events", default=None)
 
     return p
 

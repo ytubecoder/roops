@@ -240,8 +240,15 @@ db.py query <name> [args...]        # named read queries; JSON to stdout. Names:
                                     #   open-findings  --loop L
                                     #   heartbeats  --loop L --limit N
                                     #   spend       --days D              (per-loop token/cost sums)
-                                    #   loop-events [--loop L] [--limit N]  (Amendment 2 — 2026-07-30)
-                                    #     newest-first (ts DESC, id DESC); --loop omitted → all loops
+                                    #   loop-events [--loop L] [--limit N] [--events E1,E2]
+                                    #     (Amendment 2 — 2026-07-30) newest-first (ts DESC, id
+                                    #     DESC); --loop omitted → all loops; --events filters to a
+                                    #     comma-list of event names, applied in SQL (WHERE event IN
+                                    #     (...)) BEFORE the LIMIT — combine with --limit 1 to get
+                                    #     the single most-recent match without risk of it being
+                                    #     pushed out of a fixed-size window by later non-matching
+                                    #     events; each entry validated against the event enum above
+                                    #     (unknown → exit 1 stderr, consistent with record-event)
 ```
 The dashboard MAY use `db.py query` or read sqlite directly with its own SQL — the §3 schema is
 frozen either way.
@@ -667,11 +674,12 @@ itself. `validate` records no event, per the audit-trail semantics in §3.
 rows each gain `"tags": [...]` (from `loop.conf`'s `tags=`, `conf.get("tags") or []`). `list --tag T`
 filters rows to an exact match against a row's `tags` list (not a substring match — `--tag project`
 does not match a tag of `project:x`). `status --json` rows additionally gain `"provenance"`: the
-most recent `created` or `imported` event for the loop (`db.py query loop-events --loop L --limit
-10`, first row whose `event` is `created`/`imported`), shaped `{"event", "actor", "ts"}`, or `None`
-if no such event exists (e.g. loops that predate lifecycle-event recording, or ones scaffolded by
-hand). `status` (table form) is unchanged by this amendment — only its `--json` rows carry tags/
-provenance.
+most recent `created` or `imported` event for the loop (`db.py query loop-events --loop L --events
+created,imported --limit 1` — the events filter, not a client-side scan of a limited row set, so a
+loop's founding event is never lost behind a large number of later `paused`/`resumed`/etc. events),
+shaped `{"event", "actor", "ts"}`, or `None` if no such event exists (e.g. loops that predate
+lifecycle-event recording, or ones scaffolded by hand). `status` (table form) is unchanged by this
+amendment — only its `--json` rows carry tags/provenance.
 
 **`loopctl new` scaffolding** additionally seeds `loops.d/<name>/SPEC.md` from the intake template
 (`docs/LOOP_AUTHORING.md` carries the interview script). Template placeholders use the literal

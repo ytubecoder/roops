@@ -773,8 +773,10 @@ def cmd_status(args):
             if next_dt:
                 next_text = dash.format_relative(next_dt.strftime("%Y-%m-%dT%H:%M:%SZ"), now)
 
-        ev = _db_query(args.root, "loop-events", loop=name, limit=10)
-        prov = next((e for e in ev if e["event"] in ("created", "imported")), None)
+        ev = _db_query(
+            args.root, "loop-events", loop=name, events="created,imported", limit=1
+        )
+        prov = ev[0] if ev else None
         provenance = (
             {"event": prov["event"], "actor": prov["actor"], "ts": prov["ts"]}
             if prov

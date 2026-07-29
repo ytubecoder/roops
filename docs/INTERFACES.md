@@ -173,9 +173,25 @@ CREATE TABLE IF NOT EXISTS dispositions (
 );
 CREATE INDEX IF NOT EXISTS idx_disp_loop_finding ON dispositions(loop_name, finding_id, created_at DESC);
 
+-- Amendment 2: loop lifecycle event audit trail (additive, NOT a migration — schema_version stays 1)
+CREATE TABLE IF NOT EXISTS loop_events (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  loop_name TEXT NOT NULL,
+  event     TEXT NOT NULL,        -- created | imported | installed | uninstalled | paused | resumed
+  actor     TEXT NOT NULL,
+  ts        TEXT NOT NULL,
+  detail    TEXT                  -- optional JSON blob, opaque to the schema
+);
+CREATE INDEX IF NOT EXISTS idx_events_loop_ts ON loop_events(loop_name, ts DESC);
+
 CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT);
 -- schema_meta('schema_version') = '1'
 ```
+
+**Loop event semantics (Amendment 2 — 2026-07-30):** `loop_events` is an append-only lifecycle
+audit trail, separate from `runs`/findings. `validate` records no event (audit spam); events are
+kept forever (no retention pruning); orphaned events for a since-deleted loop are historical record
+and are never cleaned up.
 
 **Findings semantics (Amendment 1):** on each valid run the runner upserts the emitted findings —
 increment `times_seen`, update `last_seen_*` — and marks previously-open findings for that loop
@@ -213,6 +229,10 @@ db.py dispose         --root R --loop L --finding-id ID --action ack|dismiss|sno
                       [--note X] [--until TS]
                                     # appends a disposition row; dismiss REQUIRES --note;
                                     # snooze REQUIRES --until; unknown (loop,finding) → exit 1
+db.py record-event    --root R --loop L --event E --actor A [--detail JSON]
+                                    # (Amendment 2 — 2026-07-30) appends a loop_events row;
+                                    # E validated against the enum above; --detail, if given,
+                                    # must be valid JSON; unknown event or invalid JSON → exit 1
 db.py query <name> [args...]        # named read queries; JSON to stdout. Names:
                                     #   loops-summary                     (latest run per loop)
                                     #   last-runs   --loop L --limit N
@@ -220,6 +240,8 @@ db.py query <name> [args...]        # named read queries; JSON to stdout. Names:
                                     #   open-findings  --loop L
                                     #   heartbeats  --loop L --limit N
                                     #   spend       --days D              (per-loop token/cost sums)
+                                    #   loop-events [--loop L] [--limit N]  (Amendment 2 — 2026-07-30)
+                                    #     newest-first (ts DESC, id DESC); --loop omitted → all loops
 ```
 The dashboard MAY use `db.py query` or read sqlite directly with its own SQL — the §3 schema is
 frozen either way.

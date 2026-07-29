@@ -1248,5 +1248,87 @@ class TestQuery(DbTestCase):
         self.assertAlmostEqual(loopA["cost_usd"], 0.01)
 
 
+class TestLoopEvents(DbTestCase):
+    def record_event(self, loop, event, actor, detail=None):
+        args = [
+            "record-event",
+            "--root",
+            self.tmp,
+            "--loop",
+            loop,
+            "--event",
+            event,
+            "--actor",
+            actor,
+        ]
+        if detail is not None:
+            args += ["--detail", detail]
+        return run_cli(args)
+
+    def query_events(self, loop=None, limit=None):
+        args = ["query", "loop-events", "--root", self.tmp]
+        if loop is not None:
+            args += ["--loop", loop]
+        if limit is not None:
+            args += ["--limit", str(limit)]
+        r = run_cli(args)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        return json.loads(r.stdout)
+
+    def test_record_and_query_roundtrip(self):
+        rc_result = self.record_event(
+            "l1", "created", "tester", detail='{"source_skill": "/tmp/s"}'
+        )
+        self.assertEqual(rc_result.returncode, 0, msg=rc_result.stderr)
+        out = self.query_events(loop="l1")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["event"], "created")
+        self.assertEqual(out[0]["actor"], "tester")
+        self.assertEqual(out[0]["loop_name"], "l1")
+        self.assertEqual(json.loads(out[0]["detail"])["source_skill"], "/tmp/s")
+
+    def test_unknown_event_rejected(self):
+        r = self.record_event("l1", "validated", "t")
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_invalid_detail_json_rejected(self):
+        r = self.record_event("l1", "created", "t", detail="not valid json")
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_detail_optional(self):
+        r = self.record_event("l1", "paused", "t")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        out = self.query_events(loop="l1")
+        self.assertEqual(len(out), 1)
+        self.assertIsNone(out[0]["detail"])
+
+    def test_init_idempotent_on_existing_db(self):
+        # setUp already ran init once; populate the table, then re-init
+        # on top of a populated db and confirm no error and no data loss.
+        self.record_event("l1", "created", "tester")
+        r = run_cli(["init", "--root", self.tmp])
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        out = self.query_events(loop="l1")
+        self.assertEqual(len(out), 1)
+
+    def test_query_newest_first_and_limit(self):
+        self.record_event("l1", "created", "t")
+        self.record_event("l1", "installed", "t")
+        self.record_event("l1", "paused", "t")
+        out = self.query_events(loop="l1", limit=2)
+        self.assertEqual(len(out), 2)
+        # newest first: most recently inserted (paused) comes before
+        # the previous one (installed).
+        self.assertEqual(out[0]["event"], "paused")
+        self.assertEqual(out[1]["event"], "installed")
+
+    def test_query_without_loop_returns_all_loops(self):
+        self.record_event("l1", "created", "t")
+        self.record_event("l2", "created", "t")
+        out = self.query_events()
+        loops = {row["loop_name"] for row in out}
+        self.assertEqual(loops, {"l1", "l2"})
+
+
 if __name__ == "__main__":
     unittest.main()

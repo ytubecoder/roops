@@ -7,6 +7,7 @@ Importable helpers mirror the CLI verbs 1:1 (see the CLI dispatch at the
 bottom); `run-loop.sh` shells out to the CLI, `loopctl`/dashboard code may
 import this module directly.
 """
+
 import argparse
 import json
 import os
@@ -89,8 +90,21 @@ CREATE TABLE IF NOT EXISTS dispositions (
 );
 CREATE INDEX IF NOT EXISTS idx_disp_loop_finding ON dispositions(loop_name, finding_id, created_at DESC);
 
+-- Amendment 2: loop lifecycle event audit trail (additive, NOT a migration — schema_version stays 1)
+CREATE TABLE IF NOT EXISTS loop_events (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  loop_name TEXT NOT NULL,
+  event     TEXT NOT NULL,
+  actor     TEXT NOT NULL,
+  ts        TEXT NOT NULL,
+  detail    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_loop_ts ON loop_events(loop_name, ts DESC);
+
 CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT);
 """
+
+LOOP_EVENTS = ("created", "imported", "installed", "uninstalled", "paused", "resumed")
 
 METRIC_DEPTH_CAP = 3
 METRIC_KEY_MAXLEN = 128
@@ -100,6 +114,7 @@ METRIC_COUNT_CAP = 200
 # ---------------------------------------------------------------------------
 # Connection / init
 # ---------------------------------------------------------------------------
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -144,6 +159,7 @@ def init_db(conn: sqlite3.Connection) -> None:
 # Timestamp helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_iso(ts: str) -> datetime:
     # Accept both "...Z" and "...+00:00" forms; stdlib only.
     if ts.endswith("Z"):
@@ -177,6 +193,7 @@ def _normalize_date_for_compare(ts: str) -> str:
 # Usage extraction (§3 finish-run --usage-file)
 # ---------------------------------------------------------------------------
 
+
 def extract_usage(raw_text: str):
     """Best-effort usage/cost extraction. Never raises. Returns a dict with
     keys tokens_input, tokens_output, tokens_total, cost_usd — all
@@ -188,7 +205,12 @@ def extract_usage(raw_text: str):
     Anything else (unparseable, unrecognized shape) yields all-null
     without crashing.
     """
-    result = {"tokens_input": None, "tokens_output": None, "tokens_total": None, "cost_usd": None}
+    result = {
+        "tokens_input": None,
+        "tokens_output": None,
+        "tokens_total": None,
+        "cost_usd": None,
+    }
     if raw_text is None:
         return result
     text = raw_text.strip()
@@ -225,7 +247,9 @@ def extract_usage(raw_text: str):
     if isinstance(obj, dict) and "input_tokens" in obj and "output_tokens" in obj:
         input_tokens = obj.get("input_tokens")
         output_tokens = obj.get("output_tokens")
-        if isinstance(input_tokens, (int, float)) and isinstance(output_tokens, (int, float)):
+        if isinstance(input_tokens, (int, float)) and isinstance(
+            output_tokens, (int, float)
+        ):
             result["tokens_input"] = int(input_tokens)
             result["tokens_output"] = int(output_tokens)
             result["tokens_total"] = result["tokens_input"] + result["tokens_output"]
@@ -243,7 +267,9 @@ def extract_usage(raw_text: str):
             continue
         if not isinstance(event, dict):
             continue
-        if event.get("type") == "turn.completed" and isinstance(event.get("usage"), dict):
+        if event.get("type") == "turn.completed" and isinstance(
+            event.get("usage"), dict
+        ):
             usage = event["usage"]
             input_tokens = usage.get("input_tokens")
             output_tokens = usage.get("output_tokens")
@@ -251,8 +277,13 @@ def extract_usage(raw_text: str):
                 result["tokens_input"] = int(input_tokens)
             if isinstance(output_tokens, (int, float)):
                 result["tokens_output"] = int(output_tokens)
-            if result["tokens_input"] is not None and result["tokens_output"] is not None:
-                result["tokens_total"] = result["tokens_input"] + result["tokens_output"]
+            if (
+                result["tokens_input"] is not None
+                and result["tokens_output"] is not None
+            ):
+                result["tokens_total"] = (
+                    result["tokens_input"] + result["tokens_output"]
+                )
             # codex: no cost field — cost_usd stays NULL.
             return result
 
@@ -263,6 +294,7 @@ def extract_usage(raw_text: str):
 # ---------------------------------------------------------------------------
 # Metric flattening (§3 / §9.3)
 # ---------------------------------------------------------------------------
+
 
 def _flatten_recursive(obj: dict, prefix: str, depth: int, out: dict) -> None:
     for k, v in obj.items():
@@ -344,6 +376,7 @@ def _load_metrics_from_contract(contract_file: str) -> dict:
 # CLI verb implementations
 # ---------------------------------------------------------------------------
 
+
 def cmd_init(args) -> int:
     conn = connect(args.root)
     try:
@@ -366,7 +399,15 @@ def cmd_start_run(args) -> int:
                     loop_name=excluded.loop_name, started_at=excluded.started_at,
                     engine=excluded.engine, model=excluded.model, trigger=excluded.trigger
                 """,
-                (args.run_id, args.loop, args.started_at, args.engine, args.model, args.trigger, "started"),
+                (
+                    args.run_id,
+                    args.loop,
+                    args.started_at,
+                    args.engine,
+                    args.model,
+                    args.trigger,
+                    "started",
+                ),
             )
     finally:
         conn.close()
@@ -379,13 +420,20 @@ def cmd_finish_run(args) -> int:
         init_db(conn)
         finished_at = args.finished_at or now_iso()
 
-        row = conn.execute("SELECT started_at FROM runs WHERE run_id=?", (args.run_id,)).fetchone()
+        row = conn.execute(
+            "SELECT started_at FROM runs WHERE run_id=?", (args.run_id,)
+        ).fetchone()
         duration_ms = None
         if row is not None:
             duration_ms = _duration_ms(row["started_at"], finished_at)
 
         usage_raw = None
-        usage = {"tokens_input": None, "tokens_output": None, "tokens_total": None, "cost_usd": None}
+        usage = {
+            "tokens_input": None,
+            "tokens_output": None,
+            "tokens_total": None,
+            "cost_usd": None,
+        }
         if args.usage_file:
             try:
                 with open(args.usage_file, "r") as f:
@@ -406,11 +454,23 @@ def cmd_finish_run(args) -> int:
                 WHERE run_id=?
                 """,
                 (
-                    finished_at, duration_ms, args.runner_status, args.loop_status,
-                    args.effective_status, args.status_reason, args.headline, args.report_path,
-                    args.contract_path, args.exit_code, args.error_detail, args.attempts,
-                    usage["tokens_input"], usage["tokens_output"], usage["tokens_total"],
-                    usage["cost_usd"], usage_raw,
+                    finished_at,
+                    duration_ms,
+                    args.runner_status,
+                    args.loop_status,
+                    args.effective_status,
+                    args.status_reason,
+                    args.headline,
+                    args.report_path,
+                    args.contract_path,
+                    args.exit_code,
+                    args.error_detail,
+                    args.attempts,
+                    usage["tokens_input"],
+                    usage["tokens_output"],
+                    usage["tokens_total"],
+                    usage["cost_usd"],
+                    usage_raw,
                     args.run_id,
                 ),
             )
@@ -494,7 +554,16 @@ def cmd_upsert_findings(args) -> int:
                            last_seen_run, last_seen_at, times_seen, resolved_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL)
                         """,
-                        (fid, args.loop, title, severity, args.run_id, args.ts, args.run_id, args.ts),
+                        (
+                            fid,
+                            args.loop,
+                            title,
+                            severity,
+                            args.run_id,
+                            args.ts,
+                            args.run_id,
+                            args.ts,
+                        ),
                     )
                 else:
                     conn.execute(
@@ -607,23 +676,27 @@ def cmd_suppressed(args) -> int:
             if disp is None or disp["action"] == "reopen":
                 continue
             if disp["action"] == "dismiss":
-                result.append({
-                    "finding_id": fid,
-                    "action": "dismiss",
-                    "created_at": disp["created_at"],
-                    "note": disp["note"],
-                    "snooze_until": None,
-                })
+                result.append(
+                    {
+                        "finding_id": fid,
+                        "action": "dismiss",
+                        "created_at": disp["created_at"],
+                        "note": disp["note"],
+                        "snooze_until": None,
+                    }
+                )
             elif disp["action"] == "snooze":
                 until_norm = _normalize_date_for_compare(disp["snooze_until"])
                 if until_norm is not None and until_norm > ts_norm:
-                    result.append({
-                        "finding_id": fid,
-                        "action": "snooze",
-                        "created_at": disp["created_at"],
-                        "note": disp["note"],
-                        "snooze_until": disp["snooze_until"],
-                    })
+                    result.append(
+                        {
+                            "finding_id": fid,
+                            "action": "snooze",
+                            "created_at": disp["created_at"],
+                            "note": disp["note"],
+                            "snooze_until": disp["snooze_until"],
+                        }
+                    )
     finally:
         conn.close()
 
@@ -655,7 +728,40 @@ def cmd_dispose(args) -> int:
                 INSERT INTO dispositions (loop_name, finding_id, action, note, snooze_until, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (args.loop, args.finding_id, args.action, args.note, args.until, now_iso()),
+                (
+                    args.loop,
+                    args.finding_id,
+                    args.action,
+                    args.note,
+                    args.until,
+                    now_iso(),
+                ),
+            )
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_record_event(args) -> int:
+    if args.event not in LOOP_EVENTS:
+        print(
+            f"unknown event {args.event!r} (allowed: {', '.join(LOOP_EVENTS)})",
+            file=sys.stderr,
+        )
+        return 1
+    if args.detail is not None:
+        try:
+            json.loads(args.detail)
+        except ValueError:
+            print("detail must be valid JSON", file=sys.stderr)
+            return 1
+    conn = connect(args.root)
+    try:
+        init_db(conn)
+        with conn:
+            conn.execute(
+                "INSERT INTO loop_events(loop_name, event, actor, ts, detail) VALUES (?,?,?,?,?)",
+                (args.loop, args.event, args.actor, now_iso(), args.detail),
             )
     finally:
         conn.close()
@@ -665,6 +771,7 @@ def cmd_dispose(args) -> int:
 # ---------------------------------------------------------------------------
 # Named queries (db.py query <name> ...)
 # ---------------------------------------------------------------------------
+
 
 def _rows_to_dicts(rows):
     return [dict(r) for r in rows]
@@ -692,7 +799,9 @@ def query_last_runs(conn, args):
 
 
 def query_metric_history(conn, args):
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=args.days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=args.days)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     rows = conn.execute(
         "SELECT ts, num, text FROM metrics WHERE loop_name=? AND key=? AND ts >= ? ORDER BY ts ASC",
         (args.loop, args.key, cutoff),
@@ -717,7 +826,9 @@ def query_heartbeats(conn, args):
 
 
 def query_spend(conn, args):
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=args.days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=args.days)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     rows = conn.execute(
         """
         SELECT loop_name,
@@ -734,6 +845,17 @@ def query_spend(conn, args):
     return _rows_to_dicts(rows)
 
 
+def query_loop_events(conn, args):
+    sql = "SELECT * FROM loop_events"
+    params = []
+    if args.loop:
+        sql += " WHERE loop_name = ?"
+        params.append(args.loop)
+    sql += " ORDER BY ts DESC, id DESC LIMIT ?"
+    params.append(args.limit)
+    return _rows_to_dicts(conn.execute(sql, params).fetchall())
+
+
 QUERY_DISPATCH = {
     "loops-summary": query_loops_summary,
     "last-runs": query_last_runs,
@@ -741,6 +863,7 @@ QUERY_DISPATCH = {
     "open-findings": query_open_findings,
     "heartbeats": query_heartbeats,
     "spend": query_spend,
+    "loop-events": query_loop_events,
 }
 
 
@@ -762,6 +885,7 @@ def cmd_query(args) -> int:
 # ---------------------------------------------------------------------------
 # argparse wiring
 # ---------------------------------------------------------------------------
+
 
 def _default_root():
     return os.environ.get("LOOPS_ROOT", os.path.expanduser("~/projects/loops"))
@@ -832,9 +956,18 @@ def build_parser():
     disp_p.add_argument("--root", default=_default_root())
     disp_p.add_argument("--loop", required=True)
     disp_p.add_argument("--finding-id", required=True, dest="finding_id")
-    disp_p.add_argument("--action", required=True, choices=["ack", "dismiss", "snooze", "reopen"])
+    disp_p.add_argument(
+        "--action", required=True, choices=["ack", "dismiss", "snooze", "reopen"]
+    )
     disp_p.add_argument("--note", default=None)
     disp_p.add_argument("--until", default=None)
+
+    ev_p = sub.add_parser("record-event")
+    ev_p.add_argument("--root", default=_default_root())
+    ev_p.add_argument("--loop", required=True)
+    ev_p.add_argument("--event", required=True)
+    ev_p.add_argument("--actor", required=True)
+    ev_p.add_argument("--detail", default=None)
 
     query_p = sub.add_parser("query")
     query_p.add_argument("query_name")
@@ -861,6 +994,7 @@ def main(argv=None) -> int:
         "prior-findings": cmd_prior_findings,
         "suppressed": cmd_suppressed,
         "dispose": cmd_dispose,
+        "record-event": cmd_record_event,
         "query": cmd_query,
     }
     fn = dispatch.get(args.verb)

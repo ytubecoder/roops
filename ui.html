@@ -188,8 +188,34 @@
   .hanko-btn:hover { background: rgba(199,62,43,.08); }
   .hanko-btn:active { transform: rotate(-2deg) scale(.94); background: var(--shu); color: var(--washi); }
   .hanko-btn:disabled { opacity: .25; cursor: default; }
+  .hanko-btn.approve { background: var(--shu); color: var(--washi); }
+  .hanko-btn.approve:hover { background: var(--shu-deep); }
+  .stamp-legend {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; color: var(--nibi);
+    margin: -6px 0 16px;
+  }
+  .stamp-legend b { color: var(--shu); font-weight: 400; }
+  .orders { margin-top: 34px; }
+  .order-line {
+    display: flex; gap: 14px; align-items: baseline;
+    font-family: var(--mono); font-size: 11.5px; color: var(--sumi);
+    padding: 10px 0; border-bottom: 1px solid var(--hair);
+    animation: order-in 1s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes order-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .order-line .oseal {
+    width: 22px; height: 22px; flex: none; align-self: center;
+    background: var(--shu); color: var(--washi); font-family: var(--seal); font-size: 13px;
+    border-radius: 3px; display: inline-flex; align-items: center; justify-content: center;
+    transform: rotate(-2deg);
+  }
+  .order-line .ostat { margin-left: auto; color: var(--nibi); font-size: 10px; letter-spacing: .14em; white-space: nowrap; }
+  .orders-note {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .16em; color: var(--nibi);
+    text-transform: uppercase; margin-top: 14px;
+  }
   .impression {
-    position: absolute; right: 172px; top: 50%; margin-top: -26px;
+    position: absolute; right: 222px; top: 50%; margin-top: -26px;
     width: 52px; height: 52px; background: var(--shu); color: var(--washi);
     font-family: var(--seal); font-size: 30px; border-radius: 5px;
     display: flex; align-items: center; justify-content: center;
@@ -277,6 +303,7 @@
     .impression { animation: none; opacity: .9; }
     .enso-close-fig path { animation: none; stroke-dashoffset: 0; }
     .vase-svg g { transition: none; }
+    .order-line { animation: none; }
   }
 
   /* ---------- mobile ---------- */
@@ -365,6 +392,7 @@
   <!-- ================= THE ARRANGEMENT ================= -->
   <div class="zone">
     <div class="kicker"><b>生け花</b> the arrangement — seo-pages, 巡 of 05:40 <span class="note">STAMP TO PRUNE · EFFECTIVE STATUS = TALLEST STEM</span></div>
+    <div class="stamp-legend"><b>承</b> approve — becomes an order &nbsp;·&nbsp; 認 acknowledge · 休 snooze · 済 dismiss — these only quiet the garden</div>
     <div class="arrangement">
       <div>
         <svg class="vase-svg" viewBox="0 0 150 170" aria-hidden="true">
@@ -380,6 +408,7 @@
           <span class="bar"></span>
           <div class="fx"><b>Canonical tags dropped from 12 templated pages</b><p>after friday deploy · re-crawl risk · fix is a template one-liner, proposed not applied</p><span class="tier">SHIN 真 · ALERT · F-231</span></div>
           <div class="stamp-actions">
+            <button class="hanko-btn approve" data-f="shin" data-k="承" title="approve — becomes an order">承</button>
             <button class="hanko-btn" data-f="shin" data-k="認" title="acknowledge">認</button>
             <button class="hanko-btn" data-f="shin" data-k="休" title="snooze">休</button>
             <button class="hanko-btn" data-f="shin" data-k="済" title="dismiss">済</button>
@@ -389,6 +418,7 @@
           <span class="bar"></span>
           <div class="fx"><b>Sitemap lastmod stale for 6 weeks on /docs</b><p>42 of 61 entries unchanged since 2026-06-14 · likely generator regression</p><span class="tier">SOE 副 · WARN · F-232</span></div>
           <div class="stamp-actions">
+            <button class="hanko-btn approve" data-f="soe" data-k="承" title="approve — becomes an order">承</button>
             <button class="hanko-btn" data-f="soe" data-k="認" title="acknowledge">認</button>
             <button class="hanko-btn" data-f="soe" data-k="休" title="snooze">休</button>
             <button class="hanko-btn" data-f="soe" data-k="済" title="dismiss">済</button>
@@ -398,12 +428,19 @@
           <span class="bar"></span>
           <div class="fx"><b>18 of 43 images missing alt text</b><p>unchanged since last 巡 · carried finding, third appearance</p><span class="tier">HIKAE 控 · INFO · F-229</span></div>
           <div class="stamp-actions">
+            <button class="hanko-btn approve" data-f="hikae" data-k="承" title="approve — becomes an order">承</button>
             <button class="hanko-btn" data-f="hikae" data-k="認" title="acknowledge">認</button>
             <button class="hanko-btn" data-f="hikae" data-k="休" title="snooze">休</button>
             <button class="hanko-btn" data-f="hikae" data-k="済" title="dismiss">済</button>
           </div>
         </div>
       </div>
+    </div>
+
+    <div class="orders" id="orders" hidden>
+      <div class="kicker"><b>実行</b> the orders — approved, awaiting execution <span class="note">SEPARATE, AUDITED PATH — NEVER MID-巡</span></div>
+      <div id="orders-list"></div>
+      <div class="orders-note">APPROVALS ACCUMULATE — APPROVE THE SAME FINDING 3× AND THE GARDEN ASKS TO MAKE IT STANDING</div>
     </div>
   </div>
 
@@ -419,7 +456,7 @@
   </div>
   <div class="engawa-sub">
     <span>deps-drift · 巡 #218 · began 07:12:41</span>
-    <span class="ro">CANNOT BE STEERED — REPORT-ONLY</span>
+    <span class="ro">ROUND IS READ-ONLY · PROPOSALS AWAIT THE SEAL</span>
   </div>
   <div class="stream" id="stream" aria-live="polite"></div>
 </aside>
@@ -475,7 +512,7 @@
     ['think', 'A critical. Tracing which top-level dependency pulls it in.'],
     ['cmd', '$ npm why tar-fs | head -4'],
     ['out', 'tar-fs@2.1.1\nnode_modules/tar-fs\n  tar-fs@"^2.0.0" from prebuild-install@7.1.2\n  prebuild-install from sharp@0.33.4'],
-    ['think', 'It arrives through sharp’s prebuild chain. Patched upstream in 2.1.4 — a lockfile-only bump. Drafting the finding; the fix is proposed, never applied from here.'],
+    ['think', 'It arrives through sharp’s prebuild chain. Patched upstream in 2.1.4 — a lockfile-only bump. Drafting the finding; nothing is applied from inside a round — once sealed, it executes on its own path.'],
     ['finding', 'SHIN 真 · F-233 · critical CVE-2026-31842 in tar-fs 2.1.1 (via sharp → prebuild-install)\nproposed: lockfile bump to 2.1.4 · no code change · confidence high'],
     ['status', 'writing contract · findings: 1 · metrics copied verbatim from precheck'],
     ['status', 'round complete · 2m 41s · the ensō closes'],
@@ -549,6 +586,11 @@
   /* ---------- stamping ---------- */
   var TIERS = ['shin', 'soe', 'hikae'];
   var LABEL = { shin: 'SHIN 真', soe: 'SOE 副', hikae: 'HIKAE 控' };
+  var ORDER = {
+    shin: 'F-231 · seo-pages · restore canonical tags — template one-liner',
+    soe: 'F-232 · seo-pages · regenerate sitemap lastmod on /docs',
+    hikae: 'F-229 · seo-pages · alt-text backfill, 18 images'
+  };
   var standing = { shin: true, soe: true, hikae: true };
   var seoStamp = document.getElementById('seo-stamp');
   var seoSev = document.getElementById('seo-sev');
@@ -565,6 +607,17 @@
       imp.style.setProperty('--rot', (Math.random() * 14 - 8).toFixed(1) + 'deg');
       rowEl.appendChild(imp);
       document.getElementById('stem-' + f).classList.add('pruned');
+      if (k === '承') {
+        var orders = document.getElementById('orders');
+        orders.hidden = false;
+        var line = document.createElement('div');
+        line.className = 'order-line';
+        var seal = document.createElement('span'); seal.className = 'oseal'; seal.textContent = '承';
+        var desc = document.createElement('span'); desc.textContent = ORDER[f];
+        var stat = document.createElement('span'); stat.className = 'ostat'; stat.textContent = 'DRY-RUN → EXECUTE → CONFIRM · APPROVED 1×';
+        line.appendChild(seal); line.appendChild(desc); line.appendChild(stat);
+        document.getElementById('orders-list').appendChild(line);
+      }
       standing[f] = false;
       var tallest = TIERS.find(function (t) { return standing[t]; });
       if (tallest) {

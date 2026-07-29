@@ -36,6 +36,7 @@ _schedule = _load_schedule_module()
 
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
+TAG_RE = re.compile(r"^[a-z][a-z0-9:_-]{1,40}$")
 
 # Field table (§5). Each entry declares: required, type, default (or
 # _REQUIRED / _CONDITIONAL sentinels), plus type-specific extras.
@@ -314,8 +315,7 @@ def _typecheck(key, field, raw_value):
         entries = [e.strip() for e in raw_value.split(",")]
         if any(e == "" for e in entries):
             return False, None, f"{key}: empty tag entry"
-        pat = re.compile(r"^[a-z][a-z0-9:_-]{1,40}$")
-        bad = [e for e in entries if not pat.match(e)]
+        bad = [e for e in entries if not TAG_RE.match(e)]
         if bad:
             return (
                 False,

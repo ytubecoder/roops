@@ -1,0 +1,30 @@
+{
+  "gui_path": "/Applications/Automic Vault.app",
+  "findings": [
+    {"source": "github-cli", "severity": "high",
+     "affected": [{"path": "/Users/taro/.config/gh/hosts.yml", "line": 3}],
+     "explanation": "A plaintext OAuth token is stored in the GitHub CLI hosts file.",
+     "solution": "Move the token into an encrypted store and remove the plaintext copy.",
+     "docs_url": "https://example.invalid/docs/github-cli", "homepage": "https://cli.github.com"},
+    {"source": "github-cli", "severity": "high",
+     "affected": [{"path": "/Users/taro/.config/gh/config.yml", "line": null}],
+     "explanation": "The CLI config grants credential helpers broad scope.",
+     "solution": "Restrict helper scope to the hosts that need it.",
+     "docs_url": "https://example.invalid/docs/github-cli", "homepage": "https://cli.github.com"},
+    {"source": "ssh-keys", "severity": "high",
+     "affected": [{"path": "/Users/taro/.ssh/id_ed25519", "line": null}],
+     "explanation": "An SSH private key is stored without a passphrase.",
+     "solution": "Re-key with a passphrase or move the key to a hardware token.",
+     "docs_url": "https://example.invalid/docs/ssh", "homepage": "https://www.openssh.com"},
+    {"source": "path-hygiene", "severity": "medium",
+     "affected": [{"path": "/opt/fixturebrew/bin", "line": null}],
+     "explanation": "A group-writable directory appears early in PATH.",
+     "solution": "Tighten the directory mode or move it later in PATH.",
+     "docs_url": "https://example.invalid/docs/path", "homepage": "https://example.invalid"},
+    {"source": "path-hygiene", "severity": "medium",
+     "affected": [{"path": "/Users/taro/bin", "line": null}],
+     "explanation": "A user-writable directory shadows system binaries.",
+     "solution": "Audit the directory contents and PATH ordering.",
+     "docs_url": "https://example.invalid/docs/path", "homepage": "https://example.invalid"}
+  ]
+}

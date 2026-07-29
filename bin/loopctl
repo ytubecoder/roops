@@ -398,6 +398,12 @@ def _validate_one(root, from_dir, name):
                 "dangerous combo (rule 6): type=watchdog requires an executable precheck.sh"
             )
 
+    # Amendment 2: an optional render.sh makes the loop page-enabled — but only
+    # when executable; present-and-inert is always a mistake worth failing loudly.
+    render_sh = os.path.join(loop_dir, "render.sh")
+    if os.path.isfile(render_sh) and not os.access(render_sh, os.X_OK):
+        errors.append("render.sh present but not executable")
+
     # Rule 6 (part): engine adapter must exist. Resolved under --root (engines/ is
     # produced by a concurrently-built task, never under this script's own dir).
     engine = conf.get("engine")

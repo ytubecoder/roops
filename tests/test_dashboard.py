@@ -5,6 +5,7 @@ real repo state/reports/loops.d. The sqlite fixture copies the §3 DDL verbatim.
 schedule.py are not depended on directly (they're being built concurrently) -- fake parser
 callables are injected via generate()'s function-level seam.
 """
+
 import glob
 import json
 import os
@@ -119,27 +120,66 @@ class FixtureRoot:
         conn.commit()
         return conn
 
-    def add_loop(self, name, description="a loop", type_="agent", engine="codex",
-                 schedule="interval:15m", dashboard_json=None, timeout_s=900):
+    def add_loop(
+        self,
+        name,
+        description="a loop",
+        type_="agent",
+        engine="codex",
+        schedule="interval:15m",
+        dashboard_json=None,
+        timeout_s=900,
+    ):
         d = os.path.join(self.root, "loops.d", name)
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "loop.conf"), "w") as f:
-            f.write(f"name={name}\ndescription={description}\ntype={type_}\n"
-                     f"engine={engine}\nschedule={schedule}\ntimeout_s={timeout_s}\n")
+            f.write(
+                f"name={name}\ndescription={description}\ntype={type_}\n"
+                f"engine={engine}\nschedule={schedule}\ntimeout_s={timeout_s}\n"
+            )
         if dashboard_json is not None:
             with open(os.path.join(d, "dashboard.json"), "w") as f:
                 json.dump(dashboard_json, f)
         return d
 
-    def add_run(self, conn, run_id, loop_name, started_at, finished_at=None,
-                runner_status="completed", loop_status=None, effective_status=None,
-                headline="", tokens_total=None, cost_usd=None, engine="codex"):
+    def add_run(
+        self,
+        conn,
+        run_id,
+        loop_name,
+        started_at,
+        finished_at=None,
+        runner_status="completed",
+        loop_status=None,
+        effective_status=None,
+        headline="",
+        tokens_total=None,
+        cost_usd=None,
+        engine="codex",
+        error_detail=None,
+        exit_code=None,
+    ):
         conn.execute(
             "INSERT INTO runs (run_id, loop_name, started_at, finished_at, engine, "
             "trigger, runner_status, loop_status, effective_status, headline, "
-            "tokens_total, cost_usd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (run_id, loop_name, started_at, finished_at, engine, "manual",
-             runner_status, loop_status, effective_status, headline, tokens_total, cost_usd),
+            "tokens_total, cost_usd, error_detail, exit_code) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                run_id,
+                loop_name,
+                started_at,
+                finished_at,
+                engine,
+                "manual",
+                runner_status,
+                loop_status,
+                effective_status,
+                headline,
+                tokens_total,
+                cost_usd,
+                error_detail,
+                exit_code,
+            ),
         )
         conn.commit()
 
@@ -196,7 +236,11 @@ def fake_schedule_parse(interval_map=None):
             n = int(val[:-1])
             unit = val[-1]
             secs = n * (60 if unit == "m" else 3600 if unit == "h" else 1)
-            return {"kind": "interval", "launchd": {"StartInterval": secs}, "expected_interval_s": secs}
+            return {
+                "kind": "interval",
+                "launchd": {"StartInterval": secs},
+                "expected_interval_s": secs,
+            }
         if spec.startswith("daily:"):
             return {"kind": "daily", "launchd": {}, "expected_interval_s": 86400}
         return {"kind": "unknown", "launchd": {}, "expected_interval_s": 86400}
@@ -298,13 +342,17 @@ class PureFunctionTests(unittest.TestCase):
         self.assertFalse(generate.is_died(iso(NOW), iso(started), 800, NOW))
 
     def test_disposition_text_dismissed(self):
-        text = generate.disposition_text("dismiss", "intentional", None, "2026-06-01T00:00:00Z")
+        text = generate.disposition_text(
+            "dismiss", "intentional", None, "2026-06-01T00:00:00Z"
+        )
         self.assertIn("dismissed", text)
         self.assertIn("2026-06-01", text)
         self.assertIn("intentional", text)
 
     def test_disposition_text_snoozed(self):
-        text = generate.disposition_text("snooze", None, "2026-09-01T00:00:00Z", "2026-07-01T00:00:00Z")
+        text = generate.disposition_text(
+            "snooze", None, "2026-09-01T00:00:00Z", "2026-07-01T00:00:00Z"
+        )
         self.assertIn("snoozed", text)
         self.assertIn("2026-09-01", text)
 
@@ -315,10 +363,14 @@ class PureFunctionTests(unittest.TestCase):
         self.assertTrue(generate.is_suppressed("dismiss", None, NOW))
 
     def test_is_suppressed_active_snooze(self):
-        self.assertTrue(generate.is_suppressed("snooze", iso(NOW + timedelta(days=1)), NOW))
+        self.assertTrue(
+            generate.is_suppressed("snooze", iso(NOW + timedelta(days=1)), NOW)
+        )
 
     def test_is_suppressed_expired_snooze(self):
-        self.assertFalse(generate.is_suppressed("snooze", iso(NOW - timedelta(days=1)), NOW))
+        self.assertFalse(
+            generate.is_suppressed("snooze", iso(NOW - timedelta(days=1)), NOW)
+        )
 
     def test_is_suppressed_ack_is_not_suppressed(self):
         self.assertFalse(generate.is_suppressed("ack", None, NOW))
@@ -368,8 +420,10 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_empty_state_no_loops_no_db_does_not_crash(self):
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         self.assertTrue(os.path.exists(out))
@@ -378,12 +432,18 @@ class GenerateIntegrationTests(unittest.TestCase):
         self.assertIn("<html", html.lower())
         self.assertNotIn("Traceback", html)
 
-    def test_empty_state_with_default_lazy_parsers_never_imports_missing_bin_modules(self):
+    def test_empty_state_with_default_lazy_parsers_never_imports_missing_bin_modules(
+        self,
+    ):
         # No injected parsers, no bin/loopconf.py or bin/schedule.py on disk (as in a real
         # fresh checkout / concurrent-build window) -- with zero loops.d entries this must
         # not attempt to import either module and must not crash.
-        self.assertFalse(os.path.exists(os.path.join(self.fx.root, "bin", "loopconf.py")))
-        self.assertFalse(os.path.exists(os.path.join(self.fx.root, "bin", "schedule.py")))
+        self.assertFalse(
+            os.path.exists(os.path.join(self.fx.root, "bin", "loopconf.py"))
+        )
+        self.assertFalse(
+            os.path.exists(os.path.join(self.fx.root, "bin", "schedule.py"))
+        )
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(root=self.fx.root, out_file=out, now=NOW)
         self.assertTrue(os.path.exists(out))
@@ -395,39 +455,57 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_atomic_write_no_tmp_file_left_and_output_complete(self):
         conn = self.fx.init_db()
         self.fx.add_loop("hello-loop")
-        self.fx.add_run(conn, "r1", "hello-loop", iso(NOW - timedelta(minutes=5)),
-                         iso(NOW - timedelta(minutes=4)), "completed", "ok", "ok", "all clear",
-                         tokens_total=100)
+        self.fx.add_run(
+            conn,
+            "r1",
+            "hello-loop",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "all clear",
+            tokens_total=100,
+        )
         conn.close()
         out_dir = os.path.join(self.fx.root, "dashboard")
         os.makedirs(out_dir, exist_ok=True)
         out = os.path.join(out_dir, "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         self.assertTrue(os.path.exists(out))
         with open(out) as f:
             html = f.read()
         self.assertIn("</html>", html.lower())
-        leftover_tmp = [
-            p for p in glob.glob(os.path.join(out_dir, "*"))
-            if p != out
-        ]
+        leftover_tmp = [p for p in glob.glob(os.path.join(out_dir, "*")) if p != out]
         self.assertEqual(leftover_tmp, [], f"leftover tmp files: {leftover_tmp}")
 
     def test_precedence_in_full_pipeline_completed_alert_renders_red(self):
         conn = self.fx.init_db()
         self.fx.add_loop("sweep")
-        self.fx.add_run(conn, "r1", "sweep", iso(NOW - timedelta(minutes=5)),
-                         iso(NOW - timedelta(minutes=4)), "completed", "alert", "alert",
-                         "3 repos broken")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "sweep",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "alert",
+            "alert",
+            "3 repos broken",
+        )
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
@@ -438,15 +516,32 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_stale_loop_flagged_and_counts_toward_needs_attention(self):
         conn = self.fx.init_db()
         self.fx.add_loop("rare", schedule="interval:1m")
-        self.fx.add_run(conn, "r1", "rare", iso(NOW - timedelta(hours=5)),
-                         iso(NOW - timedelta(hours=5)), "completed", "ok", "ok", "fine")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "rare",
+            iso(NOW - timedelta(hours=5)),
+            iso(NOW - timedelta(hours=5)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
+            root=self.fx.root,
+            out_file=out,
             loopconf_parse=fake_loopconf_parse(),
-            schedule_parse=fake_schedule_parse({"interval:1m": {
-                "kind": "interval", "launchd": {"StartInterval": 60}, "expected_interval_s": 60}}),
+            schedule_parse=fake_schedule_parse(
+                {
+                    "interval:1m": {
+                        "kind": "interval",
+                        "launchd": {"StartInterval": 60},
+                        "expected_interval_s": 60,
+                    }
+                }
+            ),
             now=NOW,
         )
         with open(out) as f:
@@ -460,13 +555,24 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_manual_loop_never_flagged_stale(self):
         conn = self.fx.init_db()
         self.fx.add_loop("occasional", schedule="manual")
-        self.fx.add_run(conn, "r1", "occasional", iso(NOW - timedelta(days=400)),
-                         iso(NOW - timedelta(days=400)), "completed", "ok", "ok", "fine")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "occasional",
+            iso(NOW - timedelta(days=400)),
+            iso(NOW - timedelta(days=400)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
@@ -474,19 +580,27 @@ class GenerateIntegrationTests(unittest.TestCase):
         # loop row itself present, but not marked stale
         self.assertIn("occasional", html)
         idx = html.find("occasional")
-        window = html[idx:idx + 2000]
+        window = html[idx : idx + 2000]
         self.assertNotIn("stale", window.lower())
 
     def test_died_run_flagged(self):
         conn = self.fx.init_db()
         self.fx.add_loop("hanger", timeout_s=800)
-        self.fx.add_run(conn, "r1", "hanger", iso(NOW - timedelta(seconds=1200)),
-                         finished_at=None, runner_status="running")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "hanger",
+            iso(NOW - timedelta(seconds=1200)),
+            finished_at=None,
+            runner_status="running",
+        )
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
@@ -500,43 +614,89 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_findings_suppressed_greyed_open_shows_recurrence(self):
         conn = self.fx.init_db()
         self.fx.add_loop("cookingapp")
-        self.fx.add_run(conn, "r1", "cookingapp", iso(NOW - timedelta(minutes=5)),
-                         iso(NOW - timedelta(minutes=4)), "completed", "warn", "warn", "issues found")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "cookingapp",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "warn",
+            "warn",
+            "issues found",
+        )
         conn.execute(
             "INSERT INTO findings (finding_id, loop_name, title, severity, first_seen_run, "
             "first_seen_at, last_seen_run, last_seen_at, times_seen, resolved_at) VALUES "
             "(?,?,?,?,?,?,?,?,?,NULL)",
-            ("cookingapp:no-remote", "cookingapp", "cookingapp has no remote", "warn", "r0",
-             iso(NOW - timedelta(days=50)), "r1", iso(NOW - timedelta(minutes=4)), 3),
+            (
+                "cookingapp:no-remote",
+                "cookingapp",
+                "cookingapp has no remote",
+                "warn",
+                "r0",
+                iso(NOW - timedelta(days=50)),
+                "r1",
+                iso(NOW - timedelta(minutes=4)),
+                3,
+            ),
         )
         conn.execute(
             "INSERT INTO dispositions (loop_name, finding_id, action, note, snooze_until, created_at) "
             "VALUES (?,?,?,?,?,?)",
-            ("cookingapp", "cookingapp:no-remote", "dismiss", "intentional, local scratch repo", None,
-             iso(NOW - timedelta(days=10))),
+            (
+                "cookingapp",
+                "cookingapp:no-remote",
+                "dismiss",
+                "intentional, local scratch repo",
+                None,
+                iso(NOW - timedelta(days=10)),
+            ),
         )
         conn.execute(
             "INSERT INTO findings (finding_id, loop_name, title, severity, first_seen_run, "
             "first_seen_at, last_seen_run, last_seen_at, times_seen, resolved_at) VALUES "
             "(?,?,?,?,?,?,?,?,?,NULL)",
-            ("cookingapp:unpushed", "cookingapp", "cookingapp has unpushed commits", "warn", "r1",
-             iso(NOW - timedelta(minutes=4)), "r1", iso(NOW - timedelta(minutes=4)), 1),
+            (
+                "cookingapp:unpushed",
+                "cookingapp",
+                "cookingapp has unpushed commits",
+                "warn",
+                "r1",
+                iso(NOW - timedelta(minutes=4)),
+                "r1",
+                iso(NOW - timedelta(minutes=4)),
+                1,
+            ),
         )
         conn.commit()
-        self.fx.write_latest_json("cookingapp", {
-            "schema_version": 1, "run_id": "r1", "status": "warn",
-            "status_reason": "x", "headline": "issues found", "report_markdown": "# x",
-            "metrics": "{}",
-            "findings": [
-                {"finding_id": "cookingapp:unpushed", "title": "cookingapp has unpushed commits",
-                 "severity": "warn", "detail": "23 commits behind"},
-            ],
-        })
+        self.fx.write_latest_json(
+            "cookingapp",
+            {
+                "schema_version": 1,
+                "run_id": "r1",
+                "status": "warn",
+                "status_reason": "x",
+                "headline": "issues found",
+                "report_markdown": "# x",
+                "metrics": "{}",
+                "findings": [
+                    {
+                        "finding_id": "cookingapp:unpushed",
+                        "title": "cookingapp has unpushed commits",
+                        "severity": "warn",
+                        "detail": "23 commits behind",
+                    },
+                ],
+            },
+        )
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
@@ -558,20 +718,52 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_spend_aggregation_7day(self):
         conn = self.fx.init_db()
         self.fx.add_loop("spender")
-        self.fx.add_run(conn, "r1", "spender", iso(NOW - timedelta(days=1)),
-                         iso(NOW - timedelta(days=1)), "completed", "ok", "ok", "fine",
-                         tokens_total=1000, cost_usd=0.5)
-        self.fx.add_run(conn, "r2", "spender", iso(NOW - timedelta(days=3)),
-                         iso(NOW - timedelta(days=3)), "completed", "ok", "ok", "fine",
-                         tokens_total=2000, cost_usd=1.0)
-        self.fx.add_run(conn, "r3", "spender", iso(NOW - timedelta(days=10)),
-                         iso(NOW - timedelta(days=10)), "completed", "ok", "ok", "fine",
-                         tokens_total=99999, cost_usd=99.0)
+        self.fx.add_run(
+            conn,
+            "r1",
+            "spender",
+            iso(NOW - timedelta(days=1)),
+            iso(NOW - timedelta(days=1)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+            tokens_total=1000,
+            cost_usd=0.5,
+        )
+        self.fx.add_run(
+            conn,
+            "r2",
+            "spender",
+            iso(NOW - timedelta(days=3)),
+            iso(NOW - timedelta(days=3)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+            tokens_total=2000,
+            cost_usd=1.0,
+        )
+        self.fx.add_run(
+            conn,
+            "r3",
+            "spender",
+            iso(NOW - timedelta(days=10)),
+            iso(NOW - timedelta(days=10)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+            tokens_total=99999,
+            cost_usd=99.0,
+        )
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
@@ -582,14 +774,33 @@ class GenerateIntegrationTests(unittest.TestCase):
 
     def test_trend_svg_present_with_at_least_3_points(self):
         conn = self.fx.init_db()
-        self.fx.add_loop("trendy", dashboard_json={
-            "panels": [
-                {"title": "Dirty repos", "metric": "repos.dirty", "type": "trend", "window_days": 30},
-            ]
-        })
-        self.fx.add_run(conn, "r1", "trendy", iso(NOW - timedelta(days=2)),
-                         iso(NOW - timedelta(days=2)), "completed", "ok", "ok", "fine")
-        for i, (rid, days, val) in enumerate([("r1", 2, 1.0), ("r2", 1, 2.0), ("r3", 0, 3.0)]):
+        self.fx.add_loop(
+            "trendy",
+            dashboard_json={
+                "panels": [
+                    {
+                        "title": "Dirty repos",
+                        "metric": "repos.dirty",
+                        "type": "trend",
+                        "window_days": 30,
+                    },
+                ]
+            },
+        )
+        self.fx.add_run(
+            conn,
+            "r1",
+            "trendy",
+            iso(NOW - timedelta(days=2)),
+            iso(NOW - timedelta(days=2)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
+        for i, (rid, days, val) in enumerate(
+            [("r1", 2, 1.0), ("r2", 1, 2.0), ("r3", 0, 3.0)]
+        ):
             conn.execute(
                 "INSERT INTO metrics (run_id, loop_name, ts, key, num, text) VALUES (?,?,?,?,?,NULL)",
                 (rid, "trendy", iso(NOW - timedelta(days=days)), "repos.dirty", val),
@@ -598,8 +809,10 @@ class GenerateIntegrationTests(unittest.TestCase):
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
@@ -610,19 +823,36 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_raw_fallback_panel_truncates_undeclared_metric(self):
         conn = self.fx.init_db()
         self.fx.add_loop("rawloop", dashboard_json={"panels": []})
-        self.fx.add_run(conn, "r1", "rawloop", iso(NOW - timedelta(minutes=5)),
-                         iso(NOW - timedelta(minutes=4)), "completed", "ok", "ok", "fine")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "rawloop",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
         big_value = "y" * 5000
         conn.execute(
             "INSERT INTO metrics (run_id, loop_name, ts, key, num, text) VALUES (?,?,?,?,NULL,?)",
-            ("r1", "rawloop", iso(NOW - timedelta(minutes=4)), "undeclared.blob", json.dumps(big_value)),
+            (
+                "r1",
+                "rawloop",
+                iso(NOW - timedelta(minutes=4)),
+                "undeclared.blob",
+                json.dumps(big_value),
+            ),
         )
         conn.commit()
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
@@ -634,26 +864,54 @@ class GenerateIntegrationTests(unittest.TestCase):
 
     def test_number_panel_missing_hold_carries_forward_previous_value(self):
         conn = self.fx.init_db()
-        self.fx.add_loop("holdy", dashboard_json={
-            "panels": [
-                {"title": "Dirty repos", "metric": "repos.dirty", "type": "number", "missing": "hold"},
-            ]
-        })
+        self.fx.add_loop(
+            "holdy",
+            dashboard_json={
+                "panels": [
+                    {
+                        "title": "Dirty repos",
+                        "metric": "repos.dirty",
+                        "type": "number",
+                        "missing": "hold",
+                    },
+                ]
+            },
+        )
         # older run had the metric; latest run does not report it at all
-        self.fx.add_run(conn, "r1", "holdy", iso(NOW - timedelta(days=2)),
-                         iso(NOW - timedelta(days=2)), "completed", "ok", "ok", "fine")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "holdy",
+            iso(NOW - timedelta(days=2)),
+            iso(NOW - timedelta(days=2)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
         conn.execute(
             "INSERT INTO metrics (run_id, loop_name, ts, key, num, text) VALUES (?,?,?,?,?,NULL)",
             ("r1", "holdy", iso(NOW - timedelta(days=2)), "repos.dirty", 7.0),
         )
-        self.fx.add_run(conn, "r2", "holdy", iso(NOW - timedelta(minutes=5)),
-                         iso(NOW - timedelta(minutes=4)), "completed", "ok", "ok", "fine")
+        self.fx.add_run(
+            conn,
+            "r2",
+            "holdy",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
         conn.commit()
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
@@ -664,25 +922,53 @@ class GenerateIntegrationTests(unittest.TestCase):
 
     def test_number_panel_missing_gap_renders_hole_not_stale_value(self):
         conn = self.fx.init_db()
-        self.fx.add_loop("gappy", dashboard_json={
-            "panels": [
-                {"title": "Dirty repos", "metric": "repos.dirty", "type": "number", "missing": "gap"},
-            ]
-        })
-        self.fx.add_run(conn, "r1", "gappy", iso(NOW - timedelta(days=2)),
-                         iso(NOW - timedelta(days=2)), "completed", "ok", "ok", "fine")
+        self.fx.add_loop(
+            "gappy",
+            dashboard_json={
+                "panels": [
+                    {
+                        "title": "Dirty repos",
+                        "metric": "repos.dirty",
+                        "type": "number",
+                        "missing": "gap",
+                    },
+                ]
+            },
+        )
+        self.fx.add_run(
+            conn,
+            "r1",
+            "gappy",
+            iso(NOW - timedelta(days=2)),
+            iso(NOW - timedelta(days=2)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
         conn.execute(
             "INSERT INTO metrics (run_id, loop_name, ts, key, num, text) VALUES (?,?,?,?,?,NULL)",
             ("r1", "gappy", iso(NOW - timedelta(days=2)), "repos.dirty", 7.0),
         )
-        self.fx.add_run(conn, "r2", "gappy", iso(NOW - timedelta(minutes=5)),
-                         iso(NOW - timedelta(minutes=4)), "completed", "ok", "ok", "fine")
+        self.fx.add_run(
+            conn,
+            "r2",
+            "gappy",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
         conn.commit()
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
@@ -693,8 +979,17 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_watchdog_heartbeat_rendered_ok(self):
         conn = self.fx.init_db()
         self.fx.add_loop("watcher", type_="watchdog")
-        self.fx.add_run(conn, "r1", "watcher", iso(NOW - timedelta(minutes=5)),
-                         iso(NOW - timedelta(minutes=4)), "completed", "ok", "ok", "probe ok")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "watcher",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "probe ok",
+        )
         conn.execute(
             "INSERT INTO heartbeats (loop_name, run_id, ts, ok, detail) VALUES (?,?,?,?,?)",
             ("watcher", "r1", iso(NOW - timedelta(minutes=4)), 1, None),
@@ -703,8 +998,10 @@ class GenerateIntegrationTests(unittest.TestCase):
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
@@ -715,18 +1012,35 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_watchdog_heartbeat_rendered_failed(self):
         conn = self.fx.init_db()
         self.fx.add_loop("watcher2", type_="watchdog")
-        self.fx.add_run(conn, "r1", "watcher2", iso(NOW - timedelta(minutes=5)),
-                         iso(NOW - timedelta(minutes=4)), "completed", "alert", "alert", "probe failed")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "watcher2",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "alert",
+            "alert",
+            "probe failed",
+        )
         conn.execute(
             "INSERT INTO heartbeats (loop_name, run_id, ts, ok, detail) VALUES (?,?,?,?,?)",
-            ("watcher2", "r1", iso(NOW - timedelta(minutes=4)), 0, "connection refused"),
+            (
+                "watcher2",
+                "r1",
+                iso(NOW - timedelta(minutes=4)),
+                0,
+                "connection refused",
+            ),
         )
         conn.commit()
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
@@ -737,19 +1051,277 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_no_network_no_external_assets(self):
         conn = self.fx.init_db()
         self.fx.add_loop("simple")
-        self.fx.add_run(conn, "r1", "simple", iso(NOW - timedelta(minutes=5)),
-                         iso(NOW - timedelta(minutes=4)), "completed", "ok", "ok", "fine")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "simple",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
         conn.close()
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
         generate.generate(
-            root=self.fx.root, out_file=out,
-            loopconf_parse=fake_loopconf_parse(), schedule_parse=fake_schedule_parse(),
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
             now=NOW,
         )
         with open(out) as f:
             html = f.read()
-        for token in ("http://", "https://", "//cdn", "src=\"http"):
+        for token in ("http://", "https://", "//cdn", 'src="http'):
             self.assertNotIn(token, html)
+
+
+class FailureSurfacingTests(unittest.TestCase):
+    """error_detail on the page, the paste-into-an-agent handoff block, and the
+    inline report drawer. All deterministic generator output — no model anywhere."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+
+    def _generate(self):
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            return f.read()
+
+    def test_failed_run_error_detail_in_runs_table(self):
+        conn = self.fx.init_db()
+        self.fx.add_loop("l1")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "l1",
+            iso(NOW - timedelta(minutes=10)),
+            iso(NOW - timedelta(minutes=9)),
+            "engine-failed",
+            error_detail="adapter exit 1 (attempt 1)",
+            exit_code=1,
+        )
+        conn.close()
+        html = self._generate()
+        self.assertIn("adapter exit 1 (attempt 1)", html)
+
+    def test_completed_run_no_detail_and_no_handoff(self):
+        conn = self.fx.init_db()
+        self.fx.add_loop("l1")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "l1",
+            iso(NOW - timedelta(minutes=10)),
+            iso(NOW - timedelta(minutes=9)),
+            "completed",
+            "ok",
+            "ok",
+            "all clear",
+        )
+        conn.close()
+        html = self._generate()
+        self.assertNotIn('class="handoff"', html)
+
+    def test_skipped_overlap_is_not_a_failure_no_handoff(self):
+        conn = self.fx.init_db()
+        self.fx.add_loop("l1")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "l1",
+            iso(NOW - timedelta(minutes=10)),
+            iso(NOW - timedelta(minutes=10)),
+            "skipped-overlap",
+        )
+        conn.close()
+        html = self._generate()
+        self.assertNotIn('class="handoff"', html)
+
+    def test_failed_latest_run_renders_handoff_with_run_id_paths_and_docs(self):
+        conn = self.fx.init_db()
+        self.fx.add_loop("l1")
+        self.fx.add_run(
+            conn,
+            "20260728T000000Z-l1-abc123",
+            "l1",
+            iso(NOW - timedelta(minutes=10)),
+            iso(NOW - timedelta(minutes=9)),
+            "engine-timeout",
+            error_detail="killed after 900s",
+            exit_code=124,
+        )
+        conn.close()
+        html = self._generate()
+        self.assertIn('class="handoff"', html)
+        self.assertIn("20260728T000000Z-l1-abc123", html)
+        self.assertIn("engine-timeout", html)
+        self.assertIn("killed after 900s", html)
+        self.assertIn("state/runs/20260728T000000Z-l1-abc123/", html)
+        self.assertIn("engine.log", html)
+        self.assertIn("docs/INTERFACES.md", html)
+
+    def test_handoff_only_for_latest_run_not_older_failures(self):
+        conn = self.fx.init_db()
+        self.fx.add_loop("l1")
+        self.fx.add_run(
+            conn,
+            "r-old",
+            "l1",
+            iso(NOW - timedelta(hours=2)),
+            iso(NOW - timedelta(hours=2)),
+            "engine-failed",
+            error_detail="old failure",
+            exit_code=1,
+        )
+        self.fx.add_run(
+            conn,
+            "r-new",
+            "l1",
+            iso(NOW - timedelta(minutes=10)),
+            iso(NOW - timedelta(minutes=9)),
+            "completed",
+            "ok",
+            "ok",
+            "recovered",
+        )
+        conn.close()
+        html = self._generate()
+        # older failure still shows its why in the runs table…
+        self.assertIn("old failure", html)
+        # …but no handoff block, because the loop has recovered
+        self.assertNotIn('class="handoff"', html)
+
+    def test_fleet_row_headline_falls_back_to_error_detail(self):
+        conn = self.fx.init_db()
+        self.fx.add_loop("l1")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "l1",
+            iso(NOW - timedelta(minutes=10)),
+            iso(NOW - timedelta(minutes=9)),
+            "harness-error",
+            error_detail="unhandled runner error (exit 0) at line 452",
+        )
+        conn.close()
+        html = self._generate()
+        # headline is NULL for failed runs; the fleet row must not be blank
+        self.assertIn("unhandled runner error (exit 0) at line 452", html)
+
+    def test_handoff_escapes_html_in_error_detail(self):
+        conn = self.fx.init_db()
+        self.fx.add_loop("l1")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "l1",
+            iso(NOW - timedelta(minutes=10)),
+            iso(NOW - timedelta(minutes=9)),
+            "engine-failed",
+            error_detail='<script>alert("x")</script>',
+            exit_code=1,
+        )
+        conn.close()
+        html = self._generate()
+        self.assertNotIn('<script>alert("x")</script>', html)
+        self.assertIn("&lt;script&gt;", html)
+
+    def test_report_drawer_renders_escaped_and_linked(self):
+        conn = self.fx.init_db()
+        self.fx.add_loop("l1")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "l1",
+            iso(NOW - timedelta(minutes=10)),
+            iso(NOW - timedelta(minutes=9)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
+        conn.close()
+        self.fx.write_latest_json(
+            "l1",
+            {
+                "schema_version": 1,
+                "run_id": "r1",
+                "status": "ok",
+                "status_reason": "",
+                "headline": "fine",
+                "metrics": "{}",
+                "findings": [],
+                "report_markdown": "## Section\nnumbers look fine\n<script>evil()</script>",
+            },
+        )
+        html = self._generate()
+        self.assertIn('class="report-drawer"', html)
+        self.assertIn("numbers look fine", html)
+        self.assertNotIn("<script>evil()</script>", html)
+        self.assertIn("&lt;script&gt;evil()&lt;/script&gt;", html)
+        # link to the full report survives alongside the drawer
+        self.assertIn("../reports/l1/latest.md", html)
+
+    def test_report_drawer_clamps_long_reports(self):
+        conn = self.fx.init_db()
+        self.fx.add_loop("l1")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "l1",
+            iso(NOW - timedelta(minutes=10)),
+            iso(NOW - timedelta(minutes=9)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
+        conn.close()
+        self.fx.write_latest_json(
+            "l1",
+            {
+                "schema_version": 1,
+                "run_id": "r1",
+                "status": "ok",
+                "status_reason": "",
+                "headline": "fine",
+                "metrics": "{}",
+                "findings": [],
+                "report_markdown": "x" * 20000,
+            },
+        )
+        html = self._generate()
+        self.assertIn('class="report-drawer"', html)
+        self.assertNotIn("x" * 20000, html)
+        self.assertIn("truncated", html.lower())
+
+    def test_no_report_drawer_without_latest_json(self):
+        conn = self.fx.init_db()
+        self.fx.add_loop("l1")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "l1",
+            iso(NOW - timedelta(minutes=10)),
+            iso(NOW - timedelta(minutes=9)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
+        conn.close()
+        html = self._generate()
+        self.assertNotIn('class="report-drawer"', html)
 
 
 if __name__ == "__main__":

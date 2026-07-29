@@ -16,6 +16,7 @@ against the frozen signatures `loopconf.parse(path) -> (conf, errors)` and
 (only when a real loop.conf needs parsing) so this module — and its tests — work even before
 those files exist. Callers (and tests) may inject fake parsers via generate()'s parameters.
 """
+
 import argparse
 import glob
 import html as html_lib
@@ -52,8 +53,9 @@ def _default_loopconf_parse(root):
 
     def _parse(path):
         if "fn" not in _cache:
-            mod = _load_module_from_path(os.path.join(root, "bin", "loopconf.py"),
-                                          "_loops_dashboard_loopconf")
+            mod = _load_module_from_path(
+                os.path.join(root, "bin", "loopconf.py"), "_loops_dashboard_loopconf"
+            )
             _cache["fn"] = mod.parse
         return _cache["fn"](path)
 
@@ -66,8 +68,9 @@ def _default_schedule_parse(root):
 
     def _parse(spec):
         if "fn" not in _cache:
-            mod = _load_module_from_path(os.path.join(root, "bin", "schedule.py"),
-                                          "_loops_dashboard_schedule")
+            mod = _load_module_from_path(
+                os.path.join(root, "bin", "schedule.py"), "_loops_dashboard_schedule"
+            )
             _cache["fn"] = mod.parse
         return _cache["fn"](spec)
 
@@ -78,9 +81,27 @@ def _default_schedule_parse(root):
 # Pure logic — precedence, staleness, disposition text. Unit-testable without any I/O.
 # --------------------------------------------------------------------------------------------
 
-HARNESS_PROBLEM_STATUSES = {"auth-failed", "tool-denied", "contract-violation", "harness-error"}
+HARNESS_PROBLEM_STATUSES = {
+    "auth-failed",
+    "tool-denied",
+    "contract-violation",
+    "harness-error",
+}
 
 _STATUS_COLOR = {"ok": "green", "warn": "amber", "alert": "red"}
+
+
+# Runner statuses that mean "this run did not produce a valid report" (§4.3) —
+# these get their why surfaced on the page and, for the latest run, a handoff block.
+FAILURE_STATUSES = {
+    "precheck-failed",
+    "engine-failed",
+    "engine-timeout",
+    "auth-failed",
+    "tool-denied",
+    "contract-violation",
+    "harness-error",
+}
 
 
 def status_color(effective_status):
@@ -283,7 +304,9 @@ def next_run_estimate(spec, last_started_at, now):
         return _next_time_of_day(hhmm, now)
     if spec.startswith("times:"):
         times = spec.split(":", 1)[1].split(",")
-        candidates = [t for t in (_next_time_of_day(t.strip(), now) for t in times) if t]
+        candidates = [
+            t for t in (_next_time_of_day(t.strip(), now) for t in times) if t
+        ]
         return min(candidates) if candidates else None
     if spec.startswith("weekly:"):
         _, day, hhmm = spec.split(":", 2)
@@ -367,7 +390,8 @@ def _latest_run(conn, loop_name):
     if conn is None:
         return None
     row = conn.execute(
-        "SELECT * FROM runs WHERE loop_name=? ORDER BY started_at DESC LIMIT 1", (loop_name,)
+        "SELECT * FROM runs WHERE loop_name=? ORDER BY started_at DESC LIMIT 1",
+        (loop_name,),
     ).fetchone()
     return dict(row) if row else None
 
@@ -449,7 +473,8 @@ def _latest_heartbeat(conn, loop_name):
     if conn is None:
         return None
     row = conn.execute(
-        "SELECT * FROM heartbeats WHERE loop_name=? ORDER BY ts DESC LIMIT 1", (loop_name,)
+        "SELECT * FROM heartbeats WHERE loop_name=? ORDER BY ts DESC LIMIT 1",
+        (loop_name,),
     ).fetchone()
     return dict(row) if row else None
 
@@ -547,6 +572,18 @@ table.list-panel td, table.list-panel th { padding: 0.15rem 0.5rem; }
 .runs-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 0.5rem; }
 .runs-table th { text-align: left; color: #808a99; font-weight: 600; padding: 0.25rem 0.5rem; border-bottom: 1px solid #232a36; }
 .runs-table td { padding: 0.25rem 0.5rem; border-bottom: 1px solid #171c25; }
+.fail-detail { color: #ff9d9d; font-size: 0.8rem; }
+details.handoff { margin: 0.7rem 0; border: 1px solid #7a3a3a; border-radius: 6px; background: #241416; }
+details.handoff summary { cursor: pointer; color: #ff9d9d; font-weight: 600; font-size: 0.85rem; padding: 0.5rem 0.7rem; }
+details.handoff .hint { color: #808a99; font-size: 0.75rem; padding: 0 0.7rem 0.4rem; }
+details.handoff textarea {
+  display: block; width: calc(100% - 1.4rem); margin: 0 0.7rem 0.7rem; height: 9.5rem;
+  background: #0b0e14; color: #d7dce3; border: 1px solid #232a36; border-radius: 4px;
+  font: 0.76rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 0.5rem; resize: vertical;
+}
+details.report-drawer summary { cursor: pointer; color: #808a99; font-size: 0.8rem; margin-top: 0.7rem; }
+.report-drawer pre { background: #0b0e14; padding: 0.6rem; border-radius: 6px; overflow-x: auto;
+  font-size: 0.78rem; white-space: pre-wrap; word-break: break-word; }
 details.raw-fallback summary { cursor: pointer; color: #808a99; font-size: 0.8rem; margin-top: 0.7rem; }
 .raw-fallback pre { background: #0b0e14; padding: 0.6rem; border-radius: 6px; overflow-x: auto; font-size: 0.76rem; }
 .hb { font-size: 0.85rem; margin: 0.5rem 0; }
@@ -577,7 +614,13 @@ def _render_panel_number(panel, metric_row, now, conn=None, loop_name=None):
                 val = metric_row.get("text")
     missing = panel.get("missing", "gap")
     key = panel.get("metric", "")
-    if val is None and missing == "hold" and conn is not None and loop_name is not None and key:
+    if (
+        val is None
+        and missing == "hold"
+        and conn is not None
+        and loop_name is not None
+        and key
+    ):
         # §9.3: "hold" carries the previous value forward, marked stale.
         prior = conn.execute(
             "SELECT num, text FROM metrics WHERE loop_name=? AND key=? AND num IS NOT NULL "
@@ -591,9 +634,13 @@ def _render_panel_number(panel, metric_row, now, conn=None, loop_name=None):
     cls = ""
     thresholds = panel.get("thresholds") or {}
     if isinstance(val, (int, float)):
-        if "alert" in thresholds and _breaches(val, thresholds["alert"], panel.get("direction")):
+        if "alert" in thresholds and _breaches(
+            val, thresholds["alert"], panel.get("direction")
+        ):
             cls = "alert"
-        elif "warn" in thresholds and _breaches(val, thresholds["warn"], panel.get("direction")):
+        elif "warn" in thresholds and _breaches(
+            val, thresholds["warn"], panel.get("direction")
+        ):
             cls = "warn"
     if val is None:
         display = "—"
@@ -604,9 +651,13 @@ def _render_panel_number(panel, metric_row, now, conn=None, loop_name=None):
     else:
         display = e(str(val))
     unit = panel.get("unit", "")
-    held_badge = '<span class="badge stale" title="carried forward — no fresh value this run">hold</span>' if is_held else ""
+    held_badge = (
+        '<span class="badge stale" title="carried forward — no fresh value this run">hold</span>'
+        if is_held
+        else ""
+    )
     return (
-        f'<div class="panel"><div class="title">{e(panel.get("title", panel.get("metric","")))}</div>'
+        f'<div class="panel"><div class="title">{e(panel.get("title", panel.get("metric", "")))}</div>'
         f'<div class="value {cls}">{display}{" " + e(unit) if unit and val is not None else ""}'
         f"{held_badge}</div></div>"
     )
@@ -652,7 +703,8 @@ def _render_panel_table_or_list(panel, metric_row):
                     cols.append(k)
         thead = "".join(f"<th>{e(c)}</th>" for c in cols)
         trs = "".join(
-            "<tr>" + "".join(f"<td>{e(row.get(c, ''))}</td>" for c in cols) + "</tr>" for row in data
+            "<tr>" + "".join(f"<td>{e(row.get(c, ''))}</td>" for c in cols) + "</tr>"
+            for row in data
         )
         table_html = f'<table class="list-panel"><thead><tr>{thead}</tr></thead><tbody>{trs}</tbody></table>'
     else:
@@ -672,11 +724,19 @@ def _render_panels(dashboard_json, conn, loop_name, run_metrics_by_key, now):
         if ptype == "trend":
             out.append(_render_panel_trend(panel, conn, loop_name, now))
         elif ptype in ("table", "list"):
-            out.append(_render_panel_table_or_list(panel, run_metrics_by_key.get(metric_key)))
+            out.append(
+                _render_panel_table_or_list(panel, run_metrics_by_key.get(metric_key))
+            )
         else:
-            out.append(_render_panel_number(
-                panel, run_metrics_by_key.get(metric_key), now, conn=conn, loop_name=loop_name
-            ))
+            out.append(
+                _render_panel_number(
+                    panel,
+                    run_metrics_by_key.get(metric_key),
+                    now,
+                    conn=conn,
+                    loop_name=loop_name,
+                )
+            )
     return f'<div class="panels">{"".join(out)}</div>', declared_keys
 
 
@@ -690,7 +750,7 @@ def _render_raw_fallback(run_metrics, declared_keys, report_href):
             val = fmt_num(m["num"]) if float(m["num"]).is_integer() else str(m["num"])
         else:
             val = truncate_value(m.get("text") or "", 2048)
-        lines.append(f'{e(m["key"])}: {e(val)}')
+        lines.append(f"{e(m['key'])}: {e(val)}")
     body = "\n".join(lines)
     link = f' — <a href="{e(report_href)}">full report</a>' if report_href else ""
     return (
@@ -716,7 +776,7 @@ def _render_findings(conn, loop_name, latest_json, now):
         created_at = disp.get("created_at") if disp else None
         suppressed = is_suppressed(action, snooze_until, now)
         dtext = disposition_text(action, note, snooze_until, created_at)
-        recurrence = f'{ordinal(f["times_seen"])} report'
+        recurrence = f"{ordinal(f['times_seen'])} report"
         if dtext:
             recurrence += f" · {dtext}"
         title = f["title"]
@@ -752,18 +812,25 @@ def _render_recent_runs(runs, now):
     for r in runs:
         color, marker = compute_light(r["runner_status"], r["effective_status"])
         light = _light_html(color, marker)
+        detail = ""
+        if r["runner_status"] in FAILURE_STATUSES:
+            parts = [p for p in (r.get("error_detail"),) if p]
+            if r.get("exit_code") is not None:
+                parts.append(f"exit {r['exit_code']}")
+            if parts:
+                detail = f'<span class="fail-detail">{e("; ".join(parts))}</span>'
         rows.append(
             "<tr>"
             f"<td>{light}</td>"
-            f'<td>{e(format_relative(r["started_at"], now))}</td>'
-            f'<td>{e(r["runner_status"])}</td>'
-            f'<td>{e(r.get("effective_status") or "—")}</td>'
-            f'<td>{e(r.get("headline") or "")}</td>'
+            f"<td>{e(format_relative(r['started_at'], now))}</td>"
+            f"<td>{e(r['runner_status'])}</td>"
+            f"<td>{e(r.get('effective_status') or '—')}</td>"
+            f"<td>{e(r.get('headline') or '')}{detail}</td>"
             "</tr>"
         )
     return (
         '<table class="runs-table"><thead><tr><th></th><th>Started</th><th>Runner status</th>'
-        f'<th>Status</th><th>Headline</th></tr></thead><tbody>{"".join(rows)}</tbody></table>'
+        f"<th>Status</th><th>Headline / detail</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
     )
 
 
@@ -780,6 +847,10 @@ def _render_loop_row(loop, now):
     if latest:
         last_run = f'{e(format_relative(latest["started_at"], now))} <span class="muted">({e(latest["started_at"])})</span>'
         headline = e(latest.get("headline") or "")
+        if not headline and latest["runner_status"] in FAILURE_STATUSES:
+            # failed runs have no headline — surface the why instead of a blank cell
+            why = latest.get("error_detail") or latest["runner_status"]
+            headline = f'<span class="fail-detail">{e(why)}</span>'
     else:
         last_run = '<span class="muted">never run</span>'
         headline = '<span class="muted">no data</span>'
@@ -793,7 +864,7 @@ def _render_loop_row(loop, now):
         report_link = f'<a href="{e(loop["report_href"])}">latest</a>'
     return (
         "<tr>"
-        f'<td>{light}</td>'
+        f"<td>{light}</td>"
         f'<td class="loop-name"><a href="#loop-{e(loop["name"])}">{e(loop["name"])}</a>'
         f'<div class="muted">{e(loop["description"])}</div></td>'
         f"<td>{headline}</td>"
@@ -802,6 +873,57 @@ def _render_loop_row(loop, now):
         f"<td>{spend_html}</td>"
         f"<td>{report_link}</td>"
         "</tr>"
+    )
+
+
+HANDOFF_TEMPLATE = """In the loops harness checkout at {root}: run {run_id} of loop {name} failed.
+runner_status={runner_status}; exit_code={exit_code}; error_detail: {error_detail}
+Artifacts: state/runs/{run_id}/ (engine.log, engine.status, precheck.out, prompt.composed.md, usage.json) and loops.d/{name}/ (loop.conf, precheck.sh, prompt.md).
+Reference: docs/INTERFACES.md (section 4: runner algorithm + status enum; sections 6-7: engine adapters), docs/ENGINE_PROBES.md for verified engine CLI behavior.
+Diagnose the root cause and propose a fix. Harness internals are a frozen contract (docs/INTERFACES.md) - if the fix needs a harness change, say so explicitly rather than patching silently."""
+
+
+def _render_handoff(loop):
+    """Paste-into-an-agent block for the latest run, rendered only when that run failed.
+    Deterministic template over sqlite fields — same pattern as the findings dismiss cmd."""
+    latest = loop["latest_run"]
+    if not latest or latest["runner_status"] not in FAILURE_STATUSES:
+        return ""
+    text = HANDOFF_TEMPLATE.format(
+        root=loop["root"],
+        run_id=latest["run_id"],
+        name=loop["name"],
+        runner_status=latest["runner_status"],
+        exit_code=latest.get("exit_code")
+        if latest.get("exit_code") is not None
+        else "n/a",
+        error_detail=latest.get("error_detail") or "(none recorded)",
+    )
+    return (
+        '<details class="handoff" open><summary>Run failed — agent handoff</summary>'
+        '<div class="hint">Click the text to select it, then copy and paste into an agent.</div>'
+        f'<textarea readonly onclick="this.select()">{e(text)}</textarea></details>'
+    )
+
+
+def _render_report_drawer(latest_json, report_href, clamp_bytes=8192):
+    """Inline latest report_markdown, escaped and clamped, collapsed by default.
+    The markdown is displayed as text, never parsed; the full-report link stays."""
+    if not latest_json:
+        return ""
+    md = latest_json.get("report_markdown") or ""
+    if not md.strip():
+        return ""
+    clamped = md
+    if len(clamped.encode("utf-8", errors="replace")) > clamp_bytes:
+        clamped = clamped.encode("utf-8", errors="replace")[:clamp_bytes].decode(
+            "utf-8", errors="replace"
+        )
+        clamped += "\n…[truncated — see full report]"
+    link = f' — <a href="{e(report_href)}">full report</a>' if report_href else ""
+    return (
+        f'<details class="report-drawer"><summary>Report{link}</summary>'
+        f"<pre>{e(clamped)}</pre></details>"
     )
 
 
@@ -823,8 +945,12 @@ def _render_loop_section(loop, conn, now):
         loop["dashboard_json"], conn, loop["name"], run_metrics_by_key, now
     )
     findings_html = _render_findings(conn, loop["name"], loop["latest_json"], now)
+    handoff_html = _render_handoff(loop)
+    report_drawer_html = _render_report_drawer(loop["latest_json"], loop["report_href"])
     recent_runs_html = _render_recent_runs(loop["recent_runs"], now)
-    raw_fallback_html = _render_raw_fallback(run_metrics, declared_keys, loop["report_href"])
+    raw_fallback_html = _render_raw_fallback(
+        run_metrics, declared_keys, loop["report_href"]
+    )
 
     hb_html = ""
     if loop["conf"].get("type") == "watchdog":
@@ -834,7 +960,7 @@ def _render_loop_section(loop, conn, now):
             hb_text = "probe ok" if hb["ok"] else "probe failed"
             hb_html = (
                 f'<div class="hb">{_light_html(hb_color)}Heartbeat: {e(hb_text)} '
-                f'&mdash; {e(format_relative(hb["ts"], now))}</div>'
+                f"&mdash; {e(format_relative(hb['ts'], now))}</div>"
             )
         else:
             hb_html = '<div class="hb muted">Heartbeat: no probes recorded</div>'
@@ -843,8 +969,10 @@ def _render_loop_section(loop, conn, now):
         f'<section class="loop" id="loop-{e(loop["name"])}">'
         f'<h2>{light}{e(loop["name"])} <span class="muted">{e(loop["description"])}</span></h2>'
         f"{hb_html}"
+        f"{handoff_html}"
         f"{panels_html}"
         f"{findings_html}"
+        f"{report_drawer_html}"
         f"<h3>Recent runs</h3>{recent_runs_html}"
         f"{raw_fallback_html}"
         "</section>"
@@ -884,7 +1012,9 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
 
     died = False
     if latest_run is not None:
-        died = is_died(latest_run.get("finished_at"), latest_run["started_at"], timeout_s, now)
+        died = is_died(
+            latest_run.get("finished_at"), latest_run["started_at"], timeout_s, now
+        )
 
     stale = False
     if latest_run is not None and not died:
@@ -910,14 +1040,17 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
     next_run_dt = next_run_estimate(
         schedule_spec, latest_run["started_at"] if latest_run else None, now
     )
-    next_run_text = format_relative(
-        next_run_dt.strftime("%Y-%m-%dT%H:%M:%SZ"), now
-    ) if next_run_dt else "—"
+    next_run_text = (
+        format_relative(next_run_dt.strftime("%Y-%m-%dT%H:%M:%SZ"), now)
+        if next_run_dt
+        else "—"
+    )
 
     needs_attention = (light_color in ("amber", "red")) or stale or died
 
     return {
         "name": name,
+        "root": root,
         "conf": conf,
         "conf_errors": errors,
         "description": conf.get("description", ""),
@@ -938,7 +1071,9 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
     }
 
 
-def generate(root=None, out_file=None, loopconf_parse=None, schedule_parse=None, now=None):
+def generate(
+    root=None, out_file=None, loopconf_parse=None, schedule_parse=None, now=None
+):
     """Generates dashboard/loops.html. Writes via tmp-file + os.rename (atomic)."""
     root = root or os.environ.get("LOOPS_ROOT") or os.getcwd()
     root = os.path.abspath(root)
@@ -966,7 +1101,9 @@ def generate(root=None, out_file=None, loopconf_parse=None, schedule_parse=None,
         spend_today = _fleet_spend(conn, since_today)
         spend_7d_fleet = _fleet_spend(conn, since_7d)
 
-        html = _render_page(loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn)
+        html = _render_page(
+            loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn
+        )
     finally:
         if conn is not None:
             conn.close()
@@ -975,11 +1112,14 @@ def generate(root=None, out_file=None, loopconf_parse=None, schedule_parse=None,
     return out_file
 
 
-def _render_page(loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn):
+def _render_page(
+    loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn
+):
     top_chips = "".join(
         f'<span class="chip"><span class="dot" style="background:'
         f'{_color_hex(c)}"></span>{c} {n}</span>'
-        for c, n in counts.items() if n
+        for c, n in counts.items()
+        if n
     )
     na_chip = (
         f'<span class="chip needs-attention">needs attention {needs_attention_count}</span>'
@@ -1021,19 +1161,22 @@ def _render_page(loops, counts, needs_attention_count, spend_today, spend_7d_fle
 
 
 def _color_hex(name):
-    return {"green": "#37d67a", "amber": "#f2b23c", "red": "#ff5c5c", "grey": "#4a5364"}.get(
-        name, "#4a5364"
-    )
+    return {
+        "green": "#37d67a",
+        "amber": "#f2b23c",
+        "red": "#ff5c5c",
+        "grey": "#4a5364",
+    }.get(name, "#4a5364")
 
 
 def _wrap_html(top, body):
     return (
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         "<title>loops dashboard</title>"
         f"<style>{CSS}</style></head><body>"
         f"{top}{body}"
-        '<footer>loops harness — static dashboard, report/propose-only</footer>'
+        "<footer>loops harness — static dashboard, report/propose-only</footer>"
         "</body></html>"
     )
 
@@ -1041,7 +1184,9 @@ def _wrap_html(top, body):
 def _atomic_write(out_file, content):
     out_dir = os.path.dirname(out_file)
     os.makedirs(out_dir, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix=".loops-dashboard-", suffix=".tmp", dir=out_dir)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".loops-dashboard-", suffix=".tmp", dir=out_dir
+    )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
@@ -1062,9 +1207,17 @@ def _atomic_write(out_file, content):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Generate the static loops status dashboard.")
-    parser.add_argument("--root", default=None, help="LOOPS_ROOT (default: $LOOPS_ROOT or cwd)")
-    parser.add_argument("--out", default=None, help="output HTML path (default: <root>/dashboard/loops.html)")
+    parser = argparse.ArgumentParser(
+        description="Generate the static loops status dashboard."
+    )
+    parser.add_argument(
+        "--root", default=None, help="LOOPS_ROOT (default: $LOOPS_ROOT or cwd)"
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="output HTML path (default: <root>/dashboard/loops.html)",
+    )
     args = parser.parse_args(argv)
     out = generate(root=args.root, out_file=args.out)
     print(out)

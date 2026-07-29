@@ -742,6 +742,18 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   findings shown greyed/collapsed, not hidden; a recent-runs table including runner_status,
   report links, and the raw fallback panel. The dashboard is static (Change 4 Option A):
   dispositions are entered via `loopctl`, and the page may display the ready-to-paste command.
+- **Failure surfacing (amendment 2026-07-29):** runs whose `runner_status` is one of
+  `precheck-failed | engine-failed | engine-timeout | auth-failed | tool-denied |
+  contract-violation | harness-error` render their `error_detail` + `exit_code` in the
+  recent-runs table and as the fleet-row headline fallback (failed runs have no headline).
+  When the **latest** run failed, the loop section shows a collapsed-open **agent handoff
+  block**: a deterministic, generator-templated paste-into-an-agent prompt built ONLY from
+  sqlite fields (`run_id`, `loop_name`, `runner_status`, `error_detail`, `exit_code`) and
+  static path/doc references — never model output. Skips/overlaps are not failures.
+- **Inline report drawer (amendment 2026-07-29):** each loop section may render
+  `report_markdown` from the suppression-filtered `latest.json` inside a collapsed
+  `<details>` — HTML-escaped, displayed as text (markdown is not parsed), clamped at 8 KiB
+  with a truncation marker; the `latest.md` link is retained alongside.
 - Style: bold and distinctive, not generic corporate; dark-friendly; function first, dense over
   airy. It is a status board read at a glance, not a marketing page.
 

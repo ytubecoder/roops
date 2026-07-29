@@ -1,4 +1,5 @@
 """Tests for bin/db.py — §3 sqlite schema + CLI."""
+
 import importlib.util
 import json
 import os
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -59,7 +61,14 @@ class TestInit(DbTestCase):
             row["name"]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        for t in ["runs", "heartbeats", "metrics", "findings", "dispositions", "schema_meta"]:
+        for t in [
+            "runs",
+            "heartbeats",
+            "metrics",
+            "findings",
+            "dispositions",
+            "schema_meta",
+        ]:
             self.assertIn(t, names)
 
     def test_schema_version_set(self):
@@ -91,11 +100,23 @@ class TestInit(DbTestCase):
 
 class TestStartFinishRun(DbTestCase):
     def test_start_run_inserts_row(self):
-        r = run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
+        r = run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         conn = self.raw_conn()
         row = conn.execute("SELECT * FROM runs WHERE run_id='run1'").fetchone()
@@ -106,16 +127,40 @@ class TestStartFinishRun(DbTestCase):
         self.assertIsNone(row["finished_at"])
 
     def test_finish_run_updates_and_computes_duration(self):
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
-        r = run_cli([
-            "finish-run", "--root", self.tmp, "--run-id", "run1",
-            "--runner-status", "completed", "--loop-status", "ok",
-            "--effective-status", "ok", "--finished-at", "2026-07-22T14:00:05Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
+        r = run_cli(
+            [
+                "finish-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--runner-status",
+                "completed",
+                "--loop-status",
+                "ok",
+                "--effective-status",
+                "ok",
+                "--finished-at",
+                "2026-07-22T14:00:05Z",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         conn = self.raw_conn()
         row = conn.execute("SELECT * FROM runs WHERE run_id='run1'").fetchone()
@@ -125,47 +170,93 @@ class TestStartFinishRun(DbTestCase):
         self.assertEqual(row["duration_ms"], 5000)
 
     def test_finish_run_is_idempotent_update(self):
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
         for _ in range(2):
-            r = run_cli([
-                "finish-run", "--root", self.tmp, "--run-id", "run1",
-                "--runner-status", "completed", "--finished-at",
-                "2026-07-22T14:00:05Z",
-            ])
+            r = run_cli(
+                [
+                    "finish-run",
+                    "--root",
+                    self.tmp,
+                    "--run-id",
+                    "run1",
+                    "--runner-status",
+                    "completed",
+                    "--finished-at",
+                    "2026-07-22T14:00:05Z",
+                ]
+            )
             self.assertEqual(r.returncode, 0)
         conn = self.raw_conn()
-        count = conn.execute("SELECT COUNT(*) c FROM runs WHERE run_id='run1'").fetchone()["c"]
+        count = conn.execute(
+            "SELECT COUNT(*) c FROM runs WHERE run_id='run1'"
+        ).fetchone()["c"]
         self.assertEqual(count, 1)
 
     def test_finish_run_usage_codex_shape(self):
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
         usage_file = Path(self.tmp) / "usage.json"
         lines = [
             json.dumps({"type": "some.other.event"}),
-            json.dumps({
-                "type": "turn.completed",
-                "usage": {
-                    "input_tokens": 100,
-                    "cached_input_tokens": 10,
-                    "output_tokens": 50,
-                    "reasoning_output_tokens": 5,
-                },
-            }),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 10,
+                        "output_tokens": 50,
+                        "reasoning_output_tokens": 5,
+                    },
+                }
+            ),
         ]
         usage_file.write_text("\n".join(lines) + "\n")
-        r = run_cli([
-            "finish-run", "--root", self.tmp, "--run-id", "run1",
-            "--runner-status", "completed", "--usage-file", str(usage_file),
-            "--finished-at", "2026-07-22T14:00:05Z",
-        ])
+        r = run_cli(
+            [
+                "finish-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--runner-status",
+                "completed",
+                "--usage-file",
+                str(usage_file),
+                "--finished-at",
+                "2026-07-22T14:00:05Z",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         conn = self.raw_conn()
         row = conn.execute("SELECT * FROM runs WHERE run_id='run1'").fetchone()
@@ -176,11 +267,23 @@ class TestStartFinishRun(DbTestCase):
         self.assertIn("turn.completed", row["usage_raw"])
 
     def test_finish_run_usage_claude_shape(self):
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--engine", "claude", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--engine",
+                "claude",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
         usage_file = Path(self.tmp) / "usage.json"
         payload = {
             "usage": {"input_tokens": 200, "output_tokens": 80},
@@ -188,11 +291,21 @@ class TestStartFinishRun(DbTestCase):
             "session_id": "abc",
         }
         usage_file.write_text(json.dumps(payload))
-        r = run_cli([
-            "finish-run", "--root", self.tmp, "--run-id", "run1",
-            "--runner-status", "completed", "--usage-file", str(usage_file),
-            "--finished-at", "2026-07-22T14:00:05Z",
-        ])
+        r = run_cli(
+            [
+                "finish-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--runner-status",
+                "completed",
+                "--usage-file",
+                str(usage_file),
+                "--finished-at",
+                "2026-07-22T14:00:05Z",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         conn = self.raw_conn()
         row = conn.execute("SELECT * FROM runs WHERE run_id='run1'").fetchone()
@@ -205,11 +318,23 @@ class TestStartFinishRun(DbTestCase):
     def test_finish_run_usage_bare_codex_shape(self):
         # engines/codex.sh writes usage.json as the bare turn.completed
         # .usage object, unwrapped — no "usage" key, no JSONL envelope.
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
         usage_file = Path(self.tmp) / "usage.json"
         payload = {
             "input_tokens": 13577,
@@ -218,11 +343,21 @@ class TestStartFinishRun(DbTestCase):
             "reasoning_output_tokens": 516,
         }
         usage_file.write_text(json.dumps(payload))
-        r = run_cli([
-            "finish-run", "--root", self.tmp, "--run-id", "run1",
-            "--runner-status", "completed", "--usage-file", str(usage_file),
-            "--finished-at", "2026-07-22T14:00:05Z",
-        ])
+        r = run_cli(
+            [
+                "finish-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--runner-status",
+                "completed",
+                "--usage-file",
+                str(usage_file),
+                "--finished-at",
+                "2026-07-22T14:00:05Z",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         conn = self.raw_conn()
         row = conn.execute("SELECT * FROM runs WHERE run_id='run1'").fetchone()
@@ -237,11 +372,23 @@ class TestStartFinishRun(DbTestCase):
         # input_tokens/output_tokens (in addition to the nested "usage"
         # sub-object) must still parse as claude-style — the richer shape
         # wins over the bare-object fallback.
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--engine", "claude", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--engine",
+                "claude",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
         usage_file = Path(self.tmp) / "usage.json"
         payload = {
             "input_tokens": 999999,
@@ -251,11 +398,21 @@ class TestStartFinishRun(DbTestCase):
             "session_id": "abc",
         }
         usage_file.write_text(json.dumps(payload))
-        r = run_cli([
-            "finish-run", "--root", self.tmp, "--run-id", "run1",
-            "--runner-status", "completed", "--usage-file", str(usage_file),
-            "--finished-at", "2026-07-22T14:00:05Z",
-        ])
+        r = run_cli(
+            [
+                "finish-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--runner-status",
+                "completed",
+                "--usage-file",
+                str(usage_file),
+                "--finished-at",
+                "2026-07-22T14:00:05Z",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         conn = self.raw_conn()
         row = conn.execute("SELECT * FROM runs WHERE run_id='run1'").fetchone()
@@ -265,18 +422,40 @@ class TestStartFinishRun(DbTestCase):
         self.assertAlmostEqual(row["cost_usd"], 0.018568)
 
     def test_finish_run_usage_garbage_never_crashes(self):
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
         usage_file = Path(self.tmp) / "usage.json"
         usage_file.write_text("not json at all { garbage")
-        r = run_cli([
-            "finish-run", "--root", self.tmp, "--run-id", "run1",
-            "--runner-status", "completed", "--usage-file", str(usage_file),
-            "--finished-at", "2026-07-22T14:00:05Z",
-        ])
+        r = run_cli(
+            [
+                "finish-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--runner-status",
+                "completed",
+                "--usage-file",
+                str(usage_file),
+                "--finished-at",
+                "2026-07-22T14:00:05Z",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         conn = self.raw_conn()
         row = conn.execute("SELECT * FROM runs WHERE run_id='run1'").fetchone()
@@ -285,28 +464,59 @@ class TestStartFinishRun(DbTestCase):
         self.assertEqual(row["usage_raw"], "not json at all { garbage")
 
     def test_finish_run_missing_usage_file_does_not_crash(self):
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
-        r = run_cli([
-            "finish-run", "--root", self.tmp, "--run-id", "run1",
-            "--runner-status", "completed",
-            "--finished-at", "2026-07-22T14:00:05Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
+        r = run_cli(
+            [
+                "finish-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--runner-status",
+                "completed",
+                "--finished-at",
+                "2026-07-22T14:00:05Z",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
 
 
 class TestHeartbeat(DbTestCase):
     def test_heartbeat_inserts_row(self):
-        r = run_cli([
-            "heartbeat", "--root", self.tmp, "--loop", "myloop", "--ok", "1",
-            "--detail", "probe ok",
-        ])
+        r = run_cli(
+            [
+                "heartbeat",
+                "--root",
+                self.tmp,
+                "--loop",
+                "myloop",
+                "--ok",
+                "1",
+                "--detail",
+                "probe ok",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         conn = self.raw_conn()
-        row = conn.execute("SELECT * FROM heartbeats WHERE loop_name='myloop'").fetchone()
+        row = conn.execute(
+            "SELECT * FROM heartbeats WHERE loop_name='myloop'"
+        ).fetchone()
         self.assertEqual(row["ok"], 1)
         self.assertEqual(row["detail"], "probe ok")
 
@@ -314,7 +524,9 @@ class TestHeartbeat(DbTestCase):
         r = run_cli(["heartbeat", "--root", self.tmp, "--loop", "myloop", "--ok", "0"])
         self.assertEqual(r.returncode, 0)
         conn = self.raw_conn()
-        row = conn.execute("SELECT * FROM heartbeats WHERE loop_name='myloop'").fetchone()
+        row = conn.execute(
+            "SELECT * FROM heartbeats WHERE loop_name='myloop'"
+        ).fetchone()
         self.assertEqual(row["ok"], 0)
 
 
@@ -382,11 +594,23 @@ class TestFlattenMetrics(unittest.TestCase):
 
 class TestRecordMetrics(DbTestCase):
     def test_record_metrics_end_to_end(self):
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
         contract_file = Path(self.tmp) / "contract.json"
         contract = {
             "schema_version": 1,
@@ -399,10 +623,19 @@ class TestRecordMetrics(DbTestCase):
             "findings": [],
         }
         contract_file.write_text(json.dumps(contract))
-        r = run_cli([
-            "record-metrics", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--contract-file", str(contract_file),
-        ])
+        r = run_cli(
+            [
+                "record-metrics",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--contract-file",
+                str(contract_file),
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         conn = self.raw_conn()
         rows = {
@@ -413,11 +646,23 @@ class TestRecordMetrics(DbTestCase):
         self.assertEqual(rows["repos.unpushed"], 3.0)
 
     def test_record_metrics_garbage_metrics_string_never_crashes(self):
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
         contract_file = Path(self.tmp) / "contract.json"
         contract = {
             "schema_version": 1,
@@ -430,10 +675,19 @@ class TestRecordMetrics(DbTestCase):
             "findings": [],
         }
         contract_file.write_text(json.dumps(contract))
-        r = run_cli([
-            "record-metrics", "--root", self.tmp, "--run-id", "run1", "--loop", "myloop",
-            "--contract-file", str(contract_file),
-        ])
+        r = run_cli(
+            [
+                "record-metrics",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "myloop",
+                "--contract-file",
+                str(contract_file),
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
 
 
@@ -468,10 +722,21 @@ class TestFindingsLifecycle(DbTestCase):
     def upsert(self, run_id, findings, ts):
         contract_file = Path(self.tmp) / f"{run_id}.json"
         contract_file.write_text(json.dumps(make_contract(run_id, findings)))
-        r = run_cli([
-            "upsert-findings", "--root", self.tmp, "--run-id", run_id, "--loop", "myloop",
-            "--contract-file", str(contract_file), "--ts", ts,
-        ])
+        r = run_cli(
+            [
+                "upsert-findings",
+                "--root",
+                self.tmp,
+                "--run-id",
+                run_id,
+                "--loop",
+                "myloop",
+                "--contract-file",
+                str(contract_file),
+                "--ts",
+                ts,
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         return json.loads(r.stdout)
 
@@ -534,16 +799,34 @@ class TestPriorFindings(DbTestCase):
     def upsert(self, run_id, findings, ts):
         contract_file = Path(self.tmp) / f"{run_id}.json"
         contract_file.write_text(json.dumps(make_contract(run_id, findings)))
-        r = run_cli([
-            "upsert-findings", "--root", self.tmp, "--run-id", run_id, "--loop", "myloop",
-            "--contract-file", str(contract_file), "--ts", ts,
-        ])
+        r = run_cli(
+            [
+                "upsert-findings",
+                "--root",
+                self.tmp,
+                "--run-id",
+                run_id,
+                "--loop",
+                "myloop",
+                "--contract-file",
+                str(contract_file),
+                "--ts",
+                ts,
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
 
     def dispose(self, finding_id, action, note=None, until=None):
         args = [
-            "dispose", "--root", self.tmp, "--loop", "myloop",
-            "--finding-id", finding_id, "--action", action,
+            "dispose",
+            "--root",
+            self.tmp,
+            "--loop",
+            "myloop",
+            "--finding-id",
+            finding_id,
+            "--action",
+            action,
         ]
         if note is not None:
             args += ["--note", note]
@@ -599,15 +882,33 @@ class TestDisposeAndSuppression(DbTestCase):
     def upsert(self, run_id, findings, ts):
         contract_file = Path(self.tmp) / f"{run_id}.json"
         contract_file.write_text(json.dumps(make_contract(run_id, findings)))
-        run_cli([
-            "upsert-findings", "--root", self.tmp, "--run-id", run_id, "--loop", "myloop",
-            "--contract-file", str(contract_file), "--ts", ts,
-        ])
+        run_cli(
+            [
+                "upsert-findings",
+                "--root",
+                self.tmp,
+                "--run-id",
+                run_id,
+                "--loop",
+                "myloop",
+                "--contract-file",
+                str(contract_file),
+                "--ts",
+                ts,
+            ]
+        )
 
     def dispose(self, finding_id, action, note=None, until=None):
         args = [
-            "dispose", "--root", self.tmp, "--loop", "myloop",
-            "--finding-id", finding_id, "--action", action,
+            "dispose",
+            "--root",
+            self.tmp,
+            "--loop",
+            "myloop",
+            "--finding-id",
+            finding_id,
+            "--action",
+            action,
         ]
         if note is not None:
             args += ["--note", note]
@@ -722,15 +1023,36 @@ class TestDisposeAndSuppression(DbTestCase):
 
 class TestQuery(DbTestCase):
     def test_loops_summary(self):
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "loopA",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
-        run_cli([
-            "finish-run", "--root", self.tmp, "--run-id", "run1",
-            "--runner-status", "completed", "--finished-at", "2026-07-22T14:00:05Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "loopA",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
+        run_cli(
+            [
+                "finish-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--runner-status",
+                "completed",
+                "--finished-at",
+                "2026-07-22T14:00:05Z",
+            ]
+        )
         r = run_cli(["query", "loops-summary", "--root", self.tmp])
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         data = json.loads(r.stdout)
@@ -739,34 +1061,90 @@ class TestQuery(DbTestCase):
 
     def test_last_runs(self):
         for i in range(3):
-            run_cli([
-                "start-run", "--root", self.tmp, "--run-id", f"run{i}", "--loop", "loopA",
-                "--engine", "codex", "--trigger", "manual", "--started-at",
-                f"2026-07-2{i}T14:00:00Z",
-            ])
-        r = run_cli(["query", "last-runs", "--root", self.tmp, "--loop", "loopA", "--limit", "2"])
+            run_cli(
+                [
+                    "start-run",
+                    "--root",
+                    self.tmp,
+                    "--run-id",
+                    f"run{i}",
+                    "--loop",
+                    "loopA",
+                    "--engine",
+                    "codex",
+                    "--trigger",
+                    "manual",
+                    "--started-at",
+                    f"2026-07-2{i}T14:00:00Z",
+                ]
+            )
+        r = run_cli(
+            [
+                "query",
+                "last-runs",
+                "--root",
+                self.tmp,
+                "--loop",
+                "loopA",
+                "--limit",
+                "2",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         data = json.loads(r.stdout)
         self.assertEqual(len(data), 2)
 
     def test_metric_history(self):
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "loopA",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "loopA",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                "2026-07-22T14:00:00Z",
+            ]
+        )
         contract_file = Path(self.tmp) / "contract.json"
-        contract_file.write_text(json.dumps(make_contract("run1", [])).replace(
-            '"metrics": "{}"', '"metrics": "{\\"count\\": 7}"'
-        ))
-        run_cli([
-            "record-metrics", "--root", self.tmp, "--run-id", "run1", "--loop", "loopA",
-            "--contract-file", str(contract_file),
-        ])
-        r = run_cli([
-            "query", "metric-history", "--root", self.tmp, "--loop", "loopA",
-            "--key", "count", "--days", "30",
-        ])
+        contract_file.write_text(
+            json.dumps(make_contract("run1", [])).replace(
+                '"metrics": "{}"', '"metrics": "{\\"count\\": 7}"'
+            )
+        )
+        run_cli(
+            [
+                "record-metrics",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "loopA",
+                "--contract-file",
+                str(contract_file),
+            ]
+        )
+        r = run_cli(
+            [
+                "query",
+                "metric-history",
+                "--root",
+                self.tmp,
+                "--loop",
+                "loopA",
+                "--key",
+                "count",
+                "--days",
+                "30",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         data = json.loads(r.stdout)
         self.assertEqual(len(data), 1)
@@ -775,10 +1153,21 @@ class TestQuery(DbTestCase):
     def test_open_findings_query(self):
         contract_file = Path(self.tmp) / "contract.json"
         contract_file.write_text(json.dumps(make_contract("run1", [FINDING_A])))
-        run_cli([
-            "upsert-findings", "--root", self.tmp, "--run-id", "run1", "--loop", "loopA",
-            "--contract-file", str(contract_file), "--ts", "2026-07-01T00:00:00Z",
-        ])
+        run_cli(
+            [
+                "upsert-findings",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "loopA",
+                "--contract-file",
+                str(contract_file),
+                "--ts",
+                "2026-07-01T00:00:00Z",
+            ]
+        )
         r = run_cli(["query", "open-findings", "--root", self.tmp, "--loop", "loopA"])
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         data = json.loads(r.stdout)
@@ -788,27 +1177,68 @@ class TestQuery(DbTestCase):
     def test_heartbeats_query(self):
         run_cli(["heartbeat", "--root", self.tmp, "--loop", "loopA", "--ok", "1"])
         run_cli(["heartbeat", "--root", self.tmp, "--loop", "loopA", "--ok", "0"])
-        r = run_cli(["query", "heartbeats", "--root", self.tmp, "--loop", "loopA", "--limit", "10"])
+        r = run_cli(
+            [
+                "query",
+                "heartbeats",
+                "--root",
+                self.tmp,
+                "--loop",
+                "loopA",
+                "--limit",
+                "10",
+            ]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         data = json.loads(r.stdout)
         self.assertEqual(len(data), 2)
 
     def test_spend_query(self):
-        run_cli([
-            "start-run", "--root", self.tmp, "--run-id", "run1", "--loop", "loopA",
-            "--engine", "codex", "--trigger", "manual", "--started-at",
-            "2026-07-22T14:00:00Z",
-        ])
+        # spend windows against real wall-clock now; a pinned started_at silently
+        # ages out of the window (the original 2026-07-22 fixture died 7 days later)
+        started = datetime.now(timezone.utc) - timedelta(hours=1)
+        finished = started + timedelta(seconds=5)
+        run_cli(
+            [
+                "start-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--loop",
+                "loopA",
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ]
+        )
         usage_file = Path(self.tmp) / "usage.json"
-        usage_file.write_text(json.dumps({
-            "usage": {"input_tokens": 100, "output_tokens": 50},
-            "total_cost_usd": 0.01,
-        }))
-        run_cli([
-            "finish-run", "--root", self.tmp, "--run-id", "run1",
-            "--runner-status", "completed", "--usage-file", str(usage_file),
-            "--finished-at", "2026-07-22T14:00:05Z",
-        ])
+        usage_file.write_text(
+            json.dumps(
+                {
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                    "total_cost_usd": 0.01,
+                }
+            )
+        )
+        run_cli(
+            [
+                "finish-run",
+                "--root",
+                self.tmp,
+                "--run-id",
+                "run1",
+                "--runner-status",
+                "completed",
+                "--usage-file",
+                str(usage_file),
+                "--finished-at",
+                finished.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ]
+        )
         r = run_cli(["query", "spend", "--root", self.tmp, "--days", "7"])
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         data = json.loads(r.stdout)

@@ -47,24 +47,32 @@ $LOOPS_ROOT/
   bin/db.py                        # sqlite schema + insert/query helpers (§3)
   bin/loopconf.py                  # loop.conf parser (§5.0) — single implementation
   bin/schedule.py                  # schedule grammar parser (§5.1)
+  bin/page_envelope.py             # report-page envelope check/extract (Amendment 2, §12)
   engines/codex.sh                 # default engine adapter (§6, §7)
   engines/claude.sh                # alternate engine adapter (§6, §7)
   engines/README.md                # adapter interface spec (mirrors §6)
   contract/contract.schema.json    # tier-1 schema, single source of truth (§9)
+  pagekit/kit.css                  # shared page kit (Amendment 2)
+  pagekit/README.md
+  pagekit/reference/               # sanitized benchmark fixture + rendered reference page
   loops.d/<name>/                  # one dir per loop: loop.conf precheck.sh prompt.md dashboard.json
+  loops.d/<name>/render.sh         # OPTIONAL page renderer (Amendment 2; executable = page-enabled)
   examples/<name>/                 # pilot loops, same shape; NEVER installed to launchd
   state/loops.sqlite               # WAL; runs, heartbeats, metrics (§3)
   state/runs/<run_id>/             # contract.json, output.md, usage.json, engine.log, engine.status
   state/locks/<loop>.lock          # lock files (§2)
+  state/loop-data/<name>/          # loop-private durable state, 0700/0600 (Amendment 2)
   reports/<name>/YYYY-MM-DD-HHMM.md
   reports/<name>/latest.md         # atomically promoted symlink-free copy
   reports/<name>/latest.json       # atomically promoted copy of contract.json
+  reports/<name>/YYYY-MM-DD-HHMM.html + latest.html   # promoted report pages (Amendment 2)
   dashboard/generate.py            # → dashboard/loops.html (§10)
+  dashboard/reports.html           # reports screen (Amendment 2, §10)
   launchd/com.loops.<name>.plist   # generated; gitignored
   docs/…
 ```
 
-`state/`, `reports/`, `launchd/*.plist`, `dashboard/loops.html` are gitignored — they are runtime
+`state/`, `reports/`, `launchd/*.plist`, `dashboard/loops.html`, `dashboard/reports.html` are gitignored — they are runtime
 artifacts. Every script must create the directories it needs (`mkdir -p`) rather than assuming.
 
 ## 2. `bin/lock.py` — lock helper
@@ -287,11 +295,37 @@ Default `--from loops.d`; `--trigger manual`.
      for a run that both completed and validated — a timed-out or failed engine leaves the previous
      `latest.*` untouched. `state/runs/<id>/contract.json` always keeps the engine emission
      verbatim (audit trail).
+6.5. **Loop-data commit + report page render (Amendment 2 — only for a run that promoted
+   in step 6; failures in this step NEVER change runner_status, loop_status, or the exit
+   code — the step-7 dashboard-failure precedent):**
+   - **Loop-data commit:** every regular file in `state/runs/<id>/loop-data.commit/` is
+     moved (per-file rename) into `state/loop-data/<name>/` (`0700` dir, `0600` files,
+     created on demand). This is the ONLY write path into `state/loop-data/` — prechecks
+     read the previous state from there but write candidates into the run dir, so a run
+     that fails before promotion never consumes state (at-least-once semantics).
+   - **Render:** if `loops.d/<name>/render.sh` exists and is executable, run it with cwd
+     `loops.d/<name>/`, own process group, timeout `min(timeout_s, 300)` (additive to the
+     engine budget; `duration_ms` includes it), env: `LOOP_NAME`, `RUN_ID`, `LOOPS_ROOT`,
+     `OUT_DIR`, `LATEST_JSON` (absolute path to the promoted `reports/<name>/latest.json`),
+     `LOOP_DATA_DIR` (absolute; read-only by convention), `PAGEKIT` (absolute `pagekit/`),
+     `PAGE_OUT` (absolute `state/runs/<id>/page.html`). stdout+stderr →
+     `state/runs/<id>/page-render.log`, capped 64 KiB, redacted via `bin/redact.py`.
+   - **Promotion gate** (all via `bin/page_envelope.py check`, §12): exit 0 required —
+     file exists, non-empty, UTF-8, ≤ 8 MiB, exactly one `#report-data` envelope, required
+     meta fields typed and parseable, `meta.run_id` == RUN_ID, `meta.loop` == loop name,
+     no-external-fetch heuristic passes, redaction-clean (redacting the page is a no-op).
+   - Gate pass → promote by write-tmp-then-rename inside `reports/<name>/`: dated
+     `<YYYY-MM-DD-HHMM>.html` FIRST, then `latest.html`; print
+     `page promoted: reports/<name>/<dated>.html` to stdout. Gate fail / render error /
+     timeout → no promotion, previous `latest.html` untouched, reason appended to
+     `page-render.log`.
+   - Runs that do not reach step 6.5 (skips, failures, watchdog silent-green, `--dry-run`)
+     never render.
 7. `db.py finish-run` (incl. `effective_status`, §4.5) + `db.py record-metrics`; then regenerate the dashboard
    (`dashboard/generate.py`) under a short global lock (`state/locks/_dashboard.lock`, `--wait-s 30`);
    a dashboard failure is logged but must **not** change the run's status or the exit code.
 8. Retention: prune `reports/<name>/*` and `state/runs/*` older than `retention_days` (default 30;
-   `latest.*` never pruned). SQLite rows are kept forever.
+   `latest.md`, `latest.json`, `latest.html` never pruned (the runner's keep-list names all three explicitly — Amendment 2)). SQLite rows are kept forever.
 
 ### 4.2 Runner exit codes
 `0` = the run was recorded (including skipped/overlap/precheck cases — the common path);
@@ -636,6 +670,8 @@ marker `[FILL: <hint>]`.
 - `prompt.md` must contain a `## Finding identity` heading documenting the loop's `finding_id`
   derivation rule (seeded by the scaffold template) — missing heading = FAIL.
 - `SPEC.md` still containing any `[FILL:` placeholder = FAIL.
+- **Amendment 2:** `render.sh` present but not executable = FAIL (absent = fine, loop is
+  simply not page-enabled).
 
 ### 8.1 Install must self-verify
 `install` is not done when `launchctl bootstrap` returns. It must:
@@ -754,6 +790,16 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   `report_markdown` from the suppression-filtered `latest.json` inside a collapsed
   `<details>` — HTML-escaped, displayed as text (markdown is not parsed), clamped at 8 KiB
   with a truncation marker; the `latest.md` link is retained alongside.
+- **Report pages (Amendment 2):** the generator also writes `dashboard/reports.html`
+  (same invocation; each output tmp+rename — per-file atomic, the pair is not). Row
+  Report cells prefer `../reports/<name>/latest.html` (md link kept secondary); a page
+  whose envelope `meta.run_id` ≠ the loop's latest promoted run (newest row with
+  `runner_status='completed'` AND non-NULL `contract_path`) gets a `stale` badge. The
+  reports screen lists every loop that is page-enabled or has pages on disk: totals chips
+  + title + generated_at from the `latest.html` envelope (via `bin/page_envelope.py` —
+  display HTML is never scraped; only `latest.html` is ever parsed), dated history from
+  filenames only (capped 30), "no page yet" / "no meta" / historical markers per
+  `docs/REPORT_PAGES_PLAN.md` §5.2. The §10 read-set gains the `latest.html` envelope.
 - Style: bold and distinctive, not generic corporate; dark-friendly; function first, dense over
   airy. It is a status board read at a glance, not a marketing page.
 
@@ -784,3 +830,23 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   past `timeout_s + 120s` renders `died` on the dashboard.
 - **Pilot:** `examples/hello-loop` emits ≥2 findings with stable ids so recurrence and one
   disposition are exercised as regression fixtures.
+
+## 12. `bin/page_envelope.py` — report-page envelope (Amendment 2)
+
+Single stdlib-only implementation used by the runner gate AND `dashboard/generate.py`.
+
+```
+page_envelope.py check --file F [--expect-run-id ID] [--expect-loop L]
+page_envelope.py meta  --file F
+```
+
+`check`: exit 0 = promotable; exit 1 with one reason per stderr line. Checks: readable,
+non-empty, UTF-8, ≤ 8 MiB; exactly one `<script type="application/json" id="report-data">`
+block; JSON parses; `meta.loop`, `meta.run_id`, `meta.generated_at` (`%Y-%m-%dT%H:%M:%SZ`),
+`meta.title` (non-empty str), `meta.page_class` ∈ {snapshot, findings} all present;
+`meta.totals` when present is a flat object with number or ≤64-char string values;
+`--expect-*` mismatches; external-fetch heuristics (`<script src=`, `<link href="http`,
+`<img src="http`, `<iframe`, `@import`, `url(http`); redaction-clean (`bin/redact.py` over
+the full page text must be a no-op). `meta`: prints the parsed `meta` object as JSON to
+stdout (exit 1 + reasons if extraction fails). Importable: `check_page(path, expect_run_id=None,
+expect_loop=None) -> list[str]` (empty = pass) and `read_meta(path) -> dict | None`.

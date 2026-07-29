@@ -310,7 +310,7 @@ class TestNew(LoopsRootTestCase):
         self.assertIn("DISMISSED", text)
         self.assertIn("SNOOZED", text)
 
-    def test_scaffold_spec_has_11_sections_in_order(self):
+    def test_scaffold_spec_has_12_sections_in_order(self):
         run_cli(["new", "hello-loop", "--root", self.root])
         text = _read(os.path.join(self.fixture.loop_dir("hello-loop"), "SPEC.md"))
         headers = [
@@ -325,10 +325,11 @@ class TestNew(LoopsRootTestCase):
             "9. Tier-1 semantics",
             "10. Tier-2 metrics",
             "11. Engine/model",
+            "12. Page output",
         ]
         positions = [text.index(h) for h in headers]
         self.assertEqual(positions, sorted(positions))
-        self.assertEqual(text.count("[FILL:"), 11)
+        self.assertEqual(text.count("[FILL:"), 12)
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@
     --ochre: #A87A2A;
     --hair: rgba(28,26,23,.14);
     --hair2: rgba(28,26,23,.22);
+    --paper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.55 0 0 0 0 0.5 0 0 0 0 0.42 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23p)'/%3E%3C/svg%3E");
     --serif: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif;
     --seal: "Yuji Syuku", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
     --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
@@ -38,9 +39,7 @@
     position: relative;
     max-width: 1240px;
     margin: 0 auto;
-    background:
-      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.55 0 0 0 0 0.5 0 0 0 0 0.42 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23p)'/%3E%3C/svg%3E"),
-      var(--washi);
+    background: var(--paper), var(--washi);
     border-radius: 4px;
     box-shadow: 0 1px 2px rgba(0,0,0,.5), 0 24px 80px -24px rgba(0,0,0,.8);
     overflow: hidden;
@@ -151,6 +150,62 @@
   }
   .lead-dot { fill: var(--nibi); animation: breathe 3.2s ease-in-out infinite; }
 
+  /* ---------- ledger (帳) ---------- */
+  .ledger {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+    background: var(--hair2); border: 1px solid var(--hair2); border-radius: 3px;
+  }
+  .measure { background: var(--paper), var(--washi); padding: clamp(18px, 2.4vw, 26px) clamp(18px, 2.4vw, 26px) 15px; }
+  .m-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .m-label {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--nibi); line-height: 1.7;
+  }
+  .m-label b { color: var(--sumi); font-weight: 400; }
+  .pin {
+    flex: none; background: none; border: 1px solid var(--hair); border-radius: 3px;
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .16em; color: var(--nibi);
+    padding: 5px 9px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    transition: color .45s cubic-bezier(0.16, 1, 0.3, 1), border-color .45s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  /* small inline kanji stay in mincho — the display seal face turns to mud below ~18px */
+  .pin .pk { font-family: var(--serif); font-style: normal; font-size: 13px; line-height: 1; letter-spacing: 0; }
+  .pin:hover { color: var(--sumi); border-color: var(--nibi); }
+  .pin.pinned { color: var(--shu); border-color: var(--shu); }
+  .pin.press { animation: pin-press .5s cubic-bezier(.2, 1.4, .4, 1); }
+  @keyframes pin-press { 0% { transform: scale(1); } 30% { transform: scale(.94); } 100% { transform: scale(1); } }
+
+  .m-body { display: flex; align-items: flex-end; gap: 18px; margin: 16px 0 12px; }
+  .m-val {
+    font-family: var(--mono); font-size: clamp(31px, 3.5vw, 41px); line-height: .88;
+    letter-spacing: -.025em; color: var(--sumi);
+  }
+  .m-val i { font-style: normal; font-size: .48em; color: var(--nibi); letter-spacing: 0; }
+  .trend { display: block; width: 180px; max-width: 100%; height: 48px; margin-left: auto; }
+  .trend .bed { stroke: rgba(28,26,23,.16); stroke-width: 1; }
+  .trend .ink, .trend .bleed {
+    fill: none; stroke: var(--sumi); stroke-linecap: round; stroke-linejoin: round;
+    stroke-dasharray: 1; stroke-dashoffset: 1;
+    animation: ledger-draw 2.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation-delay: calc(var(--d, 0) * 300ms + 400ms);
+  }
+  .trend .ink { stroke-width: 1.6; }
+  .trend .bleed { stroke-width: 3; opacity: .25; }
+  @keyframes ledger-draw { to { stroke-dashoffset: 0; } }
+  .trend .now {
+    opacity: 0; animation: dot-in 1.1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation-delay: calc(var(--d, 0) * 300ms + 2.5s);
+  }
+  @keyframes dot-in { to { opacity: 1; } }
+  .trend .now.ok { fill: var(--koke); }
+  .trend .now.warn { fill: var(--ochre); }
+  .trend .now.alert { fill: var(--shu); }
+  .m-meta { font-family: var(--mono); font-size: 10px; color: var(--nibi); letter-spacing: .06em; }
+  .ledger-caption {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
+    color: var(--nibi); margin-top: 14px; max-width: 82ch;
+  }
+
   /* ---------- arrangement (findings) ---------- */
   .arrangement { display: grid; grid-template-columns: 150px 1fr; gap: clamp(20px, 3.5vw, 44px); align-items: start; }
   .vase-svg { width: 100%; max-width: 150px; height: auto; }
@@ -168,7 +223,11 @@
     position: relative; transition: opacity 1.2s;
   }
   .finding:last-child { border-bottom: none; }
-  .finding.stamped { opacity: .38; }
+  /* the finding recedes when stamped — the seal itself does not */
+  .finding > .bar, .finding > .fx, .finding > .stamp-actions {
+    transition: opacity 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .finding.stamped > .bar, .finding.stamped > .fx, .finding.stamped > .stamp-actions { opacity: .38; }
   .finding .bar { align-self: stretch; border-radius: 2px; }
   .finding.f-shin .bar { background: var(--shu); }
   .finding.f-soe .bar { background: var(--ochre); }
@@ -176,6 +235,86 @@
   .finding .fx b { font-weight: 500; font-size: 14.5px; display: block; }
   .finding .fx p { font-size: 12.5px; color: #55503F; font-family: var(--mono); margin-top: 3px; }
   .finding .fx .tier { font-family: var(--mono); font-size: 9.5px; letter-spacing: .22em; color: var(--nibi); display: block; margin-top: 6px; text-transform: uppercase; }
+
+  /* ---------- pancaked finding — three appearances, one stack, one decision ---------- */
+  .finding.pancaked {
+    border-bottom: none; margin: 12px 0 30px;
+    padding: 18px 16px 18px 14px; gap: 0 18px;
+  }
+  .finding.pancaked > .bar, .finding.pancaked > .fx,
+  .finding.pancaked > .stamp-actions, .finding.pancaked > .retro { position: relative; z-index: 1; }
+  .ply {
+    position: absolute; inset: 0; z-index: 0; border-radius: 3px;
+    border: 1px solid var(--hair2); pointer-events: none;
+    transition: transform 1.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .ply-2 {
+    background: var(--paper), var(--washi-shade);
+    transform: translate(10px, 12px) rotate(.65deg);
+  }
+  .ply-1 {
+    background: var(--paper), var(--washi);
+    transform: translate(5px, 6px) rotate(-.3deg);
+    box-shadow: 0 1px 3px -1px rgba(28,26,23,.16);
+  }
+  .ply-top {
+    background: var(--paper), var(--washi);
+    box-shadow: 0 2px 6px -2px rgba(28,26,23,.22);
+  }
+  .finding.flattened .ply-1, .finding.flattened .ply-2 { transform: none; opacity: 0; }
+
+  .pchip {
+    display: inline-flex; align-items: center; gap: 7px; margin-bottom: 9px;
+    font-family: var(--mono); font-size: 9px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--nibi); border: 1px solid var(--hair2); border-radius: 3px; padding: 3px 9px 3px 7px;
+  }
+  .pchip i { font-family: var(--serif); font-style: normal; font-size: 13.5px; line-height: 1; letter-spacing: 0; color: var(--sumi); }
+  .prule { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--ai); margin-top: 7px; }
+  .retro {
+    grid-column: 2 / -1; overflow: hidden; max-height: 0; opacity: 0;
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .2em;
+    text-transform: uppercase; color: var(--shu);
+    transition: opacity 1.2s cubic-bezier(0.16, 1, 0.3, 1) .5s,
+                max-height 1.1s cubic-bezier(0.16, 1, 0.3, 1),
+                margin-top 1.1s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .finding.flattened .retro { opacity: 1; max-height: 34px; margin-top: 13px; }
+
+  /* ---------- the swept pile (掃) — compost, not garden ---------- */
+  .swept {
+    margin-top: 28px; border: 1px solid var(--hair); border-radius: 3px;
+    background: rgba(28,26,23,.028);
+  }
+  .swept-toggle {
+    width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+    background: none; border: 0; cursor: pointer; padding: 9px 13px;
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .2em;
+    text-transform: uppercase; color: var(--nibi);
+    transition: color .45s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .swept-toggle:hover { color: var(--sumi); }
+  .swept-toggle .sk { font-family: var(--serif); font-size: 15px; line-height: 1; letter-spacing: 0; color: var(--sumi); opacity: .5; }
+  .swept-toggle .n { margin-left: auto; letter-spacing: .14em; }
+  .swept-toggle .kai { font-family: var(--serif); font-size: 13px; line-height: 1; letter-spacing: 0; opacity: .7; }
+  .swept-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 1s cubic-bezier(0.16, 1, 0.3, 1); }
+  .swept.open .swept-body { grid-template-rows: 1fr; }
+  .swept-inner {
+    overflow: hidden; min-height: 0; opacity: .45;
+    transition: opacity .9s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .swept.open .swept-inner:hover { opacity: .78; }
+  .swept-row {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px;
+    padding: 5px 13px; border-top: 1px solid var(--hair);
+    font-family: var(--mono); font-size: 10.5px; color: var(--sumi); line-height: 1.5;
+  }
+  .swept-row .sid { color: var(--ai); letter-spacing: .08em; }
+  .swept-row .sw { color: var(--nibi); }
+  .swept-row .sd { margin-left: auto; color: var(--nibi); font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; }
+  .swept-note {
+    padding: 9px 13px 12px; border-top: 1px solid var(--hair);
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; color: var(--nibi); line-height: 1.9;
+  }
 
   .stamp-actions { display: flex; gap: 10px; align-items: center; }
   .hanko-btn {
@@ -239,9 +378,7 @@
   .engawa {
     position: fixed; top: 0; right: 0; bottom: 0;
     width: min(600px, 100vw); z-index: 9;
-    background:
-      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.55 0 0 0 0 0.5 0 0 0 0 0.42 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23p)'/%3E%3C/svg%3E"),
-      var(--washi-shade);
+    background: var(--paper), var(--washi-shade);
     border-left: 5px solid var(--sumi);
     box-shadow: -30px 0 80px -30px rgba(0,0,0,.7);
     transform: translateX(103%);
@@ -304,6 +441,13 @@
     .enso-close-fig path { animation: none; stroke-dashoffset: 0; }
     .vase-svg g { transition: none; }
     .order-line { animation: none; }
+    .trend .ink, .trend .bleed { animation: none; stroke-dashoffset: 0; }
+    .trend .now { animation: none; opacity: 1; }
+    .pin, .pin.press { transition: none; animation: none; }
+    .ply { transition: none; }
+    .retro { transition: none; }
+    .finding > .bar, .finding > .fx, .finding > .stamp-actions { transition: none; }
+    .swept-body, .swept-inner, .swept-toggle { transition: none; }
   }
 
   /* ---------- mobile ---------- */
@@ -316,6 +460,10 @@
     .stamp-actions { grid-column: 2; justify-content: flex-start; margin-top: 8px; }
     .impression { right: 18px; }
     .engawa { width: 100vw; border-left-width: 0; }
+    .ledger { grid-template-columns: 1fr; }
+    .m-body { flex-direction: column; align-items: flex-start; gap: 14px; }
+    .trend { margin-left: 0; }
+    .swept-row .sd { margin-left: 0; width: 100%; }
   }
 </style>
 </head>
@@ -372,7 +520,7 @@
 
       <div class="loop-row">
         <div class="stamp alert" id="seo-stamp">警</div>
-        <div class="loop-name">seo-pages<small>daily 05:40 · 3 findings standing</small></div>
+        <div class="loop-name">seo-pages<small id="seo-sub">daily 05:40 · 3 standing · 1 pancaked ×3</small></div>
         <svg class="rake-spark" viewBox="0 0 190 22"><line class="bed" x1="0" y1="11" x2="190" y2="11"/><circle cx="18" cy="11" r="3" class="run-ok"/><circle cx="45" cy="11" r="3" class="run-ok"/><circle cx="72" cy="11" r="3" class="run-ok"/><circle cx="99" cy="11" r="3" class="run-ok"/><circle cx="126" cy="11" r="3" class="run-warn"/><circle cx="153" cy="11" r="3" class="run-alert"/><circle cx="180" cy="11" r="3" class="run-alert"/></svg>
         <div class="last-run">last 巡 05:40 · 4m19s</div>
         <div class="sev" id="seo-sev">SHIN 真</div><span></span>
@@ -387,6 +535,83 @@
       </div>
 
     </div>
+  </div>
+
+  <!-- ================= THE LEDGER ================= -->
+  <div class="zone">
+    <div class="kicker"><b>帳</b> the ledger — every number a loop reports, kept <span class="note">TIMESTAMPED · GRAPHABLE · PINNABLE</span></div>
+    <div class="ledger">
+
+      <div class="measure">
+        <div class="m-head">
+          <span class="m-label"><b>tls-certs</b> · days-to-soonest-expiry</span>
+          <button class="pin" type="button" aria-pressed="false" aria-label="pin tls-certs days-to-soonest-expiry to the dashboard"><i class="pk">留</i><span class="pt">PIN</span></button>
+        </div>
+        <div class="m-body">
+          <span class="m-val">23<i>d</i></span>
+          <svg class="trend" viewBox="0 0 180 48" style="--d:0" role="img" aria-label="Fourteen rounds, declining steadily from 36 days to 23 days.">
+            <line class="bed" x1="0" y1="45" x2="180" y2="45"/>
+            <path class="bleed" pathLength="1" transform="translate(0.7 1.6)" d="M 4 6 L 17.2 8.4 L 30.5 11 L 43.7 13.3 L 56.9 15.9 L 70.2 18.2 L 83.4 20.9 L 96.6 23.1 L 109.8 25.8 L 123.1 28 L 136.3 30.7 L 149.5 33 L 162.8 35.6 L 176 38"/>
+            <path class="ink" pathLength="1" d="M 4 6 L 17.2 8.4 L 30.5 11 L 43.7 13.3 L 56.9 15.9 L 70.2 18.2 L 83.4 20.9 L 96.6 23.1 L 109.8 25.8 L 123.1 28 L 136.3 30.7 L 149.5 33 L 162.8 35.6 L 176 38"/>
+            <circle class="now ok" cx="176" cy="38" r="2.8"/>
+          </svg>
+        </div>
+        <div class="m-meta">14 巡 · 07-16 → 07-29 · renews 08-21</div>
+      </div>
+
+      <div class="measure">
+        <div class="m-head">
+          <span class="m-label"><b>dead-links</b> · rotting externals</span>
+          <button class="pin" type="button" aria-pressed="false" aria-label="pin dead-links rotting externals to the dashboard"><i class="pk">留</i><span class="pt">PIN</span></button>
+        </div>
+        <div class="m-body">
+          <span class="m-val">4</span>
+          <svg class="trend" viewBox="0 0 180 48" style="--d:1" role="img" aria-label="Fourteen rounds, stepping up from one dead link to two, then to four.">
+            <line class="bed" x1="0" y1="45" x2="180" y2="45"/>
+            <path class="bleed" pathLength="1" transform="translate(0.7 1.6)" d="M 4 38 L 17.2 38 L 30.5 38 L 43.7 38 L 56.9 27.3 L 70.2 27.3 L 83.4 27.3 L 96.6 27.3 L 109.8 27.3 L 123.1 27.3 L 136.3 27.3 L 149.5 27.3 L 162.8 6 L 176 6"/>
+            <path class="ink" pathLength="1" d="M 4 38 L 17.2 38 L 30.5 38 L 43.7 38 L 56.9 27.3 L 70.2 27.3 L 83.4 27.3 L 96.6 27.3 L 109.8 27.3 L 123.1 27.3 L 136.3 27.3 L 149.5 27.3 L 162.8 6 L 176 6"/>
+            <circle class="now warn" cx="176" cy="6" r="2.8"/>
+          </svg>
+        </div>
+        <div class="m-meta">14 巡 · 07-16 → 07-29 · +3 since 07-16</div>
+      </div>
+
+      <div class="measure">
+        <div class="m-head">
+          <span class="m-label"><b>deps-drift</b> · open cves, weighted</span>
+          <button class="pin" type="button" aria-pressed="false" aria-label="pin deps-drift open weighted CVEs to the dashboard"><i class="pk">留</i><span class="pt">PIN</span></button>
+        </div>
+        <div class="m-body">
+          <span class="m-val">7.2</span>
+          <svg class="trend" viewBox="0 0 180 48" style="--d:2" role="img" aria-label="Thirteen flat rounds near 2.1, then a spike to 7.2 in the round now running.">
+            <line class="bed" x1="0" y1="45" x2="180" y2="45"/>
+            <path class="bleed" pathLength="1" transform="translate(0.7 1.6)" d="M 4 35.4 L 17.2 36 L 30.5 34.8 L 43.7 35.4 L 56.9 34.2 L 70.2 35.4 L 83.4 36 L 96.6 34.8 L 109.8 35.4 L 123.1 34.8 L 136.3 36 L 149.5 35.4 L 162.8 33.5 L 176 8"/>
+            <path class="ink" pathLength="1" d="M 4 35.4 L 17.2 36 L 30.5 34.8 L 43.7 35.4 L 56.9 34.2 L 70.2 35.4 L 83.4 36 L 96.6 34.8 L 109.8 35.4 L 123.1 34.8 L 136.3 36 L 149.5 35.4 L 162.8 33.5 L 176 8"/>
+            <circle class="now alert" cx="176" cy="8" r="2.8"/>
+          </svg>
+        </div>
+        <div class="m-meta">14 巡 · latest 07-29 07:13 · unsealed</div>
+      </div>
+
+      <div class="measure">
+        <div class="m-head">
+          <span class="m-label"><b>spend</b> · 7-day engine cost</span>
+          <button class="pin" type="button" aria-pressed="false" aria-label="pin seven-day engine spend to the dashboard"><i class="pk">留</i><span class="pt">PIN</span></button>
+        </div>
+        <div class="m-body">
+          <span class="m-val"><i>$</i>4.12</span>
+          <svg class="trend" viewBox="0 0 180 48" style="--d:3" role="img" aria-label="Fourteen rounds wandering gently between $3.71 and $4.40.">
+            <line class="bed" x1="0" y1="45" x2="180" y2="45"/>
+            <path class="bleed" pathLength="1" transform="translate(0.7 1.6)" d="M 4 22.2 L 17.2 31.5 L 30.5 11.6 L 43.7 20.2 L 56.9 26.7 L 70.2 15.3 L 83.4 36 L 96.6 23.4 L 109.8 8 L 123.1 16.9 L 136.3 29.1 L 149.5 12 L 162.8 25.9 L 176 19.4"/>
+            <path class="ink" pathLength="1" d="M 4 22.2 L 17.2 31.5 L 30.5 11.6 L 43.7 20.2 L 56.9 26.7 L 70.2 15.3 L 83.4 36 L 96.6 23.4 L 109.8 8 L 123.1 16.9 L 136.3 29.1 L 149.5 12 L 162.8 25.9 L 176 19.4"/>
+            <circle class="now ok" cx="176" cy="19.4" r="2.8"/>
+          </svg>
+        </div>
+        <div class="m-meta">14 巡 · 07-16 → 07-29 · Σ $28.60</div>
+      </div>
+
+    </div>
+    <p class="ledger-caption">loops report numbers; the harness writes them to a timestamped ledger. pin a measure and it appears on your dashboard.</p>
   </div>
 
   <!-- ================= THE ARRANGEMENT ================= -->
@@ -424,16 +649,54 @@
             <button class="hanko-btn" data-f="soe" data-k="済" title="dismiss">済</button>
           </div>
         </div>
-        <div class="finding f-hikae" id="finding-hikae">
+        <div class="finding f-hikae pancaked" id="finding-hikae">
+          <span class="ply ply-2" aria-hidden="true"></span>
+          <span class="ply ply-1" aria-hidden="true"></span>
+          <span class="ply ply-top" aria-hidden="true"></span>
           <span class="bar"></span>
-          <div class="fx"><b>18 of 43 images missing alt text</b><p>unchanged since last 巡 · carried finding, third appearance</p><span class="tier">HIKAE 控 · INFO · F-229</span></div>
+          <div class="fx">
+            <span class="pchip"><i>巡</i> ×3 — same finding, three rounds</span>
+            <b>18 of 43 images missing alt text</b>
+            <p>unchanged since last 巡 · carried finding, third appearance</p>
+            <span class="prule">stamp once — applies to all three appearances (retroactive)</span>
+            <span class="tier">HIKAE 控 · INFO · F-229 · 巡 #216, #217, #218</span>
+          </div>
           <div class="stamp-actions">
             <button class="hanko-btn approve" data-f="hikae" data-k="承" title="approve — becomes an order">承</button>
             <button class="hanko-btn" data-f="hikae" data-k="認" title="acknowledge">認</button>
             <button class="hanko-btn" data-f="hikae" data-k="休" title="snooze">休</button>
             <button class="hanko-btn" data-f="hikae" data-k="済" title="dismiss">済</button>
           </div>
+          <span class="retro" id="retro-hikae" aria-hidden="true">applied retroactively — 3 appearances cleared</span>
         </div>
+
+        <!-- ---------- the swept pile ---------- -->
+        <div class="swept" id="swept">
+          <button class="swept-toggle" type="button" id="swept-toggle" aria-expanded="false" aria-controls="swept-body">
+            <span class="sk" aria-hidden="true">掃</span>
+            <span>swept at dawn — reported before, absent from today's 巡</span>
+            <span class="n">2</span>
+            <span class="kai" id="swept-kai" aria-hidden="true">開</span>
+          </button>
+          <div class="swept-body" id="swept-body">
+            <div class="swept-inner">
+              <div class="swept-row">
+                <span class="sid">F-198</span>
+                <span>robots.txt disallow on /staging</span>
+                <span class="sw">— last seen 3 巡 ago</span>
+                <span class="sd">staled 07-26</span>
+              </div>
+              <div class="swept-row">
+                <span class="sid">F-204</span>
+                <span>duplicate H1 on /pricing</span>
+                <span class="sw">— resolved upstream, never stamped</span>
+                <span class="sd">staled 07-26</span>
+              </div>
+              <p class="swept-note">not stamped by you — raked away because the garden stopped reporting it. reappears fresh if it returns.</p>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -594,6 +857,7 @@
   var standing = { shin: true, soe: true, hikae: true };
   var seoStamp = document.getElementById('seo-stamp');
   var seoSev = document.getElementById('seo-sev');
+  var seoSub = document.getElementById('seo-sub');
 
   document.querySelectorAll('.hanko-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -607,6 +871,15 @@
       imp.style.setProperty('--rot', (Math.random() * 14 - 8).toFixed(1) + 'deg');
       rowEl.appendChild(imp);
       document.getElementById('stem-' + f).classList.add('pruned');
+
+      /* a pancaked finding is one stack, one decision — the sheets merge and
+         the seal reaches back across every appearance it covers */
+      if (rowEl.classList.contains('pancaked')) {
+        rowEl.classList.add('flattened');
+        var retro = rowEl.querySelector('.retro');
+        if (retro) retro.removeAttribute('aria-hidden');
+      }
+
       if (k === '承') {
         var orders = document.getElementById('orders');
         orders.hidden = false;
@@ -614,11 +887,16 @@
         line.className = 'order-line';
         var seal = document.createElement('span'); seal.className = 'oseal'; seal.textContent = '承';
         var desc = document.createElement('span'); desc.textContent = ORDER[f];
-        var stat = document.createElement('span'); stat.className = 'ostat'; stat.textContent = 'DRY-RUN → EXECUTE → CONFIRM · APPROVED 1×';
+        var stat = document.createElement('span'); stat.className = 'ostat';
+        stat.textContent = 'DRY-RUN → EXECUTE → CONFIRM · APPROVED 1×'
+          + (rowEl.classList.contains('pancaked') ? ' · COVERS 3 巡' : '');
         line.appendChild(seal); line.appendChild(desc); line.appendChild(stat);
         document.getElementById('orders-list').appendChild(line);
       }
       standing[f] = false;
+      var left = TIERS.filter(function (t) { return standing[t]; }).length;
+      seoSub.textContent = 'daily 05:40 · ' + (left ? left + ' standing' : 'nothing standing')
+        + (standing.hikae ? ' · 1 pancaked ×3' : '');
       var tallest = TIERS.find(function (t) { return standing[t]; });
       if (tallest) {
         seoSev.textContent = LABEL[tallest];
@@ -630,6 +908,33 @@
         document.getElementById('ma-note').classList.add('show');
       }
     });
+  });
+
+  /* ---------- ledger: the pin affordance ---------- */
+  document.querySelectorAll('.pin').forEach(function (btn) {
+    var txt = btn.querySelector('.pt');
+    btn.addEventListener('animationend', function () { btn.classList.remove('press'); });
+    btn.addEventListener('click', function () {
+      var on = !btn.classList.contains('pinned');
+      btn.classList.toggle('pinned', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      txt.textContent = on ? 'PINNED' : 'PIN';
+      if (!reduced) { btn.classList.remove('press'); void btn.offsetWidth; btn.classList.add('press'); }
+    });
+  });
+
+  /* ---------- the swept pile ---------- */
+  var swept = document.getElementById('swept');
+  var sweptToggle = document.getElementById('swept-toggle');
+  var sweptBody = document.getElementById('swept-body');
+  var sweptKai = document.getElementById('swept-kai');
+  sweptBody.setAttribute('aria-hidden', 'true');
+  sweptToggle.addEventListener('click', function () {
+    var open = !swept.classList.contains('open');
+    swept.classList.toggle('open', open);
+    sweptToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    sweptBody.setAttribute('aria-hidden', open ? 'false' : 'true');
+    sweptKai.textContent = open ? '閉' : '開';
   });
 })();
 </script>

@@ -13,6 +13,7 @@ launchctl is NEVER invoked for real: LOOPS_LAUNCHCTL is always pointed at a
 recording Python stub (`fake_launchctl.py`, written per-fixture) whose exit
 codes and call log are controllable via environment variables.
 """
+
 import json
 import os
 import plistlib
@@ -28,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LOOPCTL = REPO_ROOT / "bin" / "loopctl"
 DB_PY = REPO_ROOT / "bin" / "db.py"
 
-FAKE_LAUNCHCTL_SRC = '''#!/usr/bin/env python3
+FAKE_LAUNCHCTL_SRC = """#!/usr/bin/env python3
 import os
 import subprocess
 import sys
@@ -77,12 +78,12 @@ if verb == "kickstart" and (
 exit_var = "FAKE_LAUNCHCTL_" + verb.upper() + "_EXIT"
 code = int(os.environ.get(exit_var, "0"))
 sys.exit(code)
-'''
+"""
 
-FAKE_RUN_LOOP_SRC = '''#!/usr/bin/env bash
+FAKE_RUN_LOOP_SRC = """#!/usr/bin/env bash
 echo "FAKE_RUN_LOOP_SH called with: $@"
 exit "${FAKE_RUN_LOOP_EXIT:-0}"
-'''
+"""
 
 
 def run_cli(args, env_overrides=None, cwd=None):
@@ -105,7 +106,27 @@ def run_db(args):
 
 
 def _query_last_runs(root, loop_name, limit=1):
-    r = run_db(["query", "last-runs", "--root", root, "--loop", loop_name, "--limit", str(limit)])
+    r = run_db(
+        [
+            "query",
+            "last-runs",
+            "--root",
+            root,
+            "--loop",
+            loop_name,
+            "--limit",
+            str(limit),
+        ]
+    )
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+def _query_loop_events(root, loop_name=None, limit=50):
+    args = ["query", "loop-events", "--root", root, "--limit", str(limit)]
+    if loop_name is not None:
+        args += ["--loop", loop_name]
+    r = run_db(args)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 
@@ -207,7 +228,9 @@ class LoopsRoot:
             os.chmod(p, 0o755)
         return p
 
-    def minimal_valid_loop(self, name, extra_lines=None, from_dir="loops.d", type_="agent"):
+    def minimal_valid_loop(
+        self, name, extra_lines=None, from_dir="loops.d", type_="agent"
+    ):
         """A loop.conf + prompt.md + SPEC.md-free (deliberately, tests add SPEC.md
         separately) minimal config that passes loopconf parsing and the §5.2
         combo checks at their safe defaults."""
@@ -234,17 +257,46 @@ class LoopsRoot:
             self.write_precheck(name, executable=True, from_dir=from_dir)
         return self.loop_dir(name, from_dir)
 
-    def add_run(self, run_id, loop_name, started_at, runner_status="completed",
-                finished_at=None, effective_status="ok", headline="ok"):
-        r = run_db([
-            "start-run", "--root", self.root, "--run-id", run_id, "--loop", loop_name,
-            "--engine", "codex", "--trigger", "manual", "--started-at", started_at,
-        ])
+    def add_run(
+        self,
+        run_id,
+        loop_name,
+        started_at,
+        runner_status="completed",
+        finished_at=None,
+        effective_status="ok",
+        headline="ok",
+    ):
+        r = run_db(
+            [
+                "start-run",
+                "--root",
+                self.root,
+                "--run-id",
+                run_id,
+                "--loop",
+                loop_name,
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                started_at,
+            ]
+        )
         assert r.returncode == 0, r.stderr
         finish_args = [
-            "finish-run", "--root", self.root, "--run-id", run_id,
-            "--runner-status", runner_status,
-            "--headline", headline, "--finished-at", finished_at or started_at,
+            "finish-run",
+            "--root",
+            self.root,
+            "--run-id",
+            run_id,
+            "--runner-status",
+            runner_status,
+            "--headline",
+            headline,
+            "--finished-at",
+            finished_at or started_at,
         ]
         if effective_status is not None:
             finish_args += ["--effective-status", effective_status]
@@ -266,12 +318,19 @@ class LoopsRootTestCase(unittest.TestCase):
 # loopctl new
 # ---------------------------------------------------------------------------
 
+
 class TestNew(LoopsRootTestCase):
     def test_scaffolds_all_five_files(self):
         r = run_cli(["new", "hello-loop", "--root", self.root])
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         d = self.fixture.loop_dir("hello-loop")
-        for fname in ("loop.conf", "prompt.md", "precheck.sh", "dashboard.json", "SPEC.md"):
+        for fname in (
+            "loop.conf",
+            "prompt.md",
+            "precheck.sh",
+            "dashboard.json",
+            "SPEC.md",
+        ):
             self.assertTrue(os.path.isfile(os.path.join(d, fname)), fname)
 
     def test_precheck_is_executable(self):
@@ -289,7 +348,18 @@ class TestNew(LoopsRootTestCase):
         self.assertEqual(r.returncode, 2)
 
     def test_type_and_engine_flow_into_conf(self):
-        run_cli(["new", "watch-me", "--root", self.root, "--type", "watchdog", "--engine", "claude"])
+        run_cli(
+            [
+                "new",
+                "watch-me",
+                "--root",
+                self.root,
+                "--type",
+                "watchdog",
+                "--engine",
+                "claude",
+            ]
+        )
         conf_path = os.path.join(self.fixture.loop_dir("watch-me"), "loop.conf")
         text = _read(conf_path)
         self.assertIn("type=watchdog", text)
@@ -335,6 +405,7 @@ class TestNew(LoopsRootTestCase):
 # loopctl validate — scaffold flow (fails ONLY on [FILL:], passes after fill)
 # ---------------------------------------------------------------------------
 
+
 class TestValidateScaffoldFlow(LoopsRootTestCase):
     def test_fresh_scaffold_fails_only_on_spec_fill(self):
         run_cli(["new", "hello-loop", "--root", self.root])
@@ -354,6 +425,7 @@ class TestValidateScaffoldFlow(LoopsRootTestCase):
         spec_path = os.path.join(d, "SPEC.md")
         text = _read(spec_path)
         import re
+
         filled = re.sub(r"\[FILL:[^\]]*\]", "filled in.", text)
         with open(spec_path, "w") as f:
             f.write(filled)
@@ -366,6 +438,7 @@ class TestValidateScaffoldFlow(LoopsRootTestCase):
 # ---------------------------------------------------------------------------
 # loopctl validate — §5.2 dangerous combos
 # ---------------------------------------------------------------------------
+
 
 class TestValidateDangerousCombos(LoopsRootTestCase):
     def _validate(self, name):
@@ -382,12 +455,20 @@ class TestValidateDangerousCombos(LoopsRootTestCase):
         self.assertTrue(any("rule 1" in e for e in errors), errors)
 
     def test_rule2_remote_mutation_without_justification(self):
-        self.fixture.minimal_valid_loop("bad2", extra_lines=["perm_remote_mutation=allowlist",
-                                                               'exec_allowlist="git status"'])
+        self.fixture.minimal_valid_loop(
+            "bad2",
+            extra_lines=[
+                "perm_remote_mutation=allowlist",
+                'exec_allowlist="git status"',
+            ],
+        )
         self.fixture.write_spec("bad2", "filled\n" * 11)
         r = self._validate("bad2")
         errors = json.loads(r.stdout)["bad2"]["errors"]
-        self.assertTrue(any("rule 2" in e or "remote_mutation_justification" in e for e in errors), errors)
+        self.assertTrue(
+            any("rule 2" in e or "remote_mutation_justification" in e for e in errors),
+            errors,
+        )
 
     def test_rule3_full_exec_full_network_without_override(self):
         self.fixture.minimal_valid_loop(
@@ -455,7 +536,10 @@ class TestValidateDangerousCombos(LoopsRootTestCase):
     def test_rule5_passes_with_notes(self):
         self.fixture.minimal_valid_loop(
             "ok5",
-            extra_lines=["perm_fs_write=workdir", 'notes="needs to write into workdir because X"'],
+            extra_lines=[
+                "perm_fs_write=workdir",
+                'notes="needs to write into workdir because X"',
+            ],
         )
         self.fixture.write_spec("ok5", "filled\n" * 11)
         r = self._validate("ok5")
@@ -495,7 +579,10 @@ class TestValidateDangerousCombos(LoopsRootTestCase):
         r = self._validate("bad8")
         errors = json.loads(r.stdout)["bad8"]["errors"]
         self.assertTrue(
-            any("rule 8" in e and "credential_env" in e and "reserved" in e for e in errors),
+            any(
+                "rule 8" in e and "credential_env" in e and "reserved" in e
+                for e in errors
+            ),
             errors,
         )
 
@@ -531,7 +618,9 @@ class TestValidateDangerousCombos(LoopsRootTestCase):
         self.fixture.write_spec("bad6b", "filled\n" * 11)
         r = self._validate("bad6b")
         errors = json.loads(r.stdout)["bad6b"]["errors"]
-        self.assertTrue(any("rule 6" in e and "engine adapter" in e for e in errors), errors)
+        self.assertTrue(
+            any("rule 6" in e and "engine adapter" in e for e in errors), errors
+        )
 
     def test_rule6_name_mismatch(self):
         self.fixture.write_conf(
@@ -548,7 +637,9 @@ class TestValidateDangerousCombos(LoopsRootTestCase):
         self.fixture.write_spec("dirname-a", "filled\n" * 11)
         r = self._validate("dirname-a")
         errors = json.loads(r.stdout)["dirname-a"]["errors"]
-        self.assertTrue(any("rule 6" in e and "directory name" in e for e in errors), errors)
+        self.assertTrue(
+            any("rule 6" in e and "directory name" in e for e in errors), errors
+        )
 
     def test_rule6_schedule_unparseable(self):
         self.fixture.minimal_valid_loop("bad6c", extra_lines=[])
@@ -566,6 +657,7 @@ class TestValidateDangerousCombos(LoopsRootTestCase):
 # ---------------------------------------------------------------------------
 # loopctl validate — Finding identity / SPEC checks in isolation
 # ---------------------------------------------------------------------------
+
 
 class TestValidateFindingIdentityAndSpec(LoopsRootTestCase):
     def test_missing_finding_identity_heading_fails(self):
@@ -603,16 +695,21 @@ class TestValidateFindingIdentityAndSpec(LoopsRootTestCase):
 # loopctl run
 # ---------------------------------------------------------------------------
 
+
 class TestRun(LoopsRootTestCase):
     def test_execs_run_loop_sh_and_propagates_exit(self):
-        r = run_cli(["run", "hello-loop", "--root", self.root],
-                     env_overrides={"FAKE_RUN_LOOP_EXIT": "0"})
+        r = run_cli(
+            ["run", "hello-loop", "--root", self.root],
+            env_overrides={"FAKE_RUN_LOOP_EXIT": "0"},
+        )
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         self.assertIn("FAKE_RUN_LOOP_SH called", r.stdout)
 
     def test_propagates_nonzero_exit(self):
-        r = run_cli(["run", "hello-loop", "--root", self.root],
-                     env_overrides={"FAKE_RUN_LOOP_EXIT": "7"})
+        r = run_cli(
+            ["run", "hello-loop", "--root", self.root],
+            env_overrides={"FAKE_RUN_LOOP_EXIT": "7"},
+        )
         self.assertEqual(r.returncode, 7)
 
     def test_missing_run_loop_sh_fails_cleanly(self):
@@ -630,11 +727,7 @@ class TestRun(LoopsRootTestCase):
         # run-loop.sh records the LOOPS_ROOT it actually sees.
         recorder = os.path.join(self.root, "loops_root_seen.txt")
         with open(self.fixture.run_loop_sh, "w") as f:
-            f.write(
-                "#!/usr/bin/env bash\n"
-                f'echo "$LOOPS_ROOT" > "{recorder}"\n'
-                "exit 0\n"
-            )
+            f.write(f'#!/usr/bin/env bash\necho "$LOOPS_ROOT" > "{recorder}"\nexit 0\n')
         os.chmod(self.fixture.run_loop_sh, 0o755)
 
         env = os.environ.copy()
@@ -655,6 +748,7 @@ class TestRun(LoopsRootTestCase):
 # ---------------------------------------------------------------------------
 # plist generation — one schedule form per test, parsed with plistlib
 # ---------------------------------------------------------------------------
+
 
 class TestPlistGeneration(LoopsRootTestCase):
     def _install(self, name, extra_lines):
@@ -677,7 +771,9 @@ class TestPlistGeneration(LoopsRootTestCase):
     def test_interval_schedule(self):
         self.fixture.minimal_valid_loop("iv", extra_lines=[])
         conf_path = os.path.join(self.fixture.loop_dir("iv"), "loop.conf")
-        text = _read(conf_path).replace("schedule=interval:15m", "schedule=interval:30m")
+        text = _read(conf_path).replace(
+            "schedule=interval:15m", "schedule=interval:30m"
+        )
         with open(conf_path, "w") as f:
             f.write(text)
         self.fixture.write_spec("iv", "filled\n" * 11)
@@ -700,7 +796,9 @@ class TestPlistGeneration(LoopsRootTestCase):
     def test_times_schedule_is_array(self):
         self.fixture.minimal_valid_loop("tm", extra_lines=[])
         conf_path = os.path.join(self.fixture.loop_dir("tm"), "loop.conf")
-        text = _read(conf_path).replace("schedule=interval:15m", "schedule=times:07:30,19:30")
+        text = _read(conf_path).replace(
+            "schedule=interval:15m", "schedule=times:07:30,19:30"
+        )
         with open(conf_path, "w") as f:
             f.write(text)
         self.fixture.write_spec("tm", "filled\n" * 11)
@@ -714,24 +812,32 @@ class TestPlistGeneration(LoopsRootTestCase):
     def test_weekly_schedule(self):
         self.fixture.minimal_valid_loop("wk", extra_lines=[])
         conf_path = os.path.join(self.fixture.loop_dir("wk"), "loop.conf")
-        text = _read(conf_path).replace("schedule=interval:15m", "schedule=weekly:mon:08:00")
+        text = _read(conf_path).replace(
+            "schedule=interval:15m", "schedule=weekly:mon:08:00"
+        )
         with open(conf_path, "w") as f:
             f.write(text)
         self.fixture.write_spec("wk", "filled\n" * 11)
         self._run_install("wk")
         plist = _read_plist(os.path.join(self.root, "launchd", "com.loops.wk.plist"))
-        self.assertEqual(plist["StartCalendarInterval"], {"Hour": 8, "Minute": 0, "Weekday": 1})
+        self.assertEqual(
+            plist["StartCalendarInterval"], {"Hour": 8, "Minute": 0, "Weekday": 1}
+        )
 
     def test_monthly_schedule(self):
         self.fixture.minimal_valid_loop("mo", extra_lines=[])
         conf_path = os.path.join(self.fixture.loop_dir("mo"), "loop.conf")
-        text = _read(conf_path).replace("schedule=interval:15m", "schedule=monthly:01:09:00")
+        text = _read(conf_path).replace(
+            "schedule=interval:15m", "schedule=monthly:01:09:00"
+        )
         with open(conf_path, "w") as f:
             f.write(text)
         self.fixture.write_spec("mo", "filled\n" * 11)
         self._run_install("mo")
         plist = _read_plist(os.path.join(self.root, "launchd", "com.loops.mo.plist"))
-        self.assertEqual(plist["StartCalendarInterval"], {"Hour": 9, "Minute": 0, "Day": 1})
+        self.assertEqual(
+            plist["StartCalendarInterval"], {"Hour": 9, "Minute": 0, "Day": 1}
+        )
 
     def test_plist_has_absolute_paths_and_env(self):
         self.fixture.minimal_valid_loop("iv2", extra_lines=[])
@@ -742,15 +848,22 @@ class TestPlistGeneration(LoopsRootTestCase):
         self.assertTrue(os.path.isabs(plist["WorkingDirectory"]))
         self.assertIn("HOME", plist["EnvironmentVariables"])
         self.assertIn("PATH", plist["EnvironmentVariables"])
-        self.assertEqual(plist["EnvironmentVariables"]["LOOPS_ROOT"], os.path.abspath(self.root))
-        self.assertTrue(plist["StandardOutPath"].startswith(os.path.join(self.root, "state")))
-        self.assertTrue(plist["StandardErrorPath"].startswith(os.path.join(self.root, "state")))
+        self.assertEqual(
+            plist["EnvironmentVariables"]["LOOPS_ROOT"], os.path.abspath(self.root)
+        )
+        self.assertTrue(
+            plist["StandardOutPath"].startswith(os.path.join(self.root, "state"))
+        )
+        self.assertTrue(
+            plist["StandardErrorPath"].startswith(os.path.join(self.root, "state"))
+        )
 
 
 # ---------------------------------------------------------------------------
 # loopctl install — refuses manual/invalid; bootout->bootstrap->kickstart;
 # run-row poll success and failure paths
 # ---------------------------------------------------------------------------
+
 
 class TestInstall(LoopsRootTestCase):
     def _valid_loop(self, name="ready", from_dir="loops.d"):
@@ -774,7 +887,10 @@ class TestInstall(LoopsRootTestCase):
         text = _read(conf_path).replace("schedule=interval:15m", "schedule=manual")
         with open(conf_path, "w") as f:
             f.write(text)
-        r = run_cli(["install", name, "--root", self.root], env_overrides=self.fixture.base_env())
+        r = run_cli(
+            ["install", name, "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
         self.assertEqual(r.returncode, 1)
         self.assertIn("manual", r.stderr)
         self.assertEqual(self.fixture.launchctl_calls(), [])
@@ -782,7 +898,10 @@ class TestInstall(LoopsRootTestCase):
     def test_refuses_invalid_loop(self):
         name = self._valid_loop("invalid-one")
         self.fixture.write_spec(name, "1. Purpose\n[FILL: still here]\n")
-        r = run_cli(["install", name, "--root", self.root], env_overrides=self.fixture.base_env())
+        r = run_cli(
+            ["install", name, "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
         self.assertEqual(r.returncode, 1)
         self.assertEqual(self.fixture.launchctl_calls(), [])
 
@@ -802,7 +921,11 @@ class TestInstall(LoopsRootTestCase):
         calls = self.fixture.launchctl_calls()
         verbs = [c.split()[0] for c in calls]
         self.assertEqual(verbs, ["bootout", "bootstrap", "kickstart"])
-        self.assertTrue(os.path.isfile(os.path.join(self.root, "launchd", f"com.loops.{name}.plist")))
+        self.assertTrue(
+            os.path.isfile(
+                os.path.join(self.root, "launchd", f"com.loops.{name}.plist")
+            )
+        )
         # the freshly-inserted row, not the stale one, is what verified install
         rows = _query_last_runs(self.root, name)
         self.assertNotEqual(rows[0]["run_id"], stale_run_id)
@@ -886,6 +1009,7 @@ class TestInstall(LoopsRootTestCase):
 # loopctl uninstall
 # ---------------------------------------------------------------------------
 
+
 class TestUninstall(LoopsRootTestCase):
     def test_removes_plist_and_boots_out(self):
         name = "to-remove"
@@ -895,21 +1019,27 @@ class TestUninstall(LoopsRootTestCase):
         plist_path = os.path.join(self.root, "launchd", f"com.loops.{name}.plist")
         with open(plist_path, "wb") as f:
             f.write(b"<plist/>")
-        r = run_cli(["uninstall", name, "--root", self.root], env_overrides=self.fixture.base_env())
+        r = run_cli(
+            ["uninstall", name, "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
         self.assertEqual(r.returncode, 0)
         self.assertFalse(os.path.isfile(plist_path))
         calls = self.fixture.launchctl_calls()
         self.assertEqual([c.split()[0] for c in calls], ["bootout"])
 
     def test_uninstall_with_no_plist_still_succeeds(self):
-        r = run_cli(["uninstall", "never-installed", "--root", self.root],
-                     env_overrides=self.fixture.base_env())
+        r = run_cli(
+            ["uninstall", "never-installed", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
         self.assertEqual(r.returncode, 0)
 
 
 # ---------------------------------------------------------------------------
 # loopctl pause / resume — conf rewrite preserves comments; bootout/bootstrap
 # ---------------------------------------------------------------------------
+
 
 class TestPauseResume(LoopsRootTestCase):
     def test_pause_on_freshly_scaffolded_loop_appends_enabled_line(self):
@@ -921,7 +1051,10 @@ class TestPauseResume(LoopsRootTestCase):
         before = _read(conf_path)
         self.assertNotIn("\nenabled=", before)  # only the commented form is present
 
-        r = run_cli(["pause", "fresh-toggle", "--root", self.root], env_overrides=self.fixture.base_env())
+        r = run_cli(
+            ["pause", "fresh-toggle", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
 
         after = _read(conf_path)
@@ -947,7 +1080,9 @@ class TestPauseResume(LoopsRootTestCase):
         conf_path = os.path.join(self.fixture.loop_dir(name), "loop.conf")
         before = _read(conf_path)
 
-        r = run_cli(["pause", name, "--root", self.root], env_overrides=self.fixture.base_env())
+        r = run_cli(
+            ["pause", name, "--root", self.root], env_overrides=self.fixture.base_env()
+        )
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
 
         after = _read(conf_path)
@@ -974,7 +1109,9 @@ class TestPauseResume(LoopsRootTestCase):
                 "enabled=false",
             ],
         )
-        r = run_cli(["resume", name, "--root", self.root], env_overrides=self.fixture.base_env())
+        r = run_cli(
+            ["resume", name, "--root", self.root], env_overrides=self.fixture.base_env()
+        )
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         conf_path = os.path.join(self.fixture.loop_dir(name), "loop.conf")
         after = _read(conf_path)
@@ -994,9 +1131,13 @@ class TestPauseResume(LoopsRootTestCase):
             ],
         )
         os.makedirs(os.path.join(self.root, "launchd"), exist_ok=True)
-        with open(os.path.join(self.root, "launchd", f"com.loops.{name}.plist"), "wb") as f:
+        with open(
+            os.path.join(self.root, "launchd", f"com.loops.{name}.plist"), "wb"
+        ) as f:
             f.write(b"<plist/>")
-        r = run_cli(["pause", name, "--root", self.root], env_overrides=self.fixture.base_env())
+        r = run_cli(
+            ["pause", name, "--root", self.root], env_overrides=self.fixture.base_env()
+        )
         self.assertEqual(r.returncode, 0)
         calls = self.fixture.launchctl_calls()
         self.assertEqual([c.split()[0] for c in calls], ["bootout"])
@@ -1015,9 +1156,13 @@ class TestPauseResume(LoopsRootTestCase):
             ],
         )
         os.makedirs(os.path.join(self.root, "launchd"), exist_ok=True)
-        with open(os.path.join(self.root, "launchd", f"com.loops.{name}.plist"), "wb") as f:
+        with open(
+            os.path.join(self.root, "launchd", f"com.loops.{name}.plist"), "wb"
+        ) as f:
             f.write(b"<plist/>")
-        r = run_cli(["resume", name, "--root", self.root], env_overrides=self.fixture.base_env())
+        r = run_cli(
+            ["resume", name, "--root", self.root], env_overrides=self.fixture.base_env()
+        )
         self.assertEqual(r.returncode, 0)
         calls = self.fixture.launchctl_calls()
         self.assertEqual([c.split()[0] for c in calls], ["bootstrap"])
@@ -1026,6 +1171,7 @@ class TestPauseResume(LoopsRootTestCase):
 # ---------------------------------------------------------------------------
 # loopctl dashboard
 # ---------------------------------------------------------------------------
+
 
 class TestDashboard(LoopsRootTestCase):
     def test_regenerates_and_prints_path(self):
@@ -1042,25 +1188,65 @@ class TestDashboard(LoopsRootTestCase):
 # disposition verbs round-trip through db.py
 # ---------------------------------------------------------------------------
 
+
 class TestDispositions(LoopsRootTestCase):
     def _seed_finding(self, loop_name, finding_id="svc:down"):
         run_id = f"20260722T000000Z-{loop_name}-aaa111"
         started = iso(datetime.now(timezone.utc))
-        r = run_db(["start-run", "--root", self.root, "--run-id", run_id, "--loop", loop_name,
-                     "--engine", "codex", "--trigger", "manual", "--started-at", started])
+        r = run_db(
+            [
+                "start-run",
+                "--root",
+                self.root,
+                "--run-id",
+                run_id,
+                "--loop",
+                loop_name,
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                started,
+            ]
+        )
         self.assertEqual(r.returncode, 0, r.stderr)
 
         contract = {
-            "schema_version": 1, "run_id": run_id, "status": "alert",
-            "status_reason": "x", "headline": "x", "report_markdown": "x",
+            "schema_version": 1,
+            "run_id": run_id,
+            "status": "alert",
+            "status_reason": "x",
+            "headline": "x",
+            "report_markdown": "x",
             "metrics": "{}",
-            "findings": [{"finding_id": finding_id, "title": "svc down", "severity": "alert", "detail": "d"}],
+            "findings": [
+                {
+                    "finding_id": finding_id,
+                    "title": "svc down",
+                    "severity": "alert",
+                    "detail": "d",
+                }
+            ],
         }
         contract_path = os.path.join(self.root, "state", f"{run_id}.contract.json")
         with open(contract_path, "w") as f:
             json.dump(contract, f)
-        r = run_db(["upsert-findings", "--root", self.root, "--run-id", run_id, "--loop", loop_name,
-                     "--contract-file", contract_path, "--ts", started])
+        r = run_db(
+            [
+                "upsert-findings",
+                "--root",
+                self.root,
+                "--run-id",
+                run_id,
+                "--loop",
+                loop_name,
+                "--contract-file",
+                contract_path,
+                "--ts",
+                started,
+            ]
+        )
         self.assertEqual(r.returncode, 0, r.stderr)
         return run_id
 
@@ -1075,7 +1261,9 @@ class TestDispositions(LoopsRootTestCase):
         name = "disp-loop2"
         self.fixture.minimal_valid_loop(name)
         self._seed_finding(name)
-        r = run_cli(["dismiss", name, "svc:down", "--note", "known issue", "--root", self.root])
+        r = run_cli(
+            ["dismiss", name, "svc:down", "--note", "known issue", "--root", self.root]
+        )
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
 
         rq = run_db(["query", "open-findings", "--root", self.root, "--loop", name])
@@ -1084,7 +1272,17 @@ class TestDispositions(LoopsRootTestCase):
         rows = json.loads(rq.stdout)
         self.assertEqual(len(rows), 1)
 
-        rsup = run_db(["suppressed", "--root", self.root, "--loop", name, "--ts", iso(datetime.now(timezone.utc))])
+        rsup = run_db(
+            [
+                "suppressed",
+                "--root",
+                self.root,
+                "--loop",
+                name,
+                "--ts",
+                iso(datetime.now(timezone.utc)),
+            ]
+        )
         self.assertIn("svc:down", [d["finding_id"] for d in json.loads(rsup.stdout)])
 
     def test_snooze_requires_until(self):
@@ -1101,7 +1299,17 @@ class TestDispositions(LoopsRootTestCase):
         until = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")
         r = run_cli(["snooze", name, "svc:down", "--until", until, "--root", self.root])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
-        rsup = run_db(["suppressed", "--root", self.root, "--loop", name, "--ts", iso(datetime.now(timezone.utc))])
+        rsup = run_db(
+            [
+                "suppressed",
+                "--root",
+                self.root,
+                "--loop",
+                name,
+                "--ts",
+                iso(datetime.now(timezone.utc)),
+            ]
+        )
         self.assertIn("svc:down", [d["finding_id"] for d in json.loads(rsup.stdout)])
 
     def test_ack_round_trips(self):
@@ -1118,7 +1326,17 @@ class TestDispositions(LoopsRootTestCase):
         run_cli(["dismiss", name, "svc:down", "--note", "n", "--root", self.root])
         r = run_cli(["reopen", name, "svc:down", "--root", self.root])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
-        rsup = run_db(["suppressed", "--root", self.root, "--loop", name, "--ts", iso(datetime.now(timezone.utc))])
+        rsup = run_db(
+            [
+                "suppressed",
+                "--root",
+                self.root,
+                "--loop",
+                name,
+                "--ts",
+                iso(datetime.now(timezone.utc)),
+            ]
+        )
         self.assertNotIn("svc:down", json.loads(rsup.stdout))
 
     def test_unknown_finding_fails(self):
@@ -1142,24 +1360,65 @@ class TestDispositions(LoopsRootTestCase):
 # loopctl findings
 # ---------------------------------------------------------------------------
 
+
 class TestFindings(LoopsRootTestCase):
     def test_lists_open_findings_with_disposition(self):
         name = "findings-loop"
         self.fixture.minimal_valid_loop(name)
         run_id = f"20260722T000000Z-{name}-bbb222"
         started = iso(datetime.now(timezone.utc))
-        run_db(["start-run", "--root", self.root, "--run-id", run_id, "--loop", name,
-                "--engine", "codex", "--trigger", "manual", "--started-at", started])
+        run_db(
+            [
+                "start-run",
+                "--root",
+                self.root,
+                "--run-id",
+                run_id,
+                "--loop",
+                name,
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                started,
+            ]
+        )
         contract = {
-            "schema_version": 1, "run_id": run_id, "status": "warn",
-            "status_reason": "x", "headline": "x", "report_markdown": "x", "metrics": "{}",
-            "findings": [{"finding_id": "repo:dirty", "title": "dirty repo", "severity": "warn", "detail": "d"}],
+            "schema_version": 1,
+            "run_id": run_id,
+            "status": "warn",
+            "status_reason": "x",
+            "headline": "x",
+            "report_markdown": "x",
+            "metrics": "{}",
+            "findings": [
+                {
+                    "finding_id": "repo:dirty",
+                    "title": "dirty repo",
+                    "severity": "warn",
+                    "detail": "d",
+                }
+            ],
         }
         contract_path = os.path.join(self.root, "state", f"{run_id}.contract.json")
         with open(contract_path, "w") as f:
             json.dump(contract, f)
-        run_db(["upsert-findings", "--root", self.root, "--run-id", run_id, "--loop", name,
-                "--contract-file", contract_path, "--ts", started])
+        run_db(
+            [
+                "upsert-findings",
+                "--root",
+                self.root,
+                "--run-id",
+                run_id,
+                "--loop",
+                name,
+                "--contract-file",
+                contract_path,
+                "--ts",
+                started,
+            ]
+        )
 
         r = run_cli(["findings", name, "--root", self.root, "--json"])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
@@ -1182,12 +1441,15 @@ class TestFindings(LoopsRootTestCase):
 # loopctl list / status
 # ---------------------------------------------------------------------------
 
+
 class TestListStatus(LoopsRootTestCase):
     def test_list_json_shape(self):
         self.fixture.minimal_valid_loop("l1")
         self.fixture.minimal_valid_loop("l2", type_="watchdog")
-        r = run_cli(["list", "--root", self.root, "--json"],
-                     env_overrides=self.fixture.base_env())
+        r = run_cli(
+            ["list", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         rows = {row["name"]: row for row in json.loads(r.stdout)}
         self.assertEqual(set(rows), {"l1", "l2"})
@@ -1198,7 +1460,9 @@ class TestListStatus(LoopsRootTestCase):
 
     def test_list_human_table(self):
         self.fixture.minimal_valid_loop("l3")
-        r = run_cli(["list", "--root", self.root], env_overrides=self.fixture.base_env())
+        r = run_cli(
+            ["list", "--root", self.root], env_overrides=self.fixture.base_env()
+        )
         self.assertEqual(r.returncode, 0)
         self.assertIn("l3", r.stdout)
         self.assertIn("name", r.stdout)
@@ -1214,8 +1478,12 @@ class TestListStatus(LoopsRootTestCase):
     def test_status_single_loop_with_run(self):
         name = "s2"
         self.fixture.minimal_valid_loop(name)
-        self.fixture.add_run(f"20260722T000000Z-{name}-c1", name, iso(datetime.now(timezone.utc)),
-                              headline="all good")
+        self.fixture.add_run(
+            f"20260722T000000Z-{name}-c1",
+            name,
+            iso(datetime.now(timezone.utc)),
+            headline="all good",
+        )
         r = run_cli(["status", name, "--root", self.root, "--json"])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         rows = json.loads(r.stdout)
@@ -1229,6 +1497,152 @@ class TestListStatus(LoopsRootTestCase):
         self.assertEqual(r.returncode, 0)
         rows = json.loads(r.stdout)
         self.assertEqual({row["name"] for row in rows}, {"s3", "s4"})
+
+
+# ---------------------------------------------------------------------------
+# loopctl lifecycle events (Amendment 2) — --actor + _record_event call sites
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleEvents(LoopsRootTestCase):
+    def _valid_loop(self, name, from_dir="loops.d"):
+        self.fixture.minimal_valid_loop(name, extra_lines=[], from_dir=from_dir)
+        self.fixture.write_spec(name, "filled\n" * 11, from_dir=from_dir)
+        return name
+
+    def test_new_records_created_event_with_default_actor(self):
+        r = run_cli(
+            [
+                "new",
+                "evt-loop",
+                "--root",
+                self.root,
+                "--type",
+                "agent",
+                "--engine",
+                "codex",
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, "evt-loop")
+        self.assertEqual(events[0]["event"], "created")
+        self.assertEqual(events[0]["actor"], os.environ.get("USER", "unknown"))
+
+    def test_new_records_created_event_detail(self):
+        r = run_cli(
+            [
+                "new",
+                "evt-loop-detail",
+                "--root",
+                self.root,
+                "--type",
+                "watchdog",
+                "--engine",
+                "claude",
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, "evt-loop-detail")
+        self.assertEqual(events[0]["event"], "created")
+        detail = json.loads(events[0]["detail"])
+        self.assertEqual(detail, {"type": "watchdog", "engine": "claude"})
+
+    def test_actor_flag_overrides(self):
+        r = run_cli(
+            [
+                "new",
+                "evt-loop2",
+                "--root",
+                self.root,
+                "--type",
+                "agent",
+                "--engine",
+                "codex",
+                "--actor",
+                "claude/testproj",
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, "evt-loop2")
+        self.assertEqual(events[0]["actor"], "claude/testproj")
+
+    def test_pause_resume_record_events(self):
+        name = self._valid_loop("evt3")
+        r1 = run_cli(
+            ["pause", name, "--root", self.root], env_overrides=self.fixture.base_env()
+        )
+        self.assertEqual(r1.returncode, 0, msg=r1.stdout + r1.stderr)
+        r2 = run_cli(
+            ["resume", name, "--root", self.root], env_overrides=self.fixture.base_env()
+        )
+        self.assertEqual(r2.returncode, 0, msg=r2.stdout + r2.stderr)
+        names = [e["event"] for e in _query_loop_events(self.root, name)]
+        self.assertEqual(names[:2], ["resumed", "paused"])  # newest first
+
+    def test_pause_resume_record_events_even_when_never_installed(self):
+        # Neither the loop nor its plist has ever been installed — pause/resume
+        # still flip enabled= and still record the intent (ambiguity resolution).
+        name = "evt-uninstalled"
+        self.fixture.write_conf(
+            name,
+            [
+                f"name={name}",
+                'description="d"',
+                "type=agent",
+                "engine=codex",
+                "schedule=interval:15m",
+                "enabled=true",
+            ],
+        )
+        r = run_cli(
+            ["pause", name, "--root", self.root], env_overrides=self.fixture.base_env()
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, name)
+        self.assertEqual(events[0]["event"], "paused")
+        self.assertEqual(events[0]["actor"], os.environ.get("USER", "unknown"))
+
+    def test_pause_actor_flag_overrides(self):
+        name = self._valid_loop("evt-pause-actor")
+        r = run_cli(
+            ["pause", name, "--root", self.root, "--actor", "claude/testproj"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, name)
+        self.assertEqual(events[0]["actor"], "claude/testproj")
+
+    def test_install_records_installed_event_on_success(self):
+        name = self._valid_loop("evt-install")
+        env = self.fixture.base_env(
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
+            LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
+            FAKE_LAUNCHCTL_INSERT_RUN="completed",
+        )
+        r = run_cli(["install", name, "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, name)
+        self.assertEqual(events[0]["event"], "installed")
+        self.assertEqual(events[0]["actor"], os.environ.get("USER", "unknown"))
+
+    def test_install_does_not_record_event_on_kickstart_failure(self):
+        name = self._valid_loop("evt-install-fails")
+        env = self.fixture.base_env(FAKE_LAUNCHCTL_KICKSTART_EXIT="1")
+        r = run_cli(["install", name, "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 1)
+        events = _query_loop_events(self.root, name)
+        self.assertEqual(events, [])
+
+    def test_uninstall_records_uninstalled_event(self):
+        name = self._valid_loop("evt-uninstall")
+        r = run_cli(
+            ["uninstall", name, "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, name)
+        self.assertEqual(events[0]["event"], "uninstalled")
+        self.assertEqual(events[0]["actor"], os.environ.get("USER", "unknown"))
 
 
 if __name__ == "__main__":

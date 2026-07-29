@@ -109,6 +109,15 @@ def _latest_run_id(root, name):
     return rows[0]["run_id"] if rows else None
 
 
+def _record_event(root, loop, event, actor, detail=None):
+    """Best-effort: an audit-write failure must never fail the verb (see
+    docs/INTERFACES.md §8 Amendment 2)."""
+    argv = ["record-event", "--root", root, "--loop", loop, "--event", event, "--actor", actor]
+    if detail:
+        argv += ["--detail", json.dumps(detail)]
+    _db_run_raw(argv)
+
+
 # ---------------------------------------------------------------------------
 # Read-only sqlite helpers (mirrors dashboard/generate.py's own pattern for
 # read-only access — never writes, so it's safe to open directly rather than
@@ -659,6 +668,10 @@ def cmd_new(args):
     _write_file(precheck_path, _render_template(_PRECHECK_SH_TEMPLATE, args.name))
     os.chmod(precheck_path, 0o755)
 
+    _record_event(
+        args.root, args.name, "created", args.actor, detail={"type": args.type_, "engine": args.engine}
+    )
+
     files = ["loop.conf", "prompt.md", "SPEC.md", "dashboard.json", "precheck.sh"]
     if args.json:
         print(json.dumps({"name": args.name, "dir": loop_dir, "files": files}))
@@ -878,6 +891,7 @@ def cmd_install(args):
         _launchctl(["bootout", f"gui/{uid}/{label}"])
         return 1
 
+    _record_event(root, name, "installed", args.actor)
     print(f"installed {name} -> {plist_path}")
     return 0
 
@@ -892,6 +906,7 @@ def cmd_uninstall(args):
     if os.path.isfile(plist_path):
         os.remove(plist_path)
         removed = True
+    _record_event(root, name, "uninstalled", args.actor)
     suffix = "" if removed else " (no plist was present)"
     print(f"uninstalled {name}{suffix}")
     return 0
@@ -916,6 +931,7 @@ def _set_enabled(args, enabled_value):
             _launchctl(["bootout", f"gui/{uid}/{label}"])
 
     verb = "resumed" if enabled_value else "paused"
+    _record_event(root, name, verb, args.actor)
     print(f"{verb} {name}")
     return 0
 
@@ -1018,6 +1034,7 @@ def build_parser():
     common.add_argument("--root", default=_default_root())
     common.add_argument("--json", action="store_true")
     common.add_argument("--from", dest="from_dir", default="loops.d", choices=["loops.d", "examples"])
+    common.add_argument("--actor", default=os.environ.get("USER", "unknown"))
 
     p = argparse.ArgumentParser(prog="loopctl")
     sub = p.add_subparsers(dest="verb")

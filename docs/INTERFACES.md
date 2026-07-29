@@ -649,7 +649,17 @@ Disposition verbs are thin wrappers over `db.py dispose` (+ dashboard regen so t
 visible immediately). The dashboard stays static (Change 4, Option A — settled with generalissimo
 2026-07-22): dispositions enter via this CLI only.
 Global flags: `--root R` (default `$LOOPS_ROOT`), `--json` (machine-readable output where sensible),
-`--from loops.d|examples`. Exit codes: `0` ok · `1` operation failed · `2` usage.
+`--from loops.d|examples`, `--actor A` (default `$USER`, or `unknown` if unset — Amendment 2 —
+2026-07-30). Exit codes: `0` ok · `1` operation failed · `2` usage.
+
+**Lifecycle events (Amendment 2 — 2026-07-30):** `new`, `install`, `uninstall`, `pause`, and
+`resume` each append a `loop_events` row (via `db.py record-event`) on their success path, using
+`--actor` as the actor: `new` → `created` (detail `{"type":…, "engine":…}`); `install` → `installed`
+**only after** kickstart-verify passes (§8.1 step 4) — a failed/aborted install records nothing;
+`uninstall` → `uninstalled`; `pause`/`resume` → `paused`/`resumed`, recorded even when the loop was
+never installed (no plist present) — the event records the intent to pause/resume, not launchd
+state. Recording is best-effort: a `record-event` failure is swallowed and never fails the verb
+itself. `validate` records no event, per the audit-trail semantics in §3.
 
 **`loopctl new` scaffolding** additionally seeds `loops.d/<name>/SPEC.md` from the intake template
 (`docs/LOOP_AUTHORING.md` carries the interview script). Template placeholders use the literal

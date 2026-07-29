@@ -54,3 +54,22 @@ No known concerns.
 ## Open questions
 
 None.
+
+## Revision: reviewer retention test fix
+
+Status: DONE
+
+What changed:
+
+- Updated `test_failing_renderer_leaves_latest_untouched_and_run_completed` so it configures `retention_days=1`.
+- Seeded an old `latest.html` and an old dated HTML report before running a failing renderer.
+- Added an assertion that the old dated report is pruned while the stale `latest.html` remains byte-untouched. This binds the `latest.html` keep-list behavior when no fresh page promotion occurs.
+
+Verification:
+
+- `bash tests/test_runner_pages.sh` -> `test_runner_pages: passed=19 failed=0`.
+- `bash tests/test_runner.sh` -> `passed: 115, failed: 0`.
+
+Concerns:
+
+- No known concerns.

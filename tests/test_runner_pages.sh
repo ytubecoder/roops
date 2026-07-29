@@ -71,17 +71,21 @@ test_successful_render_promotes_dated_and_latest() {
 test_failing_renderer_leaves_latest_untouched_and_run_completed() {
   reset_fake_env
   local root; root="$(new_hermetic_root)"; seed_pagekit "$root"
-  local dir; dir="$(make_loop "$root" pageloop agent)"
+  local dir; dir="$(make_loop "$root" pageloop agent "retention_days=1")"
   local fixture="$root/fixture-contract.json"
   write_contract_fixture "$fixture" ok '[]'
   mkdir -p "$root/reports/pageloop"
   printf 'PREVIOUS' > "$root/reports/pageloop/latest.html"
+  printf 'old' > "$root/reports/pageloop/2020-01-01-0000.html"
+  touch -t 202001010000 "$root/reports/pageloop/latest.html" \
+    "$root/reports/pageloop/2020-01-01-0000.html"
   printf '#!/usr/bin/env bash\nexit 3\n' | make_render "$dir"
   export FAKE_CONTRACT_FILE="$fixture"
   run_runner "$root" pageloop
   unset FAKE_CONTRACT_FILE
   assert_eq "runner exit 0" 0 "$RUNNER_EXIT"
   assert_eq "latest.html untouched" "PREVIOUS" "$(cat "$root/reports/pageloop/latest.html")"
+  assert_file_missing "old dated page pruned" "$root/reports/pageloop/2020-01-01-0000.html"
   local status
   status="$(sqlite3 "$root/state/loops.sqlite" \
     "SELECT runner_status FROM runs ORDER BY started_at DESC LIMIT 1")"

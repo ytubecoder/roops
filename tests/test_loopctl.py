@@ -1647,6 +1647,81 @@ class TestLifecycleEvents(LoopsRootTestCase):
         self.assertEqual(events[0]["event"], "uninstalled")
         self.assertEqual(events[0]["actor"], os.environ.get("USER", "unknown"))
 
+    def test_new_succeeds_even_when_event_recording_fails(self):
+        # Fix round 1: proves the best-effort/never-fail contract on
+        # _record_event, rather than just relying on manual verification.
+        #
+        # A read-only loops.sqlite makes db.py record-event's own INSERT
+        # fail for real (verified below) — db.py's connect() opens the file
+        # fine and both PRAGMA calls succeed (journal_mode is already WAL,
+        # so it's a no-op that needs no write), so the failure only surfaces
+        # at the actual INSERT, which raises uncaught and exits non-zero.
+        #
+        # Two side effects of that failed attempt need explicit handling:
+        # connect() unconditionally chmods the *main* file back to 0600 on
+        # its way out (§0 file-modes rule), independent of whether the write
+        # itself succeeded — so the read-only mode must be freshly
+        # re-applied to the main file before each subprocess invocation that
+        # needs to observe the denial. And SQLite creates the WAL mode's
+        # -wal/-shm sidecar files inheriting the main file's 0444 at the
+        # moment they're created — connect() never resets *those* — so they
+        # stay permanently read-only afterward unless explicitly restored,
+        # which would break any later write in the same test (verified: this
+        # bit us during development — the final read-back query failed with
+        # the same "attempt to write a readonly database" until the sidecars
+        # were restored too).
+        db_path = os.path.join(self.root, "state", "loops.sqlite")
+        sidecar_paths = [db_path + "-wal", db_path + "-shm"]
+        self.assertTrue(os.path.isfile(db_path))
+
+        def _restore_perms():
+            for p in [db_path] + sidecar_paths:
+                if os.path.isfile(p):
+                    os.chmod(p, 0o600)
+
+        self.addCleanup(_restore_perms)
+
+        # Prove the injection is real: db.py record-event must fail non-zero
+        # against a read-only loops.sqlite.
+        os.chmod(db_path, 0o444)
+        r_probe = run_db(
+            [
+                "record-event",
+                "--root",
+                self.root,
+                "--loop",
+                "probe-loop",
+                "--event",
+                "created",
+                "--actor",
+                "tester",
+            ]
+        )
+        self.assertNotEqual(r_probe.returncode, 0)
+
+        # Re-inject for the actual call under test (see the note above: the
+        # probe call already silently restored the main file's permission).
+        os.chmod(db_path, 0o444)
+
+        r = run_cli(["new", "evt-bestfeffort", "--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        loop_dir = self.fixture.loop_dir("evt-bestfeffort")
+        for fname in (
+            "loop.conf",
+            "prompt.md",
+            "SPEC.md",
+            "dashboard.json",
+            "precheck.sh",
+        ):
+            self.assertTrue(os.path.isfile(os.path.join(loop_dir, fname)), fname)
+
+        # And the write genuinely never landed (not just "didn't crash") —
+        # confirms this exercised the failure path, not a lucky race. Restore
+        # full write access (main file + WAL sidecars) before reading back.
+        _restore_perms()
+        events = _query_loop_events(self.root, "evt-bestfeffort")
+        self.assertEqual(events, [])
+
 
 if __name__ == "__main__":
     unittest.main()

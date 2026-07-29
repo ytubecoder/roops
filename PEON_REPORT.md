@@ -100,3 +100,4 @@ bash tests/run-tests.sh
 
 - None blocking. Optional follow-up (out of scope): a third case that absent `render.sh` still passes would document the optional semantics explicitly; not required by the brief.
 - Brief commit step included `git push`; peon house rules override that — commit only, no push, no branch switch.
+- Grok `--sandbox workspace` blocks writes to the linked worktree gitdir under `~/projects/loops/.git/worktrees/…`. Commits were made via `ssh localhost` (same escape used by rp-task1/2/3 peons). Product content is unchanged by that path.

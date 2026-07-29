@@ -27,7 +27,7 @@ Capability is **per-loop and opt-in**. The default floor gives the model no file
 
 Findings keep the same ID across runs, so the same problem is the same row tomorrow. When you dismiss one, the **runner** stops showing it — the model is never trusted to remember it dropped the subject.
 
-**Status: harness built and live-verified (2026-07-22).** Real launchd firing, both engines, findings memory and dispositions, enforcement denial, and the full dashboard state matrix have all been proven on this machine. Eight loops are defined and every one of them sits at or near the report-only floor; none are installed yet.
+**Status: harness built and live-verified (2026-07-22).** Real launchd firing, both engines, findings memory and dispositions, enforcement denial, and the full dashboard state matrix have all been proven on this machine. Eight loops are defined and every one of them sits at or near the report-only floor; `loop-sensei` — the fleet examiner that diagnoses failed loops — is the first installed to launchd, the rest run supervised-only.
 
 ## Install
 

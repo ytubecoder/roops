@@ -60,6 +60,27 @@ Repo hygiene, still true: subagents made 4 commits here (`7f9e2fa`, `ede268f`, `
 pushed: as of 2026-07-28 this repo has a **private** remote at
 `https://github.com/ytubecoder/loops` (`origin`, `main` tracking `origin/main`).
 
+## 3c. Display ontology — design SETTLED 2026-07-29, build deferred
+
+Three-agent brainstorm (ontology / placement / skeptic) converged; generalissimo saw the
+synthesis, chose to ship the failure-UX slice first, and deferred the rest. The settled
+design, if/when built:
+
+- **Compile-time, never runtime**: an LLM authors a loop's display spec ONCE at authoring
+  time (`loopctl restyle`-style verb), committed + diff-reviewed; `generate.py` renders it
+  deterministically forever. Per-run/per-regen LLM passes REJECTED (layout jitter kills
+  at-a-glance anomaly detection; hermetic suite can't test a model at generate time; the
+  compile pass never sees run values so it structurally cannot restate a number).
+- Vocabulary: 5 blocks (`stat` w/ folded sparkline, `flag`, `items`, `table`, `prose`) ×
+  3 slots (hero ≤3 / grid ≤8 / drawer). Everything value-bearing is a ref
+  (`metric:<key>`, `contract:<field>`) substituted by the generator; no block may name a
+  color; thresholds only proposed when SPEC.md states them. Drift badge = hash of the
+  metric key-set vs `compiled_from_keys`.
+- Already shipped from this design: the `prose` block exists as the inline report drawer
+  (INTERFACES §10 amendment 2026-07-29), plus failure surfacing + the agent-handoff block.
+- Trigger to build the rest: when hand-writing `dashboard.json` actually bites (~20+ loops),
+  or when a loop needs `items` (ranked list with prose tails — the loop-scanner shape).
+
 ## 4. Loop-selection leftovers (themes approved in LOOPS_WARMSTART.md; individual definitions NOT)
 
 - Per-loop design pass still owed for every approved theme: P1 P2 P3 S1 S2 S3 M1 H1 H2 F1 F2.

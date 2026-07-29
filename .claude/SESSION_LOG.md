@@ -13,6 +13,28 @@
 - Rebrand stays a candidate: site lives in its own public repo precisely so nothing here renames; if adopted, the rename starts with a `loopctl` alias.
 - Public site uses genericized loop names — internal `ads-*` names kept off it deliberately.
 
+## 2026-07-29/30 — README truth pass; dashboard failure UX + handoff block; display-ontology brainstorm settled; loop-sensei built + first install
+
+### Summary
+- **README accuracy fix** (`362f411`): "it reports. it never acts." was false — `precheck.sh` is unsandboxed trusted bash (ads-google curls 4 endpoints per run by design). README now states the real invariant: *deterministic code you wrote gets full power; the model gets a sandbox*, plus the four axes, the write-capable-loop-is-a-config-change fact, and four honest caveats. CLAUDE.md non-negotiable reworded to match at /sync.
+- **Dashboard failure UX** (`503e285`): failed runs' `error_detail`/`exit_code` now render (runs table + fleet-row headline fallback); latest-run failures get a deterministic paste-into-an-agent **handoff block** (generator template over sqlite fields only); `report_markdown` renders inline in a collapsed escaped drawer. INTERFACES §10 amended explicitly. 10 new hermetic tests; verified via Playwright over localhost (fixture + real page).
+- **loop-sensei** (`76d0b1c`, renamed from loop-doctor mid-build per the roops theme): fleet examiner at the full report-only floor. Precheck computes the failure inventory AND finding identity (`<loop>:<class>`, incl. `died` pseudo-class); engine only diagnoses (Cause/Fix/Evidence). Verified per LOOP_AUTHORING §7: healthy-fleet skipped-precheck (zero tokens), then two REAL codex runs against a scratch root (`LOOPS_ROOT` override) with planted auth-failure + died runs — correct diagnoses citing evidence lines, ids/metrics copied byte-exact, times_seen 1→2 no duplicates. 12 hermetic precheck tests. **Installed to launchd — first loop ever installed**; kickstart-verified real launchd-triggered run.
+
+### Lessons Learned
+- **Accepted (compile-time LLM, runtime determinism):** three-agent fable brainstorm (ontology/placement/skeptic) independently converged on "model authors presentation once at authoring time, generator renders forever" — the compile pass never sees run values so it structurally cannot restate one. Design parked in OPEN_THREADS §3c; the `prose` slice shipped as the report drawer.
+- **Rejected (per-run LLM presentation pass):** layout jitter destroys at-a-glance anomaly detection; a model at generate-time is untestable under the hermetic suite; cost lands on the most-frequently-run, failure-swallowed path (run-loop.sh:473); and it re-opens the believed-metrics hole one level up.
+- **Gotcha (verify subagent claims):** the skeptic memo claimed `loopctl new`'s fill step already has a model author dashboard.json — false (`cmd_new` writes a literal `{"panels": []}` stub; "Fill" is a documented human procedure). Caught by checking `bin/loopctl:657` before repeating it.
+- **Gotcha (test time-rot):** `test_db.test_spend_query` pinned `started_at=2026-07-22` while `query spend --days 7` windows against wall-clock now — it started failing exactly 7 days later, mid-session. Fixture timestamps that feed relative windows must be dynamic.
+- **Gotcha (bulk replace over-match):** blanket `marker` → `_marker` replace hit a test that DID use the variable two lines later (same call text, different context). Caught by the test run, not the lint.
+- **Gotcha (plists are machine-local):** `launchd/*.plist` is gitignored on purpose — install state never travels with the repo. `git ls-files` before committing would have caught it first try (the user's own global rule).
+- **Gotcha (strict-schema migration cost):** codex strict structured outputs require every property in `required` — a contract field can never be optional, so ANY contract addition is a schema_version bump breaking all existing loops. This is what killed the in-session display-spec option.
+
+### Decisions
+- Failure UX ships first (user's interface note mid-brainstorm: see WHY a run failed + get a copy-paste handoff); full display ontology + `loopctl restyle` deferred until dashboard.json authoring actually bites (~20+ loops).
+- loop-sensei findings ARE the handoff: same Cause/Fix/Evidence + `state/runs/<id>/` pointer the dashboard block carries — one pattern, two surfaces.
+- loop-sensei never examines itself (its own latest row at examination time is the in-flight run — a prior failure would be masked); `ok` is unreachable by design (healthy fleet = skipped-precheck amber, accepted over daily spend to say "fine").
+- New-loop naming follows the roops Japanese theme (B-04): loop-sensei not loop-doctor — 先生 covers doctor and teacher.
+
 ## 2026-07-28 — Ads loops: emit-path, contract-conformance and continuity fixes; console surface verified live
 
 ### Summary

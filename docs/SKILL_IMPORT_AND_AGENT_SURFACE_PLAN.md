@@ -157,6 +157,10 @@ suggested_answerer: "agent"|"user"}` — the "give info, show options" pattern, 
 supervising agent to relay. Presentation choices (q10: which metrics become panels, panel
 types, thresholds) are first-class `options[]` entries with `suggested_answerer:"user"` where
 taste matters, `"agent"` where a sane default exists.
+(**Report-pages delta, 2026-07-30:** the rubric now carries `q12_page` — see
+`docs/REPORT_PAGES_PLAN.md` §6. The analyzer suggests a page when the skill produces a
+rich artifact/HTML, `suggested_answerer:"user"`; `--apply` scaffolds `render.sh` INERT —
+non-executable, commented body — under the same never-write-executable-extractions rule.)
 
 **Supported input layouts** (council round — a matrix, not endless special-casing): a directory
 containing `SKILL.md` (bundled `references/`/`scripts/`/assets read as context), or a bare

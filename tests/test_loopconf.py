@@ -1,4 +1,5 @@
 """Tests for bin/loopconf.py — §5.0 + §5 loop.conf parser."""
+
 import importlib.util
 import os
 import subprocess
@@ -214,7 +215,10 @@ class TestLoopConfParsing(unittest.TestCase):
         self.assertTrue(any("exec_allowlist" in e for e in errors))
 
     def test_exec_allowlist_present_ok(self):
-        content = MINIMAL_VALID + 'perm_local_exec=allowlist\nexec_allowlist="git status,gh run list"\n'
+        content = (
+            MINIMAL_VALID
+            + 'perm_local_exec=allowlist\nexec_allowlist="git status,gh run list"\n'
+        )
         path = self.write(content)
         conf, errors = loopconf.parse(path)
         self.assertEqual(errors, [])
@@ -259,9 +263,11 @@ class TestLoopConfParsing(unittest.TestCase):
         old = os.environ.get("LOOPS_ROOT")
         os.environ["LOOPS_ROOT"] = fake_root
         self.addCleanup(
-            lambda: os.environ.pop("LOOPS_ROOT", None)
-            if old is None
-            else os.environ.__setitem__("LOOPS_ROOT", old)
+            lambda: (
+                os.environ.pop("LOOPS_ROOT", None)
+                if old is None
+                else os.environ.__setitem__("LOOPS_ROOT", old)
+            )
         )
         path = self.write(MINIMAL_VALID)
         conf, errors = loopconf.parse(path)
@@ -288,9 +294,11 @@ class TestLoopConfParsing(unittest.TestCase):
         old = os.environ.get("LOOPS_ROOT")
         os.environ["LOOPS_ROOT"] = os.path.join(self.tmp, "unrelated-root")
         self.addCleanup(
-            lambda: os.environ.pop("LOOPS_ROOT", None)
-            if old is None
-            else os.environ.__setitem__("LOOPS_ROOT", old)
+            lambda: (
+                os.environ.pop("LOOPS_ROOT", None)
+                if old is None
+                else os.environ.__setitem__("LOOPS_ROOT", old)
+            )
         )
         content = MINIMAL_VALID + "workdir=/explicit/path\n"
         path = self.write(content)
@@ -324,6 +332,7 @@ class TestLoopConfCLI(unittest.TestCase):
         proc = self.run_cli(["parse", "--file", str(self.path), "--json"])
         self.assertEqual(proc.returncode, 0)
         import json
+
         data = json.loads(proc.stdout)
         self.assertEqual(data["conf"]["name"], "hello-loop")
         self.assertEqual(data["errors"], [])
@@ -353,7 +362,15 @@ class TestLoopConfCLI(unittest.TestCase):
         env = dict(os.environ)
         env["LOOPS_ROOT"] = fake_root
         proc = subprocess.run(
-            [sys.executable, str(BIN), "get", "--file", str(self.path), "--key", "workdir"],
+            [
+                sys.executable,
+                str(BIN),
+                "get",
+                "--file",
+                str(self.path),
+                "--key",
+                "workdir",
+            ],
             capture_output=True,
             text=True,
             env=env,
@@ -361,6 +378,42 @@ class TestLoopConfCLI(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertNotEqual(proc.stdout.strip(), "$LOOPS_ROOT")
         self.assertEqual(proc.stdout.strip(), fake_root)
+
+
+class TestTags(unittest.TestCase):
+    def _parse_with(self, tags_line):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "loop.conf")
+        with open(p, "w") as f:
+            f.write(
+                "name=t1\ndescription=x\ntype=agent\nengine=codex\nschedule=manual\n"
+            )
+            if tags_line is not None:
+                f.write(tags_line + "\n")
+        return loopconf.parse(p)
+
+    def test_tags_absent_defaults_none(self):
+        conf, errors = self._parse_with(None)
+        self.assertEqual(errors, [])
+        self.assertIsNone(conf["tags"])
+
+    def test_tags_parse_dedupe_order(self):
+        conf, errors = self._parse_with('tags="project:x, campaign:y, project:x"')
+        self.assertEqual(errors, [])
+        self.assertEqual(conf["tags"], ["project:x", "campaign:y"])
+
+    def test_tags_invalid_entry_fails(self):
+        _conf, errors = self._parse_with('tags="Project:X"')  # uppercase
+        self.assertTrue(any("tags" in e for e in errors))
+
+    def test_tags_empty_entry_fails(self):
+        _conf, errors = self._parse_with('tags="a,,b"')
+        self.assertTrue(any("tags" in e for e in errors))
+
+    def test_tags_max_eight(self):
+        nine = ",".join(f"t{i}" for i in range(9))
+        _conf, errors = self._parse_with(f'tags="{nine}"')
+        self.assertTrue(any("tags" in e for e in errors))
 
 
 if __name__ == "__main__":

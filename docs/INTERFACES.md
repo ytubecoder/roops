@@ -410,6 +410,7 @@ Python, and sourcing arbitrary files is a code-execution footgun):
 | `credential_env` | no | comma-separated env var names | — | RESERVED — not implemented in v1: `loopctl validate` hard-fails a non-empty value (real passthrough needs a launchd-env design; do not fake it) |
 | `remote_mutation_justification` | cond | string | — | **required** when `perm_remote_mutation != none` |
 | `notes` | no | string | — | free text |
+| `tags` | no | comma-separated, each `^[a-z][a-z0-9:_-]{1,40}$`, deduped order-preserving, max 8 | — | grouping/filtering only; exact-match filter (Amendment 2 — 2026-07-30) |
 
 ### 5.1 Schedule grammar
 | form | meaning | launchd | expected interval (staleness) |

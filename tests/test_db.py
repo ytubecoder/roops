@@ -68,6 +68,7 @@ class TestInit(DbTestCase):
             "metrics",
             "findings",
             "dispositions",
+            "loop_events",
             "schema_meta",
         ]:
             self.assertIn(t, names)
@@ -95,6 +96,7 @@ class TestInit(DbTestCase):
             "idx_hb_loop_ts",
             "idx_metrics_loop_key_ts",
             "idx_disp_loop_finding",
+            "idx_events_loop_ts",
         ]:
             self.assertIn(idx, names)
 

@@ -1501,6 +1501,79 @@ class TestListStatus(LoopsRootTestCase):
         rows = json.loads(r.stdout)
         self.assertEqual({row["name"] for row in rows}, {"s3", "s4"})
 
+    def test_list_tag_filter_exact(self):
+        self.fixture.minimal_valid_loop("tagged", extra_lines=['tags="project:x"'])
+        self.fixture.minimal_valid_loop("untagged")
+        r = run_cli(
+            ["list", "--tag", "project:x", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)
+        self.assertEqual([row["name"] for row in rows], ["tagged"])
+
+        # exact match, not substring — "project" must not match "project:x"
+        r2 = run_cli(
+            ["list", "--tag", "project", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r2.returncode, 0, msg=r2.stdout + r2.stderr)
+        self.assertEqual(json.loads(r2.stdout), [])
+
+    def test_list_json_includes_tags(self):
+        self.fixture.minimal_valid_loop(
+            "tagged", extra_lines=['tags="project:x,team:infra"']
+        )
+        self.fixture.minimal_valid_loop("untagged")
+        r = run_cli(
+            ["list", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = {row["name"]: row for row in json.loads(r.stdout)}
+        self.assertEqual(rows["tagged"]["tags"], ["project:x", "team:infra"])
+        self.assertEqual(rows["untagged"]["tags"], [])
+
+    def test_list_human_table_includes_tags_column(self):
+        self.fixture.minimal_valid_loop("tagged", extra_lines=['tags="project:x"'])
+        r = run_cli(
+            ["list", "--root", self.root], env_overrides=self.fixture.base_env()
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("tags", r.stdout)
+        self.assertIn("project:x", r.stdout)
+
+    def test_status_json_includes_tags_and_provenance(self):
+        self.fixture.minimal_valid_loop("tagged", extra_lines=['tags="project:x"'])
+        r_new = run_cli(
+            [
+                "new",
+                "fresh",
+                "--root",
+                self.root,
+                "--type",
+                "agent",
+                "--engine",
+                "codex",
+                "--actor",
+                "claude/t",
+            ]
+        )
+        self.assertEqual(r_new.returncode, 0, msg=r_new.stdout + r_new.stderr)
+        r = run_cli(["status", "fresh", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)
+        self.assertEqual(rows[0]["tags"], [])
+        self.assertEqual(rows[0]["provenance"]["actor"], "claude/t")
+        self.assertEqual(rows[0]["provenance"]["event"], "created")
+
+    def test_status_json_provenance_none_when_no_events(self):
+        self.fixture.minimal_valid_loop("noprov")
+        r = run_cli(["status", "noprov", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)
+        self.assertIsNone(rows[0]["provenance"])
+
 
 # ---------------------------------------------------------------------------
 # loopctl lifecycle events (Amendment 2) — --actor + _record_event call sites

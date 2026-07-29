@@ -633,7 +633,9 @@ claude -p --output-format json --json-schema "$(cat "$SCHEMA_FILE")" \
 loopctl new <name> [--type agent|watchdog] [--engine codex|claude]   # scaffold from templates
 loopctl validate [<name>|--all]                                      # §5 + §5.2 checks; exit 1 on any fail
 loopctl run <name> [--trigger manual]                                # foreground; streams progress
-loopctl list                                                         # table: name, type, engine, schedule, enabled, installed?
+loopctl list [--tag TAG]                                             # table: name, type, engine, schedule, enabled,
+                                                                      #   installed?, tags (--tag: exact-match filter,
+                                                                      #   Amendment 2 — 2026-07-30)
 loopctl status [<name>]                                              # last run, status, headline, next-run (best effort)
 loopctl install <name>                                               # generate plist → bootstrap → kickstart-verify (§8.1)
 loopctl uninstall <name>                                             # bootout + remove plist
@@ -660,6 +662,16 @@ Global flags: `--root R` (default `$LOOPS_ROOT`), `--json` (machine-readable out
 never installed (no plist present) — the event records the intent to pause/resume, not launchd
 state. Recording is best-effort: a `record-event` failure is swallowed and never fails the verb
 itself. `validate` records no event, per the audit-trail semantics in §3.
+
+**Tags + provenance in JSON output (Amendment 2 — 2026-07-30):** `list --json` and `status --json`
+rows each gain `"tags": [...]` (from `loop.conf`'s `tags=`, `conf.get("tags") or []`). `list --tag T`
+filters rows to an exact match against a row's `tags` list (not a substring match — `--tag project`
+does not match a tag of `project:x`). `status --json` rows additionally gain `"provenance"`: the
+most recent `created` or `imported` event for the loop (`db.py query loop-events --loop L --limit
+10`, first row whose `event` is `created`/`imported`), shaped `{"event", "actor", "ts"}`, or `None`
+if no such event exists (e.g. loops that predate lifecycle-event recording, or ones scaffolded by
+hand). `status` (table form) is unchanged by this amendment — only its `--json` rows carry tags/
+provenance.
 
 **`loopctl new` scaffolding** additionally seeds `loops.d/<name>/SPEC.md` from the intake template
 (`docs/LOOP_AUTHORING.md` carries the interview script). Template placeholders use the literal

@@ -737,12 +737,18 @@ def cmd_list(args):
                 "schedule": conf.get("schedule"),
                 "enabled": conf.get("enabled"),
                 "installed": _is_installed(args.root, name),
+                "tags": conf.get("tags") or [],
             }
         )
+    if args.tag:
+        rows = [r for r in rows if args.tag in r["tags"]]
     if args.json:
         print(json.dumps(rows))
     else:
-        _print_table(rows, ["name", "type", "engine", "schedule", "enabled", "installed"])
+        table_rows = [{**r, "tags": ",".join(r["tags"])} for r in rows]
+        _print_table(
+            table_rows, ["name", "type", "engine", "schedule", "enabled", "installed", "tags"]
+        )
     return 0
 
 
@@ -767,6 +773,14 @@ def cmd_status(args):
             if next_dt:
                 next_text = dash.format_relative(next_dt.strftime("%Y-%m-%dT%H:%M:%SZ"), now)
 
+        ev = _db_query(args.root, "loop-events", loop=name, limit=10)
+        prov = next((e for e in ev if e["event"] in ("created", "imported")), None)
+        provenance = (
+            {"event": prov["event"], "actor": prov["actor"], "ts": prov["ts"]}
+            if prov
+            else None
+        )
+
         rows.append(
             {
                 "name": name,
@@ -775,6 +789,8 @@ def cmd_status(args):
                 "headline": last.get("headline") if last else None,
                 "started_at": last.get("started_at") if last else None,
                 "next_run": next_text,
+                "tags": conf.get("tags") or [],
+                "provenance": provenance,
             }
         )
 
@@ -1052,7 +1068,8 @@ def build_parser():
     run_p.add_argument("name")
     run_p.add_argument("--trigger", default="manual")
 
-    sub.add_parser("list", parents=[common])
+    list_p = sub.add_parser("list", parents=[common])
+    list_p.add_argument("--tag", default=None)
 
     status_p = sub.add_parser("status", parents=[common])
     status_p.add_argument("name", nargs="?")

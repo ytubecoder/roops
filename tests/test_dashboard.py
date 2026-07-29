@@ -191,6 +191,14 @@ class FixtureRoot:
         with open(os.path.join(d, "latest.md"), "w") as f:
             f.write("# report\n")
 
+    def install(self, name):
+        """§10 amendment 2026-07-30: staleness only applies to installed loops; the
+        dashboard's install-state check is launchd plist file presence."""
+        d = os.path.join(self.root, "launchd")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"com.loops.{name}.plist"), "w") as f:
+            f.write("<plist/>\n")
+
 
 def fake_loopconf_parse(conf_overrides=None):
     """Returns a fake loopconf.parse(path) that reads our simple KEY=value fixture files."""
@@ -516,6 +524,7 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_stale_loop_flagged_and_counts_toward_needs_attention(self):
         conn = self.fx.init_db()
         self.fx.add_loop("rare", schedule="interval:1m")
+        self.fx.install("rare")  # staleness only applies to installed loops (§10)
         self.fx.add_run(
             conn,
             "r1",
@@ -551,6 +560,46 @@ class GenerateIntegrationTests(unittest.TestCase):
         self.assertIn('<span class="badge stale">stale</span>', html)
         # and it must actually count toward the needs-attention chip
         self.assertIn("needs attention 1", html)
+
+    def test_uninstalled_loop_never_flagged_stale(self):
+        """§10 amendment 2026-07-30: an overdue loop with no launchd plist is 休
+        ("no schedule loaded"), not stale — supervised-only fleets must not render
+        wall-to-wall stale badges."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("rare", schedule="interval:1m")  # no .install()
+        self.fx.add_run(
+            conn,
+            "r1",
+            "rare",
+            iso(NOW - timedelta(hours=5)),
+            iso(NOW - timedelta(hours=5)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(
+                {
+                    "interval:1m": {
+                        "kind": "interval",
+                        "launchd": {"StartInterval": 60},
+                        "expected_interval_s": 60,
+                    }
+                }
+            ),
+            now=NOW,
+        )
+        with open(out) as f:
+            html = f.read()
+        self.assertNotIn('<span class="badge stale">stale</span>', html)
+        self.assertIn("no schedule loaded", html)
+        self.assertIn("needs attention 0", html)
 
     def test_manual_loop_never_flagged_stale(self):
         conn = self.fx.init_db()

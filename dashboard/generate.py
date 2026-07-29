@@ -493,102 +493,285 @@ def _read_json(path):
 # --------------------------------------------------------------------------------------------
 
 CSS = """
-:root { color-scheme: dark; }
-* { box-sizing: border-box; }
+/* garden dashboard — roops design system (B-04/B-07). Tokens are the roops set; no network
+   assets (Section 10): local mincho only, no webfonts, no textures, no urls of any scheme. */
+:root {
+  color-scheme: light;
+  --sumi: #1C1A17; --sumi-deep: #16130F;
+  --washi: #F2EDE3; --washi-shade: #E9E2D3;
+  --shu: #C73E2B; --shu-deep: #A93321;
+  --ai: #2E4A5B; --nibi: #8C8578; --koke: #6B7A5C; --ochre: #A87A2A;
+  --hair: rgba(28,26,23,.14); --hair2: rgba(28,26,23,.22);
+  --serif: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-  margin: 0; padding: 0 0 3rem;
-  background: #0b0e14; color: #d7dce3;
-  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--sumi-deep); color: var(--sumi);
+  font-family: var(--serif); font-size: 14px; line-height: 1.6;
+  padding: clamp(10px, 2.5vw, 36px);
 }
-a { color: #6fb3ff; }
-a:hover { color: #9ccbff; }
-h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; margin: 0; }
+a { color: var(--ai); }
+a:hover { color: var(--shu); }
+h1, h2, h3 { font-weight: 500; letter-spacing: .01em; }
+.sheet {
+  position: relative; max-width: 1320px; margin: 0 auto;
+  background: var(--washi); border-radius: 4px; overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0,0,0,.5), 0 24px 80px -24px rgba(0,0,0,.8);
+}
+.sheet::before, .sheet::after { content: ""; position: absolute; width: 24px; height: 24px; pointer-events: none; z-index: 2; }
+.sheet::before { top: 14px; left: 14px; border-top: 1px solid var(--nibi); border-left: 1px solid var(--nibi); }
+.sheet::after { bottom: 14px; right: 14px; border-bottom: 1px solid var(--nibi); border-right: 1px solid var(--nibi); }
+
+/* ---------- header ---------- */
 .topstrip {
-  display: flex; flex-wrap: wrap; gap: 1.25rem; align-items: center;
-  background: #11151d; border-bottom: 1px solid #232a36; padding: 0.9rem 1.4rem;
-  position: sticky; top: 0; z-index: 5;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px;
+  padding: 20px clamp(20px, 4vw, 44px); border-bottom: 1px solid var(--hair2);
 }
-.topstrip h1 { font-size: 1.05rem; color: #f2f4f8; margin-right: 0.5rem; }
-.chip {
-  display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.65rem;
-  border-radius: 999px; background: #1a2029; font-size: 0.8rem; font-weight: 600;
-  border: 1px solid #262e3b;
+.seal-mini {
+  width: 34px; height: 34px; background: var(--shu); color: var(--washi);
+  font-family: var(--serif); font-size: 19px; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  transform: rotate(-2deg); flex: none;
 }
-.chip .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; }
-.needs-attention { border-color: #7a3a3a; background: #241416; color: #ff9d9d; }
-.spacer { flex: 1; }
-.muted { color: #808a99; font-weight: 400; }
-main { padding: 1.4rem; max-width: 1400px; margin: 0 auto; }
-table.loops { width: 100%; border-collapse: collapse; margin-bottom: 2rem; }
-table.loops th {
-  text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
-  color: #808a99; padding: 0.4rem 0.7rem; border-bottom: 1px solid #232a36;
+.topstrip h1 { font-size: 17px; white-space: nowrap; }
+.topstrip h1 small {
+  display: block; font-family: var(--mono); font-size: 9.5px; font-weight: 400;
+  letter-spacing: .3em; color: var(--nibi); text-transform: uppercase; margin-top: 1px;
 }
-table.loops td { padding: 0.55rem 0.7rem; border-bottom: 1px solid #171c25; vertical-align: middle; }
-table.loops tr:hover td { background: #12161f; }
-.light { display: inline-block; width: 0.85rem; height: 0.85rem; border-radius: 50%; margin-right: 0.5rem; vertical-align: -1px; }
-.light.green { background: #37d67a; box-shadow: 0 0 8px #37d67a55; }
-.light.amber { background: #f2b23c; box-shadow: 0 0 8px #f2b23c55; }
-.light.red { background: #ff5c5c; box-shadow: 0 0 8px #ff5c5c55; }
-.light.grey { background: #4a5364; }
-.badge { display: inline-block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.03em; padding: 0.1rem 0.4rem; border-radius: 4px; margin-left: 0.35rem; }
-.badge.harness { background: #4a1010; color: #ff9d9d; border: 1px solid #7a3a3a; }
-.badge.stale { background: #4a3a10; color: #ffd68a; border: 1px solid #7a5a2a; }
-.badge.died { background: #4a1010; color: #ff9d9d; border: 1px solid #7a3a3a; }
-.loop-name { font-weight: 700; color: #f2f4f8; }
+.head-stats {
+  margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px clamp(14px, 2.5vw, 34px);
+  align-items: baseline; font-family: var(--mono); font-size: 11px;
+  letter-spacing: .14em; color: var(--nibi); text-transform: uppercase;
+}
+.chip { white-space: nowrap; }
+.chip b { font-weight: 400; color: var(--sumi); }
+.chip .jp { font-family: var(--serif); letter-spacing: 0; }
+.chip.needs-attention { color: var(--shu); }
+.chip.needs-attention b { color: var(--shu); }
+.spacer { display: none; }
+.muted { color: var(--nibi); font-weight: 400; }
+
+/* ---------- section chrome ---------- */
+main { padding: 0 0 8px; }
+.zone { padding: clamp(22px, 3vw, 38px) clamp(20px, 4vw, 44px); }
+.zone + .zone { border-top: 1px solid var(--hair); }
+.kicker {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .28em;
+  text-transform: uppercase; color: var(--nibi);
+  display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px;
+}
+.kicker b { color: var(--shu); font-weight: 400; font-size: 13px; letter-spacing: 0; font-family: var(--serif); }
+.kicker .note { margin-left: auto; letter-spacing: .14em; font-size: 10px; }
+
+/* ---------- the garden (global view) ---------- */
+.garden { border: 1px solid var(--hair2); border-radius: 3px; background: rgba(255,255,255,.25); overflow-x: auto; }
+.loop-row {
+  display: grid; grid-template-columns: 44px 1.1fr 1.5fr 190px 30px; gap: 16px;
+  align-items: center; padding: 12px 18px; min-width: 960px;
+  border-bottom: 1px solid var(--hair);
+}
+.loop-row:last-child { border-bottom: none; }
+.loop-row:hover { background: rgba(28,26,23,.035); }
+.stamp-cell { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.stamp {
+  width: 28px; height: 28px; border-radius: 3px; font-size: 14px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--serif); transform: rotate(-2deg); flex: none;
+}
+.stamp.green { border: 1.5px solid var(--koke); color: var(--koke); }
+.stamp.amber { border: 1.5px solid var(--ochre); color: var(--ochre); }
+.stamp.red { background: var(--shu); color: var(--washi); }
+.stamp.grey { border: 1.5px solid var(--nibi); color: var(--nibi); }
+.loop-name { font-family: var(--mono); font-size: 12.5px; font-weight: 400; color: var(--sumi); }
 .loop-name a { color: inherit; text-decoration: none; }
 .loop-name a:hover { text-decoration: underline; }
-section.loop {
-  background: #11151d; border: 1px solid #232a36; border-radius: 10px;
-  padding: 1.1rem 1.3rem; margin-bottom: 1.2rem;
+.loop-name small {
+  display: block; font-size: 10px; color: var(--nibi); letter-spacing: .06em; margin-top: 2px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-section.loop h2 { font-size: 1.05rem; color: #f2f4f8; }
-section.loop h2 .light { margin-right: 0.6rem; }
-.panels { display: flex; flex-wrap: wrap; gap: 0.8rem; margin: 0.9rem 0; }
-.panel {
-  background: #171c25; border: 1px solid #232a36; border-radius: 8px; padding: 0.7rem 0.9rem;
-  min-width: 150px;
+
+/* the tokonoma — each loop hangs its own output */
+.toko {
+  position: relative; height: 64px; border-radius: 3px;
+  background: var(--washi-shade); border: 1px solid var(--hair2);
+  box-shadow: inset 0 1px 3px -2px rgba(28,26,23,.55), inset 0 -1px 0 rgba(255,255,255,.4);
 }
-.panel .title { font-size: 0.72rem; text-transform: uppercase; color: #808a99; letter-spacing: 0.03em; }
-.panel .value { font-size: 1.35rem; font-weight: 700; color: #f2f4f8; margin-top: 0.15rem; }
-.panel .value.warn { color: #f2b23c; }
-.panel .value.alert { color: #ff5c5c; }
-.panel .spark { color: #6fb3ff; margin-top: 0.3rem; }
-table.list-panel { border-collapse: collapse; font-size: 0.82rem; }
-table.list-panel td, table.list-panel th { padding: 0.15rem 0.5rem; }
-.findings { margin: 0.9rem 0; }
-.finding { padding: 0.5rem 0.7rem; border-radius: 6px; margin-bottom: 0.4rem; background: #171c25; border: 1px solid #232a36; }
-.finding.suppressed { opacity: 0.5; background: #12151b; }
-.finding .fid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: #9fb0c3; }
-.finding .sev { font-weight: 700; margin-right: 0.4rem; text-transform: uppercase; font-size: 0.7rem; }
-.finding .sev.warn { color: #f2b23c; }
-.finding .sev.alert { color: #ff5c5c; }
-.finding .sev.info { color: #6fb3ff; }
-.finding .recurrence { color: #808a99; font-size: 0.8rem; margin-left: 0.4rem; }
-.finding .cmd { display: block; margin-top: 0.3rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.76rem; color: #6fb3ff; background: #0b0e14; padding: 0.2rem 0.5rem; border-radius: 4px; }
-.runs-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 0.5rem; }
-.runs-table th { text-align: left; color: #808a99; font-weight: 600; padding: 0.25rem 0.5rem; border-bottom: 1px solid #232a36; }
-.runs-table td { padding: 0.25rem 0.5rem; border-bottom: 1px solid #171c25; }
-.fail-detail { color: #ff9d9d; font-size: 0.8rem; }
-details.handoff { margin: 0.7rem 0; border: 1px solid #7a3a3a; border-radius: 6px; background: #241416; }
-details.handoff summary { cursor: pointer; color: #ff9d9d; font-weight: 600; font-size: 0.85rem; padding: 0.5rem 0.7rem; }
-details.handoff .hint { color: #808a99; font-size: 0.75rem; padding: 0 0.7rem 0.4rem; }
+.toko-scroll {
+  height: 100%; overflow-y: auto; overflow-x: hidden; padding: 8px 10px;
+  scrollbar-width: thin; scrollbar-color: rgba(140,133,120,.3) transparent;
+}
+.toko-scroll::-webkit-scrollbar { width: 4px; }
+.toko-scroll::-webkit-scrollbar-thumb { background: rgba(140,133,120,.28); border-radius: 2px; }
+.toko-tag {
+  position: absolute; top: 3px; right: 5px; z-index: 1; pointer-events: none;
+  font-family: var(--mono); font-size: 8.5px; letter-spacing: .2em; text-transform: uppercase;
+  color: var(--sumi); opacity: .35; background: var(--washi-shade); padding: 0 1px 0 6px;
+}
+.toko-scroll > .obj:first-child { padding-right: 52px; }
+.obj { display: grid; grid-template-columns: 13px 1fr; gap: 5px; line-height: 14.5px; }
+.obj .mk { font-family: var(--serif); font-style: normal; font-size: 11.5px; line-height: 14.5px; text-align: center; }
+.obj .mk-ok { color: var(--koke); }
+.obj .mk-part { color: var(--ochre); }
+.obj .mk-fail { color: var(--shu); }
+.obj .oc { font-family: var(--mono); font-size: 10.5px; color: var(--sumi); overflow-wrap: anywhere; }
+
+.run-meta {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  font-family: var(--mono); text-align: right; white-space: nowrap;
+}
+.run-meta .rm-when { font-size: 11px; color: var(--nibi); }
+.run-meta .rm-cost { font-size: 10px; color: var(--nibi); opacity: .82; }
+.run-meta .rm-next { font-size: 10px; color: var(--koke); letter-spacing: .04em; }
+.run-meta .rm-next.off { color: var(--nibi); }
+.run-meta a { font-size: 10px; letter-spacing: .06em; }
+
+/* schedule state — 巡 loaded / 休 not loaded / 手 manual */
+.sw-cell { display: flex; justify-content: flex-end; }
+.sw {
+  width: 24px; height: 24px; border-radius: 3px; font-family: var(--serif); font-size: 13px;
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+}
+.sw.on { border: 1.5px solid var(--koke); color: var(--koke); }
+.sw.off { border: 1.5px solid var(--hair2); color: var(--nibi); }
+.sw.manual { border: 1.5px dashed var(--hair2); color: var(--nibi); }
+
+/* small ink dots — run history, heartbeats */
+.light {
+  display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+  margin-right: 8px; vertical-align: -1px; transform: rotate(-2deg);
+}
+.light.green { background: var(--koke); }
+.light.amber { background: var(--ochre); }
+.light.red { background: var(--shu); }
+.light.grey { background: var(--nibi); opacity: .55; }
+.badge {
+  display: inline-block; font-family: var(--mono); font-size: 8.5px; font-weight: 400;
+  text-transform: uppercase; letter-spacing: .14em; padding: 2px 6px; border-radius: 2px;
+  margin-left: 6px; vertical-align: 1px;
+}
+.badge.harness { color: var(--shu); border: 1px solid var(--shu); }
+.badge.stale { color: var(--ochre); border: 1px solid var(--ochre); }
+.badge.died { color: var(--washi); background: var(--shu); border: 1px solid var(--shu); }
+.badge.hold { color: var(--ochre); border: 1px solid var(--ochre); }
+
+/* ---------- per-loop sections ---------- */
+section.loop { padding: clamp(22px, 3vw, 38px) clamp(20px, 4vw, 44px); border-top: 1px solid var(--hair); }
+section.loop h2 { font-size: 15px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+section.loop h2 .lname { font-family: var(--mono); font-size: 13.5px; }
+section.loop h2 .muted { font-size: 12px; font-weight: 400; flex-basis: 100%; max-width: 88ch; line-height: 1.55; }
+
+/* measures (帳) — declared panels */
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px;
+  background: var(--hair2); border: 1px solid var(--hair2); border-radius: 3px; margin: 18px 0; }
+.panel { background: var(--washi); padding: 14px 16px 12px; }
+.panel .title {
+  font-family: var(--mono); font-size: 9.5px; text-transform: uppercase;
+  color: var(--nibi); letter-spacing: .16em; line-height: 1.7;
+}
+.panel .value {
+  font-family: var(--mono); font-size: 24px; line-height: 1.1; letter-spacing: -.02em;
+  color: var(--sumi); margin-top: 6px;
+}
+.panel .value.warn { color: var(--ochre); }
+.panel .value.alert { color: var(--shu); }
+.panel .spark { color: var(--sumi); margin-top: 6px; display: block; }
+table.list-panel { border-collapse: collapse; font-family: var(--mono); font-size: 10.5px; margin-top: 6px; }
+table.list-panel td, table.list-panel th { padding: 2px 8px 2px 0; text-align: left; }
+table.list-panel th { color: var(--nibi); font-weight: 400; text-transform: uppercase; font-size: 9px; letter-spacing: .12em; }
+.panel ul { list-style: none; font-family: var(--mono); font-size: 10.5px; margin-top: 6px; }
+
+/* the arrangement — findings */
+.findings { margin: 18px 0; }
+.findings h3 {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .28em;
+  text-transform: uppercase; color: var(--nibi); font-weight: 400; margin-bottom: 10px;
+}
+.finding {
+  padding: 12px 4px 12px 14px; border-bottom: 1px solid var(--hair);
+  border-left: 3px solid var(--nibi);
+}
+.finding:last-child { border-bottom: none; }
+.finding[data-sev="alert"] { border-left-color: var(--shu); }
+.finding[data-sev="warn"] { border-left-color: var(--ochre); }
+.finding[data-sev="info"] { border-left-color: var(--koke); }
+.finding.suppressed { opacity: .45; }
+.finding .fid { font-family: var(--mono); font-size: 10px; color: var(--ai); letter-spacing: .06em; }
+.finding .sev {
+  font-family: var(--mono); font-weight: 400; margin-right: 8px; text-transform: uppercase;
+  font-size: 9px; letter-spacing: .2em;
+}
+.finding .sev.warn { color: var(--ochre); }
+.finding .sev.alert { color: var(--shu); }
+.finding .sev.info { color: var(--koke); }
+.finding .recurrence { color: var(--nibi); font-family: var(--mono); font-size: 10px; margin-left: 8px; }
+.finding .pchip {
+  display: inline-flex; align-items: center; gap: 5px; margin-right: 8px;
+  font-family: var(--mono); font-size: 8.5px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--nibi); border: 1px solid var(--hair2); border-radius: 3px; padding: 2px 7px 2px 5px;
+}
+.finding .pchip i { font-family: var(--serif); font-style: normal; font-size: 12px; line-height: 1; letter-spacing: 0; color: var(--sumi); }
+.finding > div { font-size: 13px; }
+.finding .cmd {
+  display: block; margin-top: 6px; font-family: var(--mono); font-size: 10px;
+  color: var(--ai); background: rgba(28,26,23,.05); border: 1px solid var(--hair);
+  padding: 3px 8px; border-radius: 2px; width: fit-content; max-width: 100%; overflow-wrap: anywhere;
+}
+
+/* run history */
+.runs-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 10.5px; margin-top: 8px; }
+.runs-table th {
+  text-align: left; color: var(--nibi); font-weight: 400; text-transform: uppercase;
+  font-size: 9px; letter-spacing: .16em; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair2);
+}
+.runs-table td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair); vertical-align: top; }
+section.loop > h3 {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .28em;
+  text-transform: uppercase; color: var(--nibi); font-weight: 400; margin-top: 20px;
+}
+.fail-detail { color: var(--shu); font-size: 10.5px; }
+
+/* failure handoff — the one washi-red block */
+details.handoff { margin: 14px 0; border: 1px solid var(--shu); border-radius: 3px; background: rgba(199,62,43,.05); }
+details.handoff summary {
+  cursor: pointer; color: var(--shu); font-family: var(--mono); font-size: 11px;
+  letter-spacing: .1em; padding: 9px 13px;
+}
+details.handoff .hint { color: var(--nibi); font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; padding: 0 13px 6px; }
 details.handoff textarea {
-  display: block; width: calc(100% - 1.4rem); margin: 0 0.7rem 0.7rem; height: 9.5rem;
-  background: #0b0e14; color: #d7dce3; border: 1px solid #232a36; border-radius: 4px;
-  font: 0.76rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 0.5rem; resize: vertical;
+  display: block; width: calc(100% - 26px); margin: 0 13px 12px; height: 9.5rem;
+  background: var(--washi); color: var(--sumi); border: 1px solid var(--hair2); border-radius: 2px;
+  font: 10.5px/1.5 var(--mono); padding: 8px; resize: vertical;
 }
-details.report-drawer summary { cursor: pointer; color: #808a99; font-size: 0.8rem; margin-top: 0.7rem; }
-.report-drawer pre { background: #0b0e14; padding: 0.6rem; border-radius: 6px; overflow-x: auto;
-  font-size: 0.78rem; white-space: pre-wrap; word-break: break-word; }
-details.raw-fallback summary { cursor: pointer; color: #808a99; font-size: 0.8rem; margin-top: 0.7rem; }
-.raw-fallback pre { background: #0b0e14; padding: 0.6rem; border-radius: 6px; overflow-x: auto; font-size: 0.76rem; }
-.hb { font-size: 0.85rem; margin: 0.5rem 0; }
-.hb .light { margin-right: 0.35rem; }
-.empty { padding: 3rem; text-align: center; color: #808a99; }
-footer { text-align: center; color: #4a5364; font-size: 0.75rem; padding: 1.5rem; }
+details.report-drawer summary, details.raw-fallback summary {
+  cursor: pointer; color: var(--nibi); font-family: var(--mono); font-size: 10px;
+  letter-spacing: .14em; text-transform: uppercase; margin-top: 14px;
+}
+.report-drawer pre, .raw-fallback pre {
+  background: var(--washi-shade); border: 1px solid var(--hair); margin-top: 8px;
+  padding: 12px 14px; border-radius: 3px; overflow-x: auto;
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word;
+}
+.hb { font-family: var(--mono); font-size: 11px; margin: 10px 0; color: var(--sumi); }
+.empty { padding: 4rem 2rem; text-align: center; color: var(--nibi); font-family: var(--mono); font-size: 12px; letter-spacing: .1em; }
+footer {
+  padding: 18px clamp(20px, 4vw, 44px) 26px; border-top: 1px solid var(--hair);
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .14em; color: var(--nibi);
+  text-transform: uppercase; line-height: 2;
+}
+
+@media (max-width: 767px) {
+  .head-stats { margin-left: 0; width: 100%; }
+  .loop-row { grid-template-columns: 44px minmax(0, 1fr) 30px; gap: 10px 12px; min-width: 0; padding: 14px; }
+  .loop-row > .stamp-cell { grid-column: 1; grid-row: 1; }
+  .loop-row > .loop-name { grid-column: 2; grid-row: 1; }
+  .loop-row > .sw-cell { grid-column: 3; grid-row: 1; }
+  .loop-row > .toko { grid-column: 1 / -1; grid-row: 2; }
+  .loop-row > .run-meta { grid-column: 1 / -1; grid-row: 3; align-items: flex-start; text-align: left; }
+  .loop-name { overflow-wrap: anywhere; }
+  .garden { overflow-x: visible; }
+}
 """
 
 
@@ -599,6 +782,51 @@ def _light_html(color, marker=None, extra_badges=()):
     for b in extra_badges:
         out += f'<span class="badge {e(b.lower())}">{e(b)}</span>'
     return out
+
+
+# Status stamps (hanko) — the garden's rendering of the same §4.3 precedence result that
+# _light_html renders as a dot. Purely presentational: color in, kanji out.
+_STAMP_KANJI = {"green": "済", "amber": "注", "red": "警", "grey": "未"}
+
+
+def _stamp_html(color, marker=None, extra_badges=()):
+    kanji = _STAMP_KANJI.get(color, "未")
+    out = (
+        f'<span class="stamp-cell"><span class="stamp {color}" title="{e(color)}">'
+        f"{kanji}</span>"
+    )
+    if marker == "harness-problem":
+        out += '<span class="badge harness">harness</span>'
+    for b in extra_badges:
+        out += f'<span class="badge {e(b.lower())}">{e(b)}</span>'
+    return out + "</span>"
+
+
+def _schedule_loaded(root, name):
+    """Display-only install-state check (§10 amendment 2026-07-30): the launchd plist file
+    written by `loopctl install` exists. File presence only — never shells out to launchctl,
+    so the generator stays hermetic and subprocess-free."""
+    return os.path.isfile(os.path.join(root, "launchd", f"com.loops.{name}.plist"))
+
+
+# Marubatsu marks for the tokonoma — severity/status rendered as 〇 △ ×, never emoji.
+_MARK_BY_STATUS = {
+    "ok": ("〇", "mk-ok"),
+    "warn": ("△", "mk-part"),
+    "alert": ("×", "mk-fail"),
+}
+_MARK_BY_SEVERITY = {
+    "info": ("〇", "mk-ok"),
+    "warn": ("△", "mk-part"),
+    "alert": ("×", "mk-fail"),
+}
+
+
+def _toko_line(mark, mark_cls, text_html):
+    return (
+        f'<div class="obj"><i class="mk {mark_cls}">{mark}</i>'
+        f'<span class="oc">{text_html}</span></div>'
+    )
 
 
 def _render_panel_number(panel, metric_row, now, conn=None, loop_name=None):
@@ -753,7 +981,7 @@ def _render_raw_fallback(run_metrics, declared_keys, report_href):
     body = "\n".join(lines)
     link = f' — <a href="{e(report_href)}">full report</a>' if report_href else ""
     return (
-        '<details class="raw-fallback" open><summary>Other metrics'
+        '<details class="raw-fallback"><summary>Other metrics'
         f"{link}</summary><pre>{body}</pre></details>"
     )
 
@@ -796,9 +1024,14 @@ def _render_findings(conn, loop_name, latest_json, now):
         else:
             cmd = f'<code class="cmd">loopctl reopen {e(loop_name)} {e(fid)}</code>'
         detail_html = f"<div>{e(detail)}</div>" if detail else ""
+        # pancaked — the same finding across N rounds is one stack, one decision
+        pchip = ""
+        if (f.get("times_seen") or 0) >= 2:
+            pchip = f'<span class="pchip"><i>巡</i> ×{int(f["times_seen"])}</span>'
         out.append(
-            f'<div class="{cls}"><span class="sev {e(severity)}">{e(severity)}</span>'
-            f'<span class="fid">{e(fid)}</span> — {e(title)}'
+            f'<div class="{cls}" data-sev="{e(severity)}">'
+            f'<span class="sev {e(severity)}">{e(severity)}</span>'
+            f'<span class="fid">{e(fid)}</span> — {e(title)} {pchip}'
             f'<span class="recurrence">{e(recurrence)}</span>{detail_html}{cmd}</div>'
         )
     return f'<div class="findings"><h3>Findings</h3>{"".join(out)}</div>'
@@ -834,44 +1067,54 @@ def _render_recent_runs(runs, now):
 
 
 def _render_loop_row(loop, now):
-    color = loop["light_color"]
-    marker = loop["light_marker"]
     badges = []
     if loop["stale"]:
         badges.append("stale")
     if loop["died"]:
         badges.append("died")
-    light = _light_html(color, marker, badges)
+    stamp = _stamp_html(loop["light_color"], loop["light_marker"], badges)
+
     latest = loop["latest_run"]
     if latest:
-        last_run = f'{e(format_relative(latest["started_at"], now))} <span class="muted">({e(latest["started_at"])})</span>'
-        headline = e(latest.get("headline") or "")
-        if not headline and latest["runner_status"] in FAILURE_STATUSES:
-            # failed runs have no headline — surface the why instead of a blank cell
-            why = latest.get("error_detail") or latest["runner_status"]
-            headline = f'<span class="fail-detail">{e(why)}</span>'
+        started = latest["started_at"] or ""
+        abs_short = started[5:16].replace("T", " ") if len(started) >= 16 else started
+        last_run = f"last 巡 {e(format_relative(started, now))} · {e(abs_short)}"
     else:
-        last_run = '<span class="muted">never run</span>'
-        headline = '<span class="muted">no data</span>'
-    next_run = loop["next_run_text"]
+        last_run = "last 巡 never"
+
     spend_tok, spend_cost = loop["spend_7d"]
-    spend_html = fmt_num(spend_tok) + " tok"
+    spend_text = f"7d {fmt_num(spend_tok)} tok"
     if spend_cost:
-        spend_html += f" (${spend_cost:.2f})"
+        spend_text += f" (${spend_cost:.2f})"
+
+    if loop["schedule"] == "manual":
+        sw = '<span class="sw manual" title="manual — run via loopctl">手</span>'
+        next_html = '<span class="rm-next off">manual</span>'
+    elif loop["installed"]:
+        sw = '<span class="sw on" title="schedule loaded (launchd)">巡</span>'
+        next_html = f'<span class="rm-next">next 巡 {e(loop["next_run_text"])}</span>'
+    else:
+        sw = '<span class="sw off" title="no schedule loaded — supervised runs only">休</span>'
+        next_html = '<span class="rm-next off">no schedule loaded</span>'
+
     report_link = ""
     if loop["report_href"]:
-        report_link = f'<a href="{e(loop["report_href"])}">latest</a>'
+        report_link = f'<a href="{e(loop["report_href"])}">report</a>'
+
+    toko = "".join(loop["toko_lines"]) or _toko_line(
+        "未", "", '<span class="muted">never run</span>'
+    )
     return (
-        "<tr>"
-        f"<td>{light}</td>"
-        f'<td class="loop-name"><a href="#loop-{e(loop["name"])}">{e(loop["name"])}</a>'
-        f'<div class="muted">{e(loop["description"])}</div></td>'
-        f"<td>{headline}</td>"
-        f"<td>{last_run}</td>"
-        f'<td>{e(loop["schedule"])}<div class="muted">{e(next_run)}</div></td>'
-        f"<td>{spend_html}</td>"
-        f"<td>{report_link}</td>"
-        "</tr>"
+        '<div class="loop-row">'
+        f"{stamp}"
+        f'<div class="loop-name"><a href="#loop-{e(loop["name"])}">{e(loop["name"])}</a>'
+        f"<small>{e(loop['schedule'])} · {e(loop['description'])}</small></div>"
+        f'<div class="toko"><div class="toko-scroll">{toko}</div>'
+        '<span class="toko-tag">latest</span></div>'
+        f'<div class="run-meta"><span class="rm-when">{last_run}</span>'
+        f'<span class="rm-cost">{e(spend_text)}</span>{next_html}{report_link}</div>'
+        f'<div class="sw-cell">{sw}</div>'
+        "</div>"
     )
 
 
@@ -927,14 +1170,12 @@ def _render_report_drawer(latest_json, report_href, clamp_bytes=8192):
 
 
 def _render_loop_section(loop, conn, now):
-    color = loop["light_color"]
-    marker = loop["light_marker"]
     badges = []
     if loop["stale"]:
         badges.append("stale")
     if loop["died"]:
         badges.append("died")
-    light = _light_html(color, marker, badges)
+    stamp = _stamp_html(loop["light_color"], loop["light_marker"], badges)
 
     latest = loop["latest_run"]
     run_metrics = _run_metrics(conn, latest["run_id"]) if latest else []
@@ -966,7 +1207,8 @@ def _render_loop_section(loop, conn, now):
 
     return (
         f'<section class="loop" id="loop-{e(loop["name"])}">'
-        f'<h2>{light}{e(loop["name"])} <span class="muted">{e(loop["description"])}</span></h2>'
+        f'<h2>{stamp}<span class="lname">{e(loop["name"])}</span> '
+        f'<span class="muted">{e(loop["description"])}</span></h2>'
         f"{hb_html}"
         f"{handoff_html}"
         f"{panels_html}"
@@ -1015,11 +1257,13 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
             latest_run.get("finished_at"), latest_run["started_at"], timeout_s, now
         )
 
+    # §10 amendment 2026-07-30: staleness only applies when the schedule is actually
+    # loaded (launchd plist present). A supervised-only loop is 休 — "no schedule
+    # loaded" — not overdue; flagging the whole fleet stale made the badge meaningless.
+    installed = _schedule_loaded(root, name)
     stale = False
-    if latest_run is not None and not died:
+    if installed and latest_run is not None and not died:
         stale = is_stale(latest_run["started_at"], expected_interval_s, now)
-    elif latest_run is None:
-        stale = False  # no run history yet — nothing to compare against
 
     if died:
         light_color, light_marker = "red", "harness-problem"
@@ -1047,6 +1291,44 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
 
     needs_attention = (light_color in ("amber", "red")) or stale or died
 
+    # Tokonoma (床の間) — the row's output alcove: latest headline (or failure detail)
+    # plus standing findings, each with a marubatsu mark. Derived only from sqlite +
+    # latest.json fields the page already renders elsewhere; nothing model-authored is
+    # computed here.
+    toko_lines = []
+    open_findings_count = 0
+    if latest_run is not None:
+        if latest_run["runner_status"] in FAILURE_STATUSES:
+            why = latest_run.get("error_detail") or latest_run["runner_status"]
+            toko_lines.append(
+                _toko_line("×", "mk-fail", f'<span class="fail-detail">{e(why)}</span>')
+            )
+        elif latest_run.get("headline"):
+            mark, mark_cls = _MARK_BY_STATUS.get(
+                latest_run.get("effective_status") or "", ("△", "mk-part")
+            )
+            toko_lines.append(_toko_line(mark, mark_cls, e(latest_run["headline"])))
+    shown = 0
+    for f in _open_findings(conn, name):
+        disp = _current_disposition(conn, name, f["finding_id"])
+        action = disp["action"] if disp else None
+        snooze_until = disp.get("snooze_until") if disp else None
+        if is_suppressed(action, snooze_until, now):
+            continue
+        open_findings_count += 1
+        if shown < 4:
+            mark, mark_cls = _MARK_BY_SEVERITY.get(f["severity"], ("△", "mk-part"))
+            toko_lines.append(_toko_line(mark, mark_cls, e(f["title"])))
+            shown += 1
+    if open_findings_count > shown:
+        toko_lines.append(
+            _toko_line(
+                "△",
+                "mk-part",
+                f'<span class="muted">+{open_findings_count - shown} more standing</span>',
+            )
+        )
+
     return {
         "name": name,
         "root": root,
@@ -1062,11 +1344,14 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
         "heartbeat": heartbeat,
         "died": died,
         "stale": stale,
+        "installed": installed,
         "light_color": light_color,
         "light_marker": light_marker,
         "spend_7d": spend_7d,
         "next_run_text": next_run_text,
         "needs_attention": needs_attention,
+        "toko_lines": toko_lines,
+        "open_findings_count": open_findings_count,
     }
 
 
@@ -1115,16 +1400,17 @@ def _render_page(
     loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn
 ):
     top_chips = "".join(
-        f'<span class="chip"><span class="dot" style="background:'
-        f'{_color_hex(c)}"></span>{c} {n}</span>'
+        f'<span class="chip"><span class="jp">{_STAMP_KANJI[c]}</span> <b>{n}</b></span>'
         for c, n in counts.items()
-        if n
+        if n and c in _STAMP_KANJI
     )
     na_chip = (
         f'<span class="chip needs-attention">needs attention {needs_attention_count}</span>'
         if needs_attention_count
         else '<span class="chip">needs attention 0</span>'
     )
+    standing_total = sum(loop["open_findings_count"] for loop in loops)
+    standing_chip = f'<span class="chip">standing <b>{standing_total}</b></span>'
     spend_today_html = fmt_num(spend_today[0]) + " tok"
     if spend_today[1]:
         spend_today_html += f" (${spend_today[1]:.2f})"
@@ -1133,13 +1419,14 @@ def _render_page(
         spend_7d_html += f" (${spend_7d_fleet[1]:.2f})"
 
     top = (
-        '<div class="topstrip"><h1>loops</h1>'
-        f"{top_chips}{na_chip}"
-        f'<span class="chip">spend today {e(spend_today_html)}</span>'
-        f'<span class="chip">spend 7d {e(spend_7d_html)}</span>'
-        '<span class="spacer"></span>'
-        f'<span class="muted">regenerated {e(now.strftime("%Y-%m-%dT%H:%M:%SZ"))}</span>'
-        "</div>"
+        '<div class="topstrip"><span class="seal-mini">巡</span>'
+        "<h1>loops<small>the garden · 庭</small></h1>"
+        '<div class="head-stats">'
+        f"{top_chips}{na_chip}{standing_chip}"
+        f'<span class="chip">spend today <b>{e(spend_today_html)}</b></span>'
+        f'<span class="chip">spend 7d <b>{e(spend_7d_html)}</b></span>'
+        f'<span class="chip muted">regenerated {e(now.strftime("%Y-%m-%dT%H:%M:%SZ"))}</span>'
+        "</div></div>"
     )
 
     if not loops:
@@ -1147,35 +1434,28 @@ def _render_page(
         return _wrap_html(top, body)
 
     global_rows = "".join(_render_loop_row(loop, now) for loop in loops)
-    global_table = (
-        '<table class="loops"><thead><tr><th></th><th>Loop</th><th>Headline</th>'
-        "<th>Last run</th><th>Schedule / next</th><th>Spend (7d)</th><th>Report</th>"
-        f"</tr></thead><tbody>{global_rows}</tbody></table>"
+    garden = (
+        '<div class="zone"><div class="kicker"><b>庭</b> the garden — all loops'
+        '<span class="note">床の間 = each loop hangs its own output · '
+        "休 = no schedule loaded</span></div>"
+        f'<div class="garden">{global_rows}</div></div>'
     )
 
     sections = "".join(_render_loop_section(loop, conn, now) for loop in loops)
 
-    body = f"<main>{global_table}{sections}</main>"
+    body = f"<main>{garden}{sections}</main>"
     return _wrap_html(top, body)
-
-
-def _color_hex(name):
-    return {
-        "green": "#37d67a",
-        "amber": "#f2b23c",
-        "red": "#ff5c5c",
-        "grey": "#4a5364",
-    }.get(name, "#4a5364")
 
 
 def _wrap_html(top, body):
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        "<title>loops dashboard</title>"
+        "<title>loops — 庭 the garden</title>"
         f"<style>{CSS}</style></head><body>"
-        f"{top}{body}"
-        "<footer>loops harness — static dashboard, report/propose-only</footer>"
+        f'<div class="sheet">{top}{body}'
+        "<footer>loops harness — static sheet · report/propose-only · "
+        "findings are actions in waiting</footer></div>"
         "</body></html>"
     )
 

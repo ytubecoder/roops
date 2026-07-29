@@ -2,6 +2,9 @@
 
 ## WIP
 
+### B-07: Garden dashboard: roops design applied to generate.py (stamps, tokonoma, 巡/休 install state; §10 style+staleness amendment)
+Priority: medium | Status: in-progress
+
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)

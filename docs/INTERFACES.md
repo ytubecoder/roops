@@ -731,6 +731,13 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
 - **Top strip:** fleet counts by status, `needs_attention` count, spend today / 7d, last regen time.
 - **Stale detection:** a loop overdue by > 1.5 × its `expected_interval_s` (§5.1) is flagged
   `stale` and counts toward `needs_attention`. `manual` loops are exempt.
+  **(Amendment 2026-07-30):** staleness applies only to *installed* loops. Install state is a
+  display-only check: `launchd/com.loops.<name>.plist` exists (file presence, never a
+  `launchctl` subprocess — the generator stays hermetic). A non-manual loop without a loaded
+  schedule renders as 休 "no schedule loaded" (supervised-only), is staleness-exempt, and does
+  not count toward `needs_attention` on schedule grounds; its status still counts as before.
+  Rationale: a supervised-only fleet rendered wall-to-wall `stale`, and fake next-run
+  estimates ("in 4m" for a loop that will never fire) made the column meaningless.
 - **Died-run detection (§4.6):** a run row with `finished_at IS NULL` older than
   `timeout_s + 120s` renders as `died` (red, harness-problem marker) and counts toward
   `needs_attention`.
@@ -754,8 +761,13 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   `report_markdown` from the suppression-filtered `latest.json` inside a collapsed
   `<details>` — HTML-escaped, displayed as text (markdown is not parsed), clamped at 8 KiB
   with a truncation marker; the `latest.md` link is retained alongside.
-- Style: bold and distinctive, not generic corporate; dark-friendly; function first, dense over
-  airy. It is a status board read at a glance, not a marketing page.
+- Style **(amended 2026-07-30, B-04/B-07)**: the roops garden design system — washi/sumi
+  palette, vermillion accent, mincho serif + mono numerals, status rendered as hanko stamps
+  (済 ok · 注 warn · 警 alert · 未 no data) over the unchanged §4.3 precedence, per-loop
+  tokonoma output alcove in the global row. Visual only: every §10 semantic above is
+  untouched. Local system fonts only, no webfonts, no textures via external or data URLs —
+  the no-network rule binds the stylesheet too. Function first, dense over airy: it is a
+  status board read at a glance, not a marketing page.
 
 ## 11. Testing conventions
 

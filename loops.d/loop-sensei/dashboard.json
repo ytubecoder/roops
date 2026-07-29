@@ -1,0 +1,37 @@
+{
+  "panels": [
+    {
+      "title": "Failing loops",
+      "metric": "fleet.failing",
+      "type": "number",
+      "unit": "loops",
+      "direction": "higher_is_worse",
+      "thresholds": {"warn": 1, "alert": 3},
+      "missing": "gap"
+    },
+    {
+      "title": "Failing loops (trend)",
+      "metric": "fleet.failing",
+      "type": "trend",
+      "window_days": 30,
+      "missing": "gap"
+    },
+    {
+      "title": "Died runs",
+      "metric": "fleet.died",
+      "type": "number",
+      "unit": "runs",
+      "direction": "higher_is_worse",
+      "thresholds": {"warn": 1, "alert": 1},
+      "missing": "gap"
+    },
+    {
+      "title": "Loops examined",
+      "metric": "fleet.loops_checked",
+      "type": "number",
+      "unit": "loops",
+      "direction": "neutral",
+      "missing": "hold"
+    }
+  ]
+}

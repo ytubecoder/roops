@@ -1,0 +1,48 @@
+# Verify Loop Supervised (scratch-root planted-failure run)
+# Project: loops
+# Frequency: as needed — once per new loop before install (LOOP_AUTHORING §7 step 5), and whenever a prompt.md/precheck.sh change needs its engine path re-proven
+# Description: Prove a loop's FULL path (precheck → real engine → contract → findings upsert) against a scratch root with planted state, so real state/ is never polluted and you never wait for a real-world condition to occur. First used to verify loop-sensei (SESSION_LOG 2026-07-29/30).
+
+## Prerequisites
+- Loop passes `bin/loopctl validate <name>` (no [FILL:] left, finding-identity heading present)
+- The loop's engine CLI (codex/claude) is authenticated in THIS terminal (supervised context, not launchd)
+- Key fact this workflow rides on: `bin/run-loop.sh` resolves its root from `LOOPS_ROOT` (run-loop.sh:41) and passes it to precheck (:542) — a scratch root gets the entire harness pipeline
+
+## Steps
+
+1. Test the gating path on the REAL root first (free)
+   - Run: cd ~/projects/loops && ./bin/loopctl run <name>
+   - Expected outcome: if the loop's trigger condition is absent today, runner_status=skipped-precheck with zero engine tokens (check: python3 -c "import sqlite3; c=sqlite3.connect('state/loops.sqlite'); print(c.execute(\"SELECT runner_status, headline FROM runs WHERE loop_name='<name>' ORDER BY started_at DESC LIMIT 1\").fetchone())")
+   - If fails (precheck-failed): fix precheck.sh before any scratch work — read state/runs/<id>/precheck.out
+
+2. Build the scratch root
+   - Run: SCRATCH=<scratchpad>/verify-<name>-root && rm -rf "$SCRATCH" && mkdir -p "$SCRATCH" && cd ~/projects/loops && rsync -a bin engines contract dashboard "$SCRATCH/" --exclude __pycache__ && mkdir -p "$SCRATCH/loops.d" && rsync -a loops.d/<name> "$SCRATCH/loops.d/" && python3 "$SCRATCH/bin/db.py" init --root "$SCRATCH"
+   - Expected outcome: scratch root with the real harness skeleton + the loop under test, empty sqlite
+
+3. Plant the state the loop is supposed to react to
+   - For a fleet/meta loop: INSERT runs rows into "$SCRATCH/state/loops.sqlite" (failed statuses, a died row = started long ago + finished_at NULL) and write realistic artifacts under "$SCRATCH/state/runs/<run_id>/" (engine.log with a recognizable error line, engine.status, precheck.out)
+   - For a world-scanning loop: create the fixture files/dirs its precheck reads, under the scratch root
+   - Make the planted evidence REALISTIC (e.g. a real-looking 401 line) — you are also judging the quality of the engine's interpretation, not just schema compliance
+
+4. Dry-run the precheck alone (still free)
+   - Run: LOOPS_ROOT="$SCRATCH" bash "$SCRATCH/loops.d/<name>/precheck.sh"
+   - Expected outcome: the exact digest the engine will see — check finding_id lines are precomputed correctly, evidence tails present, metrics line correct, and (critical) EMPTY output when you remove the planted condition
+   - If fails: iterate here; never spend engine tokens on a broken digest
+
+5. Full real-engine run in the scratch root
+   - Run: cd "$SCRATCH" && LOOPS_ROOT="$SCRATCH" bash bin/run-loop.sh <name> --trigger manual
+   - Expected outcome: exit 0; then inspect ALL of:
+     - run row: runner_status=completed, sensible effective_status + headline
+     - findings: ids match the precheck's precomputed ones VERBATIM (sqlite findings table)
+     - metrics: byte-exact copy of the precheck's metrics line (reports/<name>/latest.json)
+     - report: reports/<name>/latest.md — is the interpretation actually RIGHT against the planted evidence? (compliance ≠ correctness — LOOP_AUTHORING §7 step 5)
+   - If fails (contract-violation): read state/runs/<id>/engine.log + contract.json.tmp; usual suspects are metrics-as-object (must be a JSON string) or an invented run_id
+
+6. Prove identity stability with a second run
+   - Run: the exact step-5 command again
+   - Expected outcome: SAME finding_ids from a fresh session, times_seen 1→2, row count unchanged (no duplicates). This is the load-bearing property of the findings system — do not skip it
+   - If fails (new ids appeared): the id derivation embeds something volatile; fix precheck/prompt and restart from step 4
+
+7. Clean up
+   - Run: rm -rf "$SCRATCH"
+   - The two engine runs' spend is visible in the SCRATCH sqlite only; nothing touched real state/, reports/, or launchd

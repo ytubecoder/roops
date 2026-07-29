@@ -88,6 +88,21 @@
   .romaji { font-family: var(--mono); font-size: 13px; letter-spacing: .35em; color: var(--nibi); margin-bottom: 36px; }
   .hero-tag { font-size: clamp(17px, 1.8vw, 21px); max-width: 44ch; color: #3A362F; }
   .hero-tag em { font-style: normal; border-bottom: 1px solid var(--shu); }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 40px; }
+  .cta {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--washi); background: var(--sumi); text-decoration: none;
+    padding: 14px 22px; border: 1px solid var(--sumi); border-radius: 3px;
+    transition: transform .25s cubic-bezier(0.16,1,0.3,1), background .25s, border-color .25s, color .25s;
+  }
+  .cta span { color: rgba(242,237,227,.55); }
+  .cta:hover { background: var(--shu); border-color: var(--shu); }
+  .cta:active { transform: scale(0.98); }
+  .cta.ghost { background: transparent; color: var(--sumi); }
+  .cta.ghost span { color: var(--nibi); }
+  .cta.ghost:hover { background: transparent; border-color: var(--shu); color: var(--shu); }
+  .cta.ghost:hover span { color: var(--shu); }
+  p.quiet a { color: var(--shu); text-decoration: none; border-bottom: 1px solid var(--shu); }
 
   .vertical-rail {
     writing-mode: vertical-rl; text-orientation: upright;
@@ -272,13 +287,17 @@
   <!-- ================= HERO ================= -->
   <section class="hero">
     <div class="hero-type">
-      <span class="kicker reveal">Roops · <b>巡</b> · recurring agent harness</span>
+      <span class="kicker reveal">ようこそ · welcome to the zen garden · <b>巡</b></span>
       <div class="wordmark reveal" style="--i:1">r<span class="oo">oo<svg viewBox="0 0 200 200" aria-hidden="true">
         <path class="enso-path" d="M 108 22 C 62 20 24 58 24 102 C 24 148 62 182 106 180 C 148 178 178 144 177 102 C 176 66 152 38 122 28" stroke-width="9"/>
         <path class="enso-path" d="M 112 26 C 74 22 32 56 30 100 C 28 146 64 178 106 176" stroke-width="3" opacity=".4" style="animation-delay:.55s"/>
       </svg></span>ps</div>
       <div class="romaji reveal" style="--i:2">ルー プス &nbsp;·&nbsp; RŪPUSU</div>
       <p class="hero-tag reveal" style="--i:3">Scheduled agent rounds, kept like a garden. <em>Raked every morning</em>, touched by no one, and quiet when all is well.</p>
+      <div class="cta-row reveal" style="--i:4">
+        <a class="cta" href="./ui.html">Enter the garden <span>— interface concept</span></a>
+        <a class="cta ghost" href="https://github.com/ytubecoder/roops">Source <span>— github</span></a>
+      </div>
     </div>
     <div class="vertical-rail reveal" style="--i:2">
       ループス
@@ -466,6 +485,7 @@
         </div>
       </div>
     </div>
+    <p class="quiet reveal" style="margin-top:28px">This is a still. The full interface concept — running rounds, the live engawa view, stamping — is a page of its own: <a href="./ui.html">enter the garden</a>.</p>
   </section>
 
   <!-- ================= TAGLINES ================= -->
@@ -482,6 +502,8 @@
 
   <footer>
     <span><span class="f-shu">巡</span>&nbsp; ROOPS — RECURRING AGENT HARNESS</span>
+    <span><a href="./ui.html">THE GARDEN — UI CONCEPT</a></span>
+    <span><a href="https://github.com/ytubecoder/roops">GITHUB</a></span>
     <span>SET IN NOTO SERIF JP / YUJI SYUKU</span>
   </footer>
 </div>

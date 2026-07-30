@@ -24,7 +24,7 @@
 
 > Scheduled agents that watch your machine and shut up when told.
 
-**Roops** (ループス) — "loop" is already a Japanese loanword (ループ, *rūpu*); Roops is that word borrowed back. The mechanical names predate the rebrand and deliberately keep it: the CLI is `loopctl` (alias `roopctl`), loops live in `loops.d/`, launchd labels are `com.loops.*`. Brand, explainer, and UI-concept pages: [`site/`](site/).
+**Roops** (ループス) means "loop" and the mechanical names predate the rebrand and has been deliberately kept: the CLI is `loopctl` (alias `roopctl`), loops live in `loops.d/`, launchd labels are `com.loops.*`. Brand, explainer, and UI-concept pages: [`site/`](site/).
 
 A thin harness for putting work you already do by hand onto a schedule. You describe the job in plain markdown, `launchd` fires it, a deterministic script of yours gathers the facts, a headless model interprets them, and what comes back is a **contract** — findings, metrics, and a report that land on a static dashboard.
 

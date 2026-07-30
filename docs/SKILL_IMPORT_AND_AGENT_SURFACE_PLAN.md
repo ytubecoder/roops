@@ -141,8 +141,8 @@ CREATE INDEX IF NOT EXISTS idx_events_loop_ts ON loop_events(loop_name, ts DESC)
 
 ### 4.1 `loopctl import <skill-path> --analyze [--json]`
 Purely static (stdlib Python), zero tokens. Parses the skill, then classifies every item of the
-eleven-question intake rubric (`docs/LOOP_AUTHORING.md` §2, stable ids `q1_purpose` …
-`q11_budget`) into one of four buckets:
+twelve-question intake rubric (`docs/LOOP_AUTHORING.md` §2, stable ids `q1_purpose` …
+`q12_page`) into one of four buckets:
 
 | Bucket | Meaning | Examples |
 |---|---|---|
@@ -224,7 +224,7 @@ provenance (`"user"` / `"agent"`) which lands in the `imported` event detail. Om
 back to the analyzer's derived default where one exists, and otherwise remain `[FILL:]` in the
 scaffold so `loopctl validate` catches them.
 
-Scaffolds `loops.d/<name>/` fully pre-filled: `SPEC.md` with all eleven sections answered (no
+Scaffolds `loops.d/<name>/` fully pre-filled: `SPEC.md` with all twelve sections answered (no
 `[FILL:]` left when answers are complete), `prompt.md` = reshaped skill body + the contract
 sections + `## Finding identity`, `loop.conf` incl. tags and axes, the template `precheck.sh`
 with commented proposals, `dashboard.json` from the chosen panels. Records the `imported`

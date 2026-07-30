@@ -324,8 +324,8 @@ Default `--from loops.d`; `--trigger manual`.
 7. `db.py finish-run` (incl. `effective_status`, §4.5) + `db.py record-metrics`; then regenerate the dashboard
    (`dashboard/generate.py`) under a short global lock (`state/locks/_dashboard.lock`, `--wait-s 30`);
    a dashboard failure is logged but must **not** change the run's status or the exit code.
-8. Retention: prune `reports/<name>/*` and `state/runs/*` older than `retention_days` (default 30;
-   `latest.md`, `latest.json`, `latest.html` never pruned (the runner's keep-list names all three explicitly — Amendment 2)). SQLite rows are kept forever.
+8. Retention: prune `reports/<name>/*` and `state/runs/*` older than `retention_days` (default 30).
+   `latest.md`, `latest.json`, `latest.html` never pruned (the runner's keep-list names all three explicitly — Amendment 2). SQLite rows are kept forever.
 
 ### 4.2 Runner exit codes
 `0` = the run was recorded (including skipped/overlap/precheck cases — the common path);
@@ -757,7 +757,8 @@ Flattening rules are in §3. `dashboard.json` (per loop) declares how to render 
 
 ## 10. `dashboard/generate.py`
 
-`python3 dashboard/generate.py [--root R] [--out FILE]` → writes `dashboard/loops.html` via
+`python3 dashboard/generate.py [--root R] [--out FILE] [--reports-out FILE]` → writes
+`dashboard/loops.html` and `dashboard/reports.html` (Amendment 2, below), each via
 **tmp file + `os.rename`** (never a partially-written page, even under concurrent runs). Reads only
 sqlite + `reports/*/latest.*` + `loops.d/*/{loop.conf,dashboard.json}`. Self-contained single file:
 inline CSS/JS, no network requests, no external assets (it is opened as `file://`).

@@ -165,7 +165,7 @@ expected tokens/run (order of magnitude is fine — "a few hundred tokens" vs. "
 matters more than precision), `retry_transient` (default 1, max 3), `timeout_s` (30–7200, default
 900 — pick something proportional to the actual work, not the ceiling).
 
-**q12. Page output** — does this loop need a full report page (`docs/REPORT_PAGES.md`)?
+**12. Page output** — does this loop need a full report page (`docs/REPORT_PAGES.md`)?
 If yes: which page class (`snapshot` | `findings`), which data lands on it, and what its
 groups/stat-strip show. Default: no page.
 

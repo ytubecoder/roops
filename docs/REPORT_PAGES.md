@@ -35,7 +35,10 @@ page class:
 5. Loop-private durable state: read baselines from `$LOOP_DATA_DIR`; write updated
    baselines to `$OUT_DIR/loop-data.commit/` — the runner commits them only when the
    run promotes, so failed runs never consume state. Keep it bounded (e.g. exactly one
-   previous snapshot).
+   previous snapshot). `$LOOP_DATA_DIR` is exported to `render.sh` only (step 1) — a
+   precheck (`set -u`, only `LOOP_NAME RUN_ID LOOPS_ROOT WORKDIR OUT_DIR`) that needs a
+   baseline must read it directly from `$LOOPS_ROOT/state/loop-data/<name>/` instead
+   (see kagi-ban's `precheck.sh`).
 
 ## Worked example
 

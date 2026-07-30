@@ -571,7 +571,7 @@ is v2 — record the aspiration here, but ship single-shot for v1]
 11. Engine/model + budget
 [FILL: engine, model, expected tokens/run, retry_transient, timeout_s]
 
-## 12. Page output (q12)
+12. Page output
 [FILL: none — OR page class (snapshot|findings), what the page shows, groups/stats]
 """
 

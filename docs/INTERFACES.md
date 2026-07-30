@@ -887,16 +887,35 @@ never this module. No daemon mode, no LaunchAgent in v1.
 | endpoint | effect |
 |---|---|
 | `GET /` `/loops.html` `/reports.html` | serve generated pages (loops.html regenerated if missing) |
-| `GET /reports/<loop>/<file>` | serve one file from `<root>/reports/` — the dashboard's own `../reports/<name>/latest.html` links. Path regex allows `[A-Za-z0-9_-]` / `[A-Za-z0-9_.-]` only (no `/`, no `%`), plus an `os.path.realpath` containment check under `<root>/reports`. No directory listing; non-file → 404. Content-Type: `.html`→`text/html`, `.json`→`application/json`, `.md`→`text/plain`, else `application/octet-stream`. |
+| `GET /reports/<loop>/<file>` | serve one file from `<root>/reports/` — the dashboard's own `../reports/<name>/latest.html` links. Path regex allows `[A-Za-z0-9_-]` / `[A-Za-z0-9_.-]` only (no `/`, no `%`), plus an `os.path.realpath` containment check under `<root>/reports`. No directory listing; non-file → 404. Content-Type: `.html`→`text/html`, `.json`→`application/json`, `.md`→`text/plain`, else `application/octet-stream`. **Always answered with `Content-Security-Policy: sandbox allow-scripts`** — see below. |
 | `GET /api/state` | `{loops:[{name, schedule, enabled, plist_present, loaded}]}` |
 | `POST /api/loops/<name>/rounds {on}` | resume/pause (sets `enabled=` + bootstrap/bootout). `on` must be a real JSON boolean, else 400. 409 if no plist — install/uninstall stay CLI-only (supervised verification gate, §8.1). |
 | `POST /api/loops/<name>/schedule {spec}` | `set-schedule`: §5.1-validate, rewrite conf, re-render plist, bootout+bootstrap iff loaded. NEVER kickstart. `spec` must be a JSON string, else 400; 400 on bad grammar. **`spec: "manual"` is refused 400 by the console** even though it is valid §5.1 grammar: `_apply_schedule` implements manual as an UNINSTALL (bootout + remove the plist), and install/uninstall stay CLI-only (§8.1). The refusal is console-layer only — `loopctl set-schedule <name> manual` is unchanged. |
 
-Every mutation regenerates the dashboard before responding (best-effort: a regen failure
-warns on stderr, it never turns a successful mutation into a 500). A malformed or non-object
-JSON body is 400 uniformly, as is a `Content-Length` that is negative or non-numeric (never
-an unhandled exception — an exception out of the handler drops the connection with no HTTP
-response, and `read(-1)` would park the serving thread). With `--port 0` the listener binds
+**Report pages are sandboxed off this origin.** Report HTML is loop/model-derived content and
+the promotion gate (§12) blocks only EXTERNAL-fetch markup — an inline `<script>` is allowed.
+Served from the same origin as the mutation API, such a script could POST to
+`/api/loops/<any>/rounds` with a valid `Host` and no CORS preflight, i.e. pause loops or
+rewrite schedules; under `file://` that was impossible (opaque origin), so the route is what
+created the adjacency and the route is what closes it. **Loop-authored content must never share
+the API's origin.** `sandbox allow-scripts` (never `allow-same-origin` — the two together let a
+page drop its own sandbox) keeps the page's own inline script working while making every
+request it issues cross-origin, which then fails closed on the missing `OPTIONS` handler.
+
+Every mutation regenerates the dashboard before responding, but the two endpoints differ and
+the difference is visible to a client. `/rounds`: the console owns the regen, best-effort — a
+failure warns `warning: dashboard regen failed: …` on stderr and never changes the response.
+`/schedule`: `loopctl set-schedule` regenerates unguarded AFTER writing the conf and plist, so
+a regen exception exits non-zero and the console reports `400 invalid schedule` for a mutation
+that DID take effect. Pre-existing behavior, documented rather than changed; the conf is the
+source of truth, so re-reading `/api/state` after such a 400 shows the new schedule.
+
+A malformed or non-object JSON body is 400 uniformly, as is a `Content-Length` that is negative
+or non-numeric, and a `spec` that is not a JSON string or contains a NUL byte (never an
+unhandled exception — an exception out of the handler drops the connection with no HTTP
+response, `read(-1)` would park the serving thread, and a NUL makes `subprocess.run` raise
+`ValueError: embedded null byte`). A NUL in `<name>` cannot arise: the route regexes admit only
+`[A-Za-z0-9_-]`, so such a request is a route miss (404). With `--port 0` the listener binds
 first and the ACTUAL bound port is what §13.1's `Host` gate and the startup banner use.
 `<name>`/`spec` positionals reach
 `bin/loopctl` after a `--` separator, so a `spec` of `--help` is passed through as the literal

@@ -173,6 +173,33 @@ def parse_content_length(raw_len):
     return n, None
 
 
+def response_headers(path):
+    """Extra response headers for a path, as a list of (name, value) pairs.
+
+    Report pages ONLY get `Content-Security-Policy: sandbox allow-scripts`.
+    Report HTML is loop/model-derived content, and the promotion gate
+    (bin/page_envelope.py) blocks only EXTERNAL-fetch markup — an INLINE
+    `<script>` is allowed and the shipped kagi-ban page uses one. Served from
+    this origin, such a script would be same-origin with the mutation API: a
+    plain `fetch('/api/loops/<any>/rounds', {method:'POST', headers:{'Content-Type':
+    'application/json'}})` from inside a report would carry a valid Host, need no
+    CORS preflight, and pause loops or rewrite schedules. Opened as a `file://`
+    page that was impossible (opaque origin); the console route is what created
+    the adjacency, so the console route is what closes it.
+
+    `sandbox allow-scripts` WITHOUT `allow-same-origin` puts the page in an
+    opaque origin: its own inline script still runs (tooltips, drawers), but every
+    request it makes is cross-origin and fails closed on this server's missing
+    OPTIONS handler (§13.1). Never add `allow-same-origin` — the two flags together
+    let the page remove its own sandbox.
+
+    Keyed off the same `_REPORT_RE` the route uses, so the header and the route
+    cannot drift apart. Pure and socket-free, like check_origin()."""
+    if _REPORT_RE.match(path.split("?", 1)[0]):
+        return [("Content-Security-Policy", "sandbox allow-scripts")]
+    return []
+
+
 def _regen_dashboard(root):
     """Post-mutation dashboard regeneration. Best-effort — the mutation itself
     already succeeded, so a regen failure must not turn a 200 into a 500; it
@@ -246,6 +273,15 @@ def handle_request(root, method, path, body_bytes):
         spec = body_obj.get("spec")
         if not isinstance(spec, str):  # same shape as `on`'s bool check above
             return _json(400, {"error": 'body must be {"spec": "<schedule spec>"}'})
+        # Same failure family as the negative Content-Length: a NUL makes
+        # subprocess.run raise `ValueError: embedded null byte` out of
+        # handle_request, which over a real socket drops the connection with no
+        # HTTP response at all. It must be a 400, not an exception. (`name` cannot
+        # carry a NUL — the route regexes above admit only [A-Za-z0-9_-], so a
+        # NUL-bearing name never matches a route and 404s; test_console.py pins
+        # that, so this guard stays where the value is actually reachable.)
+        if "\x00" in spec:
+            return _json(400, {"error": "invalid schedule spec: embedded NUL byte"})
         # `manual` is a valid §5.1 spec, but _apply_schedule implements it as an UNINSTALL
         # (bootout + remove the plist). Install/uninstall stay CLI-only (§13, §8.1: the
         # supervised-verification gate), so the console refuses it here — at the console
@@ -311,6 +347,8 @@ def serve(root, port):
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(payload)))
+            for name, value in response_headers(self.path):
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(payload)
 
@@ -331,6 +369,10 @@ def serve(root, port):
                 return
             n, err = parse_content_length(self.headers.get("Content-Length"))
             if err:
+                # Same reason as the 403 above: the body is never drained (here it
+                # cannot be — the declared length is exactly what was rejected), so
+                # a future keep-alive switch must not parse it as the next request.
+                self.close_connection = True
                 self._respond(*err)
                 return
             body = self.rfile.read(n) if n else b""

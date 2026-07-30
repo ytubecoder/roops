@@ -223,6 +223,31 @@ class TestConsoleApi(ConsoleTestCase):
         self.assertEqual(status, 400)
         self.assertIn("schedule=daily:09:00", _read(self.conf_path("alpha")))
 
+    # -- re-review: a NUL in `spec` made subprocess.run raise `ValueError:
+    # embedded null byte` out of handle_request — the same dropped-connection
+    # mode the negative Content-Length fix eliminated --
+
+    def test_schedule_nul_byte_in_spec_400(self):
+        self.write_loop("alpha", schedule="daily:09:00")
+        status, payload, _ = call(
+            self.fixture,
+            "POST",
+            "/api/loops/alpha/schedule",
+            {"spec": "daily:09\x0000"},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("NUL", json.loads(payload)["error"])
+        self.assertIn("schedule=daily:09:00", _read(self.conf_path("alpha")))
+
+    def test_nul_byte_in_loop_name_never_reaches_a_route(self):
+        # the route regexes admit only [A-Za-z0-9_-], so a NUL-bearing name is a
+        # route miss (404), never an exception out of handle_request
+        self.write_loop("alpha", schedule="daily:09:00")
+        for path in ("/api/loops/al\x00pha/schedule", "/api/loops/al\x00pha/rounds"):
+            status, _, _ = call(self.fixture, "POST", path, {"spec": "interval:5m"})
+            self.assertEqual(status, 404, path)
+        self.assertIn("schedule=daily:09:00", _read(self.conf_path("alpha")))
+
     # -- final-review wave: spec="manual" is an UNINSTALL in _apply_schedule
     # (bootout + remove the plist); install/uninstall stay CLI-only (§13, §8.1),
     # so the console refuses it before loopctl is ever invoked (F5) --
@@ -323,6 +348,47 @@ class TestReportRoute(ConsoleTestCase):
         self.write_report("kagi-ban", "latest.html", "<h1>report</h1>")
         status, _, _ = call(self.fixture, "POST", "/reports/kagi-ban/latest.html", {})
         self.assertEqual(status, 404)
+
+
+class TestReportSandboxHeader(unittest.TestCase):
+    """console.response_headers() — the CSP that keeps loop-authored report HTML
+    off the mutation API's origin. Report pages may legally carry an INLINE
+    <script> (bin/page_envelope.py blocks only external-fetch markup), and the
+    F4 route made those pages same-origin with /api/*; `sandbox allow-scripts`
+    (no allow-same-origin) puts them in an opaque origin instead."""
+
+    def _csp(self, path):
+        return dict(console.response_headers(path)).get("Content-Security-Policy")
+
+    def test_report_pages_are_sandboxed(self):
+        for path in (
+            "/reports/kagi-ban/latest.html",
+            "/reports/kagi-ban/latest.json",
+            "/reports/a_b-c/2026-07-30-0032.html",
+        ):
+            self.assertEqual(self._csp(path), "sandbox allow-scripts", path)
+
+    def test_sandbox_never_grants_same_origin(self):
+        # allow-scripts + allow-same-origin together let the page remove its own
+        # sandbox — the combination must never appear
+        csp = self._csp("/reports/kagi-ban/latest.html")
+        self.assertNotIn("allow-same-origin", csp)
+
+    def test_dashboard_and_api_are_not_sandboxed(self):
+        for path in (
+            "/",
+            "/loops.html",
+            "/reports.html",
+            "/api/state",
+            "/api/loops/alpha/rounds",
+            "/api/loops/alpha/schedule",
+        ):
+            self.assertIsNone(self._csp(path), path)
+
+    def test_query_string_does_not_defeat_the_match(self):
+        self.assertEqual(
+            self._csp("/reports/kagi-ban/latest.html?v=2"), "sandbox allow-scripts"
+        )
 
 
 class TestParseContentLength(unittest.TestCase):

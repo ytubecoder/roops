@@ -992,6 +992,12 @@ def cmd_dashboard(args):
     return 0
 
 
+def cmd_serve(args):
+    import console
+
+    return console.serve(args.root, args.port)
+
+
 def cmd_findings(args):
     root, loop_name = args.root, args.loop
     rows = _db_query(root, "open-findings", loop=loop_name)
@@ -1115,6 +1121,9 @@ def build_parser():
 
     sub.add_parser("dashboard", parents=[common])
 
+    serve_p = sub.add_parser("serve", parents=[common])
+    serve_p.add_argument("--port", type=int, default=8929)
+
     findings_p = sub.add_parser("findings", parents=[common])
     findings_p.add_argument("loop")
 
@@ -1151,6 +1160,7 @@ def main(argv=None):
         "resume": cmd_resume,
         "set-schedule": cmd_set_schedule,
         "dashboard": cmd_dashboard,
+        "serve": cmd_serve,
         "findings": cmd_findings,
         "ack": lambda a: cmd_disposition(a, "ack"),
         "dismiss": lambda a: cmd_disposition(a, "dismiss"),

@@ -1519,9 +1519,11 @@ def _render_hanko_btns(loop_name, fid, root_flag, action):
     # NB: the word "appro*" is banned page-wide (test_finding_paste_block pins it, per
     # the §10 handoff doctrine) — 承's title says what it will be without saying it.
     parts = [
-        '<button class="hanko-btn" type="button" disabled '
-        'title="承 — becomes an order · not wired: that verb does not exist yet '
-        '(ack is not it); to act now, use the hand-to-an-agent block">承</button>',
+        (
+            '<button class="hanko-btn" type="button" disabled '
+            'title="承 — becomes an order · not wired: that verb does not exist yet '
+            '(ack is not it); to act now, use the hand-to-an-agent block">承</button>'
+        ),
         btn("認", "acknowledge", cmd_for("ack")),
         btn("休", "snooze", cmd_for("snooze") + " --until YYYY-MM-DD"),
         btn("済", "settle (dismiss)", cmd_for("dismiss") + ' --note "…"'),

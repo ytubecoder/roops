@@ -80,10 +80,11 @@
     letter-spacing: -.03em; line-height: .95; margin: 24px 0 8px;
     white-space: nowrap;
   }
-  .wordmark .enso {
-    display: inline-block; width: .72em; height: .72em;
-    margin-left: .12em; vertical-align: baseline;
-    transform: translateY(.08em); pointer-events: none;
+  .wordmark .enso { position: relative; display: inline-block; width: 1.3em; }
+  .wordmark .enso svg {
+    position: absolute; width: 1.416em; height: 1.416em;
+    left: .04em; bottom: -.271em;
+    pointer-events: none;
   }
   .romaji { font-family: var(--mono); font-size: 13px; letter-spacing: .35em; color: var(--nibi); margin-bottom: 36px; }
   .hero-tag { font-size: clamp(17px, 1.8vw, 21px); max-width: 44ch; color: #3A362F; }
@@ -288,10 +289,10 @@
   <section class="hero">
     <div class="hero-type">
       <span class="kicker reveal">ようこそ · welcome to the zen garden · <b>巡</b></span>
-      <div class="wordmark reveal" style="--i:1">roops<svg class="enso" viewBox="0 0 200 200" aria-hidden="true">
+      <div class="wordmark reveal" style="--i:1">roops<span class="enso" aria-hidden="true"><svg viewBox="0 0 200 200">
         <path class="enso-path" d="M 108 22 C 62 20 24 58 24 102 C 24 148 62 182 106 180 C 148 178 178 144 177 102 C 176 66 152 38 122 28" stroke-width="9"/>
         <path class="enso-path" d="M 112 26 C 74 22 32 56 30 100 C 28 146 64 178 106 176" stroke-width="3" opacity=".4" style="animation-delay:.55s"/>
-      </svg></div>
+      </svg></span></div>
       <div class="romaji reveal" style="--i:2">ルー プス &nbsp;·&nbsp; RŪPUSU</div>
       <p class="hero-tag reveal" style="--i:3">Scheduled agent rounds, kept like a garden. <em>Raked every morning</em>, touched by no one, and quiet when all is well.</p>
       <div class="cta-row reveal" style="--i:4">

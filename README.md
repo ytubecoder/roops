@@ -158,6 +158,8 @@ One gotcha worth internalizing before you write a loop that wants to show red: *
 
 `ack` means *stop nagging* — it does **not** mean *the recommendation was accepted*. Approval is a separate concept and deliberately isn't overloaded onto this verb. Wiring an approved finding through to something that executes it is still an open design thread ([`docs/OPEN_THREADS_WARMSTART.md`](docs/OPEN_THREADS_WARMSTART.md) §1), so today the arrow stops at you.
 
+**Agent surface.** Claude-family agents in any project can drive this harness via the distributable skill at [`skills/loops/SKILL.md`](skills/loops/SKILL.md) (symlink or copy into `~/.claude/skills/loops`). The skill teaches when to offer an import, how to run `loopctl import` end-to-end, and the safety rules around precheck; the full import recipe is [`docs/SKILL_IMPORT.md`](docs/SKILL_IMPORT.md).
+
 ## Engines
 
 | Engine | Role |

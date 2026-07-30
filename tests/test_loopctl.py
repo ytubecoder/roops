@@ -1625,6 +1625,25 @@ class TestListStatus(LoopsRootTestCase):
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         self.assertIn("0 loops (loops.d empty)", r.stdout)
 
+    def test_list_tag_no_match_on_nonempty_fleet_is_not_the_empty_message(self):
+        # Fix wave (2026-07-30, IMPORTANT #1): the tag filter used to mutate
+        # `rows` BEFORE the empty-state check ran, so a fleet with loops but
+        # no --tag match printed the same "0 loops (loops.d empty)" message
+        # as a genuinely empty loops.d/ -- a definitively false statement
+        # about a 2-loop fleet. It must name the filter and the true fleet
+        # size instead, and still exit 0.
+        self.fixture.minimal_valid_loop("tagged", extra_lines=['tags="project:x"'])
+        self.fixture.minimal_valid_loop("untagged")
+        r = run_cli(
+            ["list", "--tag", "project:nope", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertNotIn("empty)", r.stdout)
+        self.assertIn(
+            "0 loops matching --tag project:nope (2 loops under loops.d)", r.stdout
+        )
+
     def test_status_single_loop_no_runs(self):
         self.fixture.minimal_valid_loop("s1")
         r = run_cli(["status", "s1", "--root", self.root, "--json"])
@@ -1856,6 +1875,67 @@ class TestListStatus(LoopsRootTestCase):
             conn.close()
         self.assertTrue(resolved["needs_attention"])
         self.assertEqual(resolved["light_color"], "amber")
+
+    def test_fleet_aggregate_agrees_with_dashboard_on_same_second_tie(self):
+        # MINOR #1 (fix wave, 2026-07-30): db.py's query_loops_summary used a
+        # naive MAX(started_at) self-join that could return MULTIPLE rows per
+        # loop on a started_at TIE (e.g. a skipped-overlap row written the
+        # same second a run starts) -- loopctl's dict-comprehension kept the
+        # LAST of those rows, while the dashboard's own _latest_run() ("ORDER
+        # BY started_at DESC LIMIT 1", no tie-break) effectively kept the
+        # FIRST. Reproduced: `status --json` reported alert/needs_attention
+        # while the dashboard said green for the same fixture. Both must now
+        # agree deterministically (rowid DESC tie-break in both places).
+        name = "same-second-tie"
+        self.fixture.minimal_valid_loop(name)
+        same_ts = "2026-07-29T00:00:00Z"
+        self.fixture.add_run(
+            f"20260729T000000Z-{name}-a",
+            name,
+            same_ts,
+            runner_status="completed",
+            effective_status="ok",
+            headline="all good",
+        )
+        self.fixture.add_run(
+            f"20260729T000000Z-{name}-b",
+            name,
+            same_ts,
+            runner_status="skipped-overlap",
+        )
+
+        r = run_cli(["status", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        fleet = json.loads(r.stdout)["fleet"]
+
+        dash_mod = _load_dashboard_module()
+        conn = dash_mod._open_db(self.root)
+        try:
+            resolved = dash_mod._resolve_loop(
+                self.root,
+                name,
+                conn,
+                _real_loopconf_parse(),
+                _real_schedule_parse(),
+                datetime.now(timezone.utc),
+            )
+        finally:
+            conn.close()
+
+        # Whichever of the two tied rows wins the deterministic tie-break,
+        # loopctl's fleet aggregate and the dashboard's own resolution must
+        # agree with EACH OTHER -- not merely each be internally consistent.
+        self.assertEqual(
+            fleet["needs_attention"], 1 if resolved["needs_attention"] else 0
+        )
+        self.assertEqual(fleet["alert"], 1 if resolved["light_color"] == "red" else 0)
+        self.assertEqual(fleet["warn"], 1 if resolved["light_color"] == "amber" else 0)
+        self.assertEqual(fleet["ok"], 1 if resolved["light_color"] == "green" else 0)
+        # Pin the actual winner too, not just "they agree with each other" --
+        # rowid DESC means the later-inserted row (skipped-overlap, "b") wins,
+        # and compute_light() maps skipped-overlap to amber unconditionally.
+        self.assertEqual(resolved["light_color"], "amber")
+        self.assertEqual(fleet["warn"], 1)
 
     def test_list_tag_filter_exact(self):
         self.fixture.minimal_valid_loop("tagged", extra_lines=['tags="project:x"'])
@@ -2728,6 +2808,76 @@ class TestImportApply(LoopsRootTestCase):
         self.assertTrue(latest_detail["overwrite"])
         oldest_detail = json.loads(events[-1]["detail"])
         self.assertFalse(oldest_detail["overwrite"])
+
+    def test_overwrite_refused_when_target_is_installed(self):
+        # IMPORTANT #2a (fix wave, 2026-07-30): --overwrite must refuse
+        # outright (no files touched, no event recorded) when the target
+        # loop is currently INSTALLED -- overwriting an installed loop's
+        # prompt.md/loop.conf/precheck.sh in place would let the next
+        # launchd firing run the new prompt with none of validate ->
+        # supervised run -> install re-applied. No force-past flag; the
+        # message must point at `loopctl uninstall <name>`.
+        root = self._scaffold_root()
+        name = "repo-hygiene-check"
+        answers_path = self._write_answers(
+            root, "answers.json", self.CLEAN_ANSWERS, fixture="clean-check"
+        )
+
+        r1 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r1.returncode, 0, msg=r1.stdout + r1.stderr)
+
+        # Satisfy install's own "prior non-failed supervised run" precondition.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1",
+            name,
+            "2026-01-01T00:00:00Z",
+            runner_status="completed",
+        )
+        install_env = self.fixture.base_env(
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
+            LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
+            FAKE_LAUNCHCTL_INSERT_RUN="completed",
+        )
+        r_install = run_cli(
+            ["install", name, "--root", root], env_overrides=install_env
+        )
+        self.assertEqual(
+            r_install.returncode, 0, msg=r_install.stdout + r_install.stderr
+        )
+
+        r_overwrite = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--apply",
+                "--answers",
+                answers_path,
+                "--overwrite",
+                "--actor",
+                "claude/t",
+                "--root",
+                root,
+            ],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r_overwrite.returncode, 1)
+        msg = (r_overwrite.stdout + r_overwrite.stderr).lower()
+        self.assertIn("installed", msg)
+        self.assertIn("loopctl uninstall", msg)
+
+        # No new imported event from the refused attempt -- exactly the one
+        # from the original successful import.
+        events = self._db_query_json(root, "loop-events", loop=name, events="imported")
+        self.assertEqual(len(events), 1)
 
     # --- blocked + acknowledge_blocked --------------------------------------
 

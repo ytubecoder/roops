@@ -40,6 +40,19 @@ class TestParseSkill(unittest.TestCase):
         self.assertEqual(s["frontmatter"], {})
         self.assertTrue(any("frontmatter" in n for n in s["notes"]))
 
+    def test_unclosed_frontmatter_fence_degrades_with_note(self):
+        # MINOR #7 (fix wave, 2026-07-30): an opening `---` with no closing
+        # fence used to degrade to {} with an EMPTY notes list, contradicting
+        # _parse_frontmatter's own docstring ("any other [malformed] line
+        # degrades the whole frontmatter to {} plus a note"). Must now emit
+        # a note like every other degraded-frontmatter case.
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "SKILL.md"), "w") as f:
+            f.write("---\nname: x\ndescription: never closed\nstill no closing fence\n")
+        s = skill_import.parse_skill(d)
+        self.assertEqual(s["frontmatter"], {})
+        self.assertTrue(any("frontmatter" in n for n in s["notes"]), msg=s["notes"])
+
     def test_binary_and_oversize_skipped_with_notes(self):
         d = tempfile.mkdtemp()
         with open(os.path.join(d, "SKILL.md"), "w") as f:
@@ -158,6 +171,21 @@ class TestAnalyze(unittest.TestCase):
         for fixture in ("clean-check", "mutating"):
             r = self._an(fixture)
             self.assertIsInstance(r["rubric"]["q7_axes"]["value"], str)
+
+    def test_q7_axes_incompatible_still_states_the_axis_values(self):
+        # MINOR #4 (fix wave, 2026-07-30): the INCOMPATIBLE_RUBRIC_MAP loop
+        # used to OVERWRITE q7_axes's "derived" value (the floor axis
+        # values) with just the reshaping note when mutation/credentials
+        # fired -- a mutating or credentialed skill's SPEC.md §7 never
+        # stated the four axis values loop.conf actually carries. Both must
+        # now be present.
+        for fixture in ("mutating", "needs-creds"):
+            r = self._an(fixture)
+            value = r["rubric"]["q7_axes"]["value"]
+            self.assertEqual(r["rubric"]["q7_axes"]["bucket"], "incompatible")
+            self.assertIn("floor (see top-level 'axes')", value, msg=fixture)
+            for k, v in r["axes"].items():
+                self.assertIn(f"{k}={v}", value, msg=fixture)
 
     def test_axis_raise_context_has_drafted_justification(self):
         r = self._an("mutating")
@@ -477,6 +505,23 @@ class TestApply(unittest.TestCase):
         spec = _read(os.path.join(loop_dir, "SPEC.md"))
         self.assertIn("## BLOCKED — read before scheduling", spec)
 
+    def test_spec_section_7_states_both_axes_and_reshaping_note(self):
+        # MINOR #4 (fix wave, 2026-07-30), end-to-end through apply(): SPEC.md
+        # §7 for a credentials-blocked skill must state the actual axis
+        # values loop.conf carries (perm_fs_write=report_only etc.), not
+        # only the reshaping note explaining why it's blocked.
+        skill, analysis = self._skill_and_analysis("needs-creds")
+        answers = self._answers(analysis, acknowledge_blocked=True)
+        loop_dir = os.path.join(self._tmpdir(), "stripe-failed-charges")
+        skill_import.apply(skill, analysis, answers, loop_dir)
+        spec = _read(os.path.join(loop_dir, "SPEC.md"))
+        section_7 = spec.split("7. Permission axes", 1)[1].split(
+            "8. Finding identity", 1
+        )[0]
+        for k, v in analysis["axes"].items():
+            self.assertIn(f"{k}={v}", section_7)
+        self.assertIn("credential-handling design", section_7)
+
     # --- round-1 review defect #1: prompt.md truncation --------------------
 
     def test_prompt_body_with_finding_identity_heading_does_not_truncate_contract(
@@ -707,6 +752,22 @@ class TestApply(unittest.TestCase):
                 skill_import.apply(skill, analysis, answers, loop_dir)
             self.assertFalse(os.path.exists(loop_dir), msg=f"bad={bad!r}")
 
+    def test_model_double_quote_error_message_names_the_quote(self):
+        # MINOR #5 (fix wave, 2026-07-30): the refusal message said "no
+        # spaces, tabs, or newlines" — true but incomplete, since
+        # _MODEL_SHAPE_RE also excludes a literal double-quote (the
+        # test above, test_model_with_double_quote_refused). The message
+        # must say so.
+        with self.assertRaises(skill_import.SkillApplyError) as ctx:
+            skill_import._validate_structured_answers({"model": 'weird"model'})
+        # Isolate the message body BEFORE the trailing "— got <repr>" clause
+        # -- the bad model's own repr incidentally contains a `"`, which
+        # would make a naive `'"' in str(exception)` check pass even
+        # against the pre-fix message (a false green).
+        body = str(ctx.exception).rsplit(" — got ", 1)[0]
+        self.assertIn('"', body)
+        self.assertIn("quote", body.lower())
+
     def test_model_single_token_accepted(self):
         skill, analysis = self._skill_and_analysis()
         answers = self._answers(analysis, model="gpt-4-turbo")
@@ -791,6 +852,31 @@ class TestApply(unittest.TestCase):
         except skill_import.SkillApplyError as e:
             self.assertIn("description", str(e))
             self.assertNotIn("q1_purpose", str(e))
+
+
+class TestGrammarMatchesLoopconf(unittest.TestCase):
+    """MINOR #2 (fix wave, 2026-07-30): skill_import.py restates loop.conf's
+    tag regex (bin/skill_import.py:1374) and the timeout_s/retry_transient
+    ranges (bin/skill_import.py:1382-1383) as plain constants rather than
+    importing loopconf.py's FIELDS/TAG_RE directly (bin/skill_import.py's own
+    comment explains why: loopconf.py is a frozen single-parser module loaded
+    independently by loopctl, and reaching into FIELDS's internal shape from
+    here isn't worth it for two simple bounds). Deliberate duplication, but
+    nothing previously caught the two copies drifting apart — this pins
+    equality directly against loopconf.py, the source of truth."""
+
+    def test_tag_regex_matches_loopconf(self):
+        self.assertEqual(skill_import._APPLY_TAG_RE.pattern, loopconf.TAG_RE.pattern)
+
+    def test_timeout_s_range_matches_loopconf(self):
+        field = loopconf.FIELDS["timeout_s"]
+        self.assertEqual(skill_import._TIMEOUT_S_MIN, field["min"])
+        self.assertEqual(skill_import._TIMEOUT_S_MAX, field["max"])
+
+    def test_retry_transient_range_matches_loopconf(self):
+        field = loopconf.FIELDS["retry_transient"]
+        self.assertEqual(skill_import._RETRY_TRANSIENT_MIN, field["min"])
+        self.assertEqual(skill_import._RETRY_TRANSIENT_MAX, field["max"])
 
 
 if __name__ == "__main__":

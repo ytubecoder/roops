@@ -633,13 +633,23 @@ def cmd_list(args):
                 "tags": conf.get("tags") or [],
             }
         )
+    total = len(rows)
     if args.tag:
         rows = [r for r in rows if args.tag in r["tags"]]
     if args.json:
         print(json.dumps(rows))
     else:
         if not rows:
-            print(f"0 loops ({args.from_dir} empty)")
+            # Fix wave (2026-07-30, IMPORTANT #1): a genuinely empty
+            # loops.d/examples and "zero loops matched --tag" are different
+            # claims -- the old code printed the genuinely-empty message in
+            # BOTH cases, which is a false statement about a non-empty fleet
+            # when a --tag filter simply had no match (contradicts
+            # docs/INTERFACES.md's own "zero loops under --from" wording).
+            if args.tag and total:
+                print(f"0 loops matching --tag {args.tag} ({total} loops under {args.from_dir})")
+            else:
+                print(f"0 loops ({args.from_dir} empty)")
         else:
             table_rows = [{**r, "tags": ",".join(r["tags"])} for r in rows]
             _print_table(
@@ -1209,6 +1219,24 @@ def _cmd_import_apply(args):
     if os.path.exists(dest_dir) and not args.overwrite:
         print(
             f"refusing to scaffold {name}: {dest_dir} already exists (use --overwrite)",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Fix wave (2026-07-30, IMPORTANT #2a): --overwrite must never rewrite an
+    # INSTALLED loop's files in place. The next launchd firing would run the
+    # new prompt/loop.conf with none of the validate -> supervised run ->
+    # install gauntlet re-applied, and (worse) apply() forces
+    # schedule=manual for an acknowledged-blocked skill while the OLD plist
+    # stays bootstrapped and keeps firing on its old schedule (see the
+    # matching guard in bin/run-loop.sh). Refuse outright rather than adding
+    # a force-past flag -- uninstall, re-import, re-validate, re-run,
+    # re-install is the only supported path back in.
+    if os.path.exists(dest_dir) and args.overwrite and _is_installed(args.root, name):
+        print(
+            f"refusing to overwrite {name}: it is currently installed — "
+            f"run 'loopctl uninstall {name}' first, then re-import, "
+            "loopctl validate, loopctl run, and loopctl install again",
             file=sys.stderr,
         )
         return 1

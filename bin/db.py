@@ -778,13 +778,29 @@ def _rows_to_dicts(rows):
 
 
 def query_loops_summary(conn, args):
+    """Exactly one row per loop_name: its newest run by `started_at`,
+    deterministically tie-broken by `rowid DESC` when two runs share a
+    `started_at` (e.g. a `skipped-overlap` row written the same second a
+    real run starts). The naive `MAX(started_at)` self-join this replaced
+    could return MULTIPLE rows per loop on a tie, and different consumers
+    then disagreed about which one to keep — `loopctl`'s dict-comprehension
+    kept the last row the query happened to emit, `dashboard/generate.py`'s
+    own `ORDER BY started_at DESC LIMIT 1` (see `_latest_run`, which must
+    use the SAME `rowid DESC` tie-break to keep the two surfaces in
+    agreement) effectively kept the first. `runs` has no `WITHOUT ROWID`
+    clause, so every row has an implicit, monotonically-increasing rowid
+    reflecting insertion order — "last written wins" is deterministic and
+    cheap to express as a correlated-subquery tie-break, and needs no
+    sqlite window-function support."""
     rows = conn.execute(
         """
         SELECT r.* FROM runs r
-        INNER JOIN (
-            SELECT loop_name, MAX(started_at) AS max_started
-            FROM runs GROUP BY loop_name
-        ) latest ON r.loop_name = latest.loop_name AND r.started_at = latest.max_started
+        WHERE r.rowid = (
+            SELECT r2.rowid FROM runs r2
+            WHERE r2.loop_name = r.loop_name
+            ORDER BY r2.started_at DESC, r2.rowid DESC
+            LIMIT 1
+        )
         """
     ).fetchall()
     return _rows_to_dicts(rows)

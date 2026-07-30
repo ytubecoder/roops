@@ -75,7 +75,7 @@ Gates are unchanged from hand-authored loops: **analyze → apply → validate �
 4. `loopctl import <skill-path> --apply --answers answers.json --actor "claude/<project>"` — scaffolds the loop, records provenance. **Never installs.**
 5. `loopctl validate <name>` must exit 0. Any remaining `[FILL:` marker in `SPEC.md` is a hard fail.
 6. `loopctl run <name>` — then **read the report against ground truth**. Passing validate is necessary, never sufficient: validate cannot see a volatile `finding_id` rule or a precheck that skips forever. This step is the real gate.
-7. `loopctl install <name>` — goes live on launchd. It refuses unless a prior non-failed supervised run exists, so step 6 is mechanically enforced.
+7. `loopctl install <name>` — goes live on launchd. It refuses unless a prior non-failed supervised run exists, so step 6 is mechanically enforced — with one caveat: a `runner_status=skipped-precheck` run also satisfies this precondition, and that status means the engine never actually ran (an empty-output `type=agent` precheck short-circuits before invocation) — so "mechanically enforced" guarantees a run row exists, not that step 6's report was ever produced to read.
 
 After install, manage noise with dispositions — do not re-prompt the model to "stop mentioning X."
 

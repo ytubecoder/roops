@@ -1479,12 +1479,36 @@ class FindingHandoffTests(unittest.TestCase):
         self.assertIn("finding-handoff", html)
         self.assertIn("repo:no-remote", html)
         self.assertIn("23 unpushed commits", html)  # detail from latest.json
-        self.assertIn("loopctl dismiss l1 repo:no-remote --note", html)
+        # MINOR #3 (fix wave, 2026-07-30): the visible one-liner now includes
+        # --root (root here is a non-default temp dir), same as the handoff
+        # block below it -- see test_visible_dismiss_command_includes_root_
+        # when_nondefault for the dedicated non-default-root pin.
+        self.assertIn(f"loopctl dismiss l1 repo:no-remote --root {root} --note", html)
         self.assertNotIn("approve", html.lower())
 
     def test_paste_block_includes_root_when_nondefault(self):
         root = self._root_with_finding("l1", "a:b")  # temp root ≠ ~/projects/loops
         self.assertIn(f"--root {root}", self._generate(root))
+
+    def test_visible_dismiss_command_includes_root_when_nondefault(self):
+        # MINOR #3 (fix wave, 2026-07-30): the pre-existing VISIBLE one-liner
+        # (<code class="cmd">loopctl dismiss ...) used to omit --root while
+        # the handoff block below it already included it -- on a non-default
+        # root the easiest-to-copy visible command targeted the wrong root.
+        # test_paste_block_includes_root_when_nondefault above only proves
+        # "--root <root>" appears SOMEWHERE on the page, which the handoff
+        # block alone already satisfied before this fix -- this pins the
+        # visible command specifically.
+        root = self._root_with_finding("l1", "repo:no-remote")
+        html = self._generate(root)
+        self.assertIn(f"loopctl dismiss l1 repo:no-remote --root {root} --note", html)
+
+    def test_visible_reopen_command_includes_root_when_nondefault(self):
+        # Same bug, same fix, in the suppressed-finding branch's "reopen"
+        # one-liner.
+        root = self._root_with_finding("l1", "repo:no-remote", dismiss=True)
+        html = self._generate(root)
+        self.assertIn(f"loopctl reopen l1 repo:no-remote --root {root}", html)
 
     def test_suppressed_finding_gets_no_paste_block(self):
         root = self._root_with_finding("l1", "repo:no-remote", dismiss=True)

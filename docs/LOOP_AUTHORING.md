@@ -403,6 +403,11 @@ property, not a separate system:
                    issues (e.g. codex/claude credentials under launchd's minimal environment) only
                    ever surface in this real launchd context — that's the entire reason this step
                    exists rather than stopping at "the plist bootstrapped OK."
+                   Caveat: `skipped-precheck` is one of the two statuses this check accepts, and it
+                   means the engine never actually invoked — an empty-output `type=agent` precheck
+                   short-circuits before step 5 ever gets to the engine. The precondition mechanically
+                   guarantees a run row exists; it does not guarantee step 5's "read the report
+                   against ground truth" ever had a report to read.
 ```
 
 **`loopctl new` scaffolding, exactly** (verified by running it in a throwaway root):

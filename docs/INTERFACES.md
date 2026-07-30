@@ -273,7 +273,15 @@ Default `--from loops.d`; `--trigger manual`.
 ### 4.1 Algorithm (exact order — the plan's atomicity guarantees depend on it)
 
 1. Resolve root, `db.py init`, load + validate `loop.conf` (§5). Refuse to run a loop with
-   `enabled=false` unless `--trigger manual` (exit 0, no run row).
+   `enabled=false` unless `--trigger manual` (exit 0, no run row). **(Amendment 2 — 2026-07-30, fix
+   round 3)** Same guard, same shape, for `schedule=manual`: refuse unless `--trigger manual` (exit
+   0, no run row). `loopctl install` already refuses to bootstrap a `schedule=manual` loop, but a
+   loop's live `loop.conf` can still read `schedule=manual` while an OLDER plist from before that
+   change stays bootstrapped (e.g. `loopctl import --apply --overwrite` forces `schedule=manual` for
+   an acknowledged-blocked skill without touching the plist) — every launchd-triggered firing always
+   arrives here as `--trigger launchd` regardless of whether launchd fired it on schedule or via an
+   explicit `kickstart`, so this guard is what actually stops a credential-blocked/manual-only loop
+   from running unattended in that case.
 2. **Acquire lock** (§2, non-blocking). On contention: insert a run row with
    `runner_status=skipped-overlap`, `started_at=finished_at=now`, and exit **0** (an overlap is not
    an error — it must not make launchd think the job is broken).
@@ -429,7 +437,7 @@ Python, and sourcing arbitrary files is a code-execution footgun):
 | `type` | yes | `agent` \| `watchdog` | — | watchdog ⇒ `precheck.sh` required |
 | `engine` | yes | `codex` \| `claude` | — | must have `engines/<engine>.sh` |
 | `model` | no | string | engine default | passed through as `MODEL` |
-| `schedule` | yes | §5.1 grammar | — | `manual` = never installed |
+| `schedule` | yes | §5.1 grammar | — | `manual` = never installed; runner also refuses to run it except `--trigger manual` (Amendment 2 — 2026-07-30, fix round 3), covering an already-bootstrapped plist left behind by an earlier, non-manual schedule |
 | `workdir` | no | path | `$LOOPS_ROOT` | engine's working root |
 | `timeout_s` | no | int 30–7200 | `900` | runner-owned, process-group |
 | `enabled` | no | `true` \| `false` | `true` | false ⇒ only `--trigger manual` runs |
@@ -650,7 +658,11 @@ loopctl run <name> [--trigger manual]                                # foregroun
 loopctl list [--tag TAG]                                             # table: name, type, engine, schedule, enabled,
                                                                       #   installed?, tags (--tag: exact-match filter,
                                                                       #   Amendment 2 — 2026-07-30); 0 loops prints
-                                                                      #   "0 loops (<from-dir> empty)" (Amendment 2)
+                                                                      #   "0 loops (<from-dir> empty)" (Amendment 2);
+                                                                      #   a non-empty fleet with zero --tag matches
+                                                                      #   prints "0 loops matching --tag TAG (N loops
+                                                                      #   under <from-dir>)" instead — never the
+                                                                      #   genuinely-empty message (fix round 3)
 loopctl status [<name>]                                              # leading "fleet: N loops · ok X · warn Y ·
                                                                       #   alert Z · needs_attention W · spend7d $S"
                                                                       #   line (Amendment 2 — 2026-07-30), then last
@@ -762,6 +774,11 @@ fleet is empty (fleet counts all zero, then the empty-state line). `findings <lo
 with no open findings prints `0 open findings for <loop>`. All three still exit `0` — an empty fleet
 or an empty findings list is not a failure. `--json` is unaffected (still `[]`/`{"fleet": …,
 "loops": []}` as appropriate) — these are human-form-only messages.
+  **`list --tag` no-match is a different claim from genuinely empty (fix round 3):** a `--tag` filter
+that matches nothing on a NON-empty fleet must not print the genuinely-empty message — that would be
+a false statement about a fleet that has loops, just none matching the filter. It prints `0 loops
+matching --tag TAG (N loops under <from-dir>)` instead, naming the filter and the true fleet size; the
+genuinely-empty message is reserved for an actually-empty `<from-dir>`. Both still exit `0`.
 
 **`loopctl import` (Amendment 2 — 2026-07-30):** wraps `bin/skill_import.py`'s `parse_skill()` /
 `analyze()` / `apply()` to convert an existing Agent Skill directory into a gap-analysis report or a
@@ -801,6 +818,16 @@ gates as any other loop: `validate` → `run` → `install`), `cmd_import` recor
 "overwrite"}`. Answer-precedence and template-reuse rules (an explicit `answers` entry always wins
 over the rubric's own value, and `apply()` reuses `loopctl new`'s exact SPEC.md/prompt.md/
 precheck.sh templates rather than duplicating the strings): `docs/SKILL_IMPORT.md` §7.
+  **`--overwrite` refuses an INSTALLED target (Amendment 2 — 2026-07-30, fix round 3):** before
+`apply()` ever runs, `cmd_import` checks `_is_installed(root, name)` (same plist-file + `launchctl
+print` check `list`'s `installed` column uses) and refuses with exit 1, no files touched, no event
+recorded, if the target is currently installed — even with `--overwrite`. Rewriting an installed
+loop's `prompt.md`/`loop.conf`/`precheck.sh` in place would let the next launchd firing run the new
+prompt with none of `validate` → supervised `run` → `install` re-applied, and (concretely) `apply()`
+forcing `schedule=manual` for an acknowledged-blocked skill would leave the OLD plist bootstrapped
+and still firing on its old schedule (closed by the matching `bin/run-loop.sh` guard, §4.1 step 1).
+There is no force-past flag: the message names the required path back in — `loopctl uninstall <name>`,
+then re-import, `loopctl validate`, `loopctl run`, `loopctl install`.
 
 **Lifecycle events (Amendment 2 — 2026-07-30):** `new`, `install`, `uninstall`, `pause`, and
 `resume` each append a `loop_events` row (via `db.py record-event`) on their success path, using

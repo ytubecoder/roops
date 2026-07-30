@@ -446,10 +446,15 @@ def _discover_loops(root):
 
 
 def _latest_run(conn, loop_name):
+    """The newest run row for `loop_name`, tie-broken by `rowid DESC` on a
+    `started_at` tie so this agrees with `bin/db.py`'s `query_loops_summary`
+    (the source `loopctl`'s fleet aggregate uses) — both must pick the same
+    physical row for the same tie, or the dashboard and `loopctl status`
+    disagree about a loop's health from the exact same data."""
     if conn is None:
         return None
     row = conn.execute(
-        "SELECT * FROM runs WHERE loop_name=? ORDER BY started_at DESC LIMIT 1",
+        "SELECT * FROM runs WHERE loop_name=? ORDER BY started_at DESC, rowid DESC LIMIT 1",
         (loop_name,),
     ).fetchone()
     return dict(row) if row else None
@@ -1028,15 +1033,20 @@ def _render_findings(conn, loop_name, latest_json, now, root):
         cmd = ""
         handoff_html = ""
         if not suppressed:
+            # MINOR #3 (fix wave, 2026-07-30): this visible one-liner used to
+            # omit --root while the handoff block below (finding_handoff_text)
+            # already included it -- on a non-default root the visible
+            # command targeted the wrong root. Use the same root_flag_for()
+            # both blocks share.
             cmd = (
-                f'<code class="cmd">loopctl dismiss {e(loop_name)} {e(fid)} '
-                f'--note "…"</code>'
+                f'<code class="cmd">loopctl dismiss {e(loop_name)} {e(fid)}'
+                f'{e(root_flag)} --note "…"</code>'
             )
             handoff_html = _render_finding_handoff(
                 loop_name, fid, title, severity, detail, f, root, root_flag
             )
         else:
-            cmd = f'<code class="cmd">loopctl reopen {e(loop_name)} {e(fid)}</code>'
+            cmd = f'<code class="cmd">loopctl reopen {e(loop_name)} {e(fid)}{e(root_flag)}</code>'
         detail_html = f"<div>{e(detail)}</div>" if detail else ""
         out.append(
             f'<div class="{cls}"><span class="sev {e(severity)}">{e(severity)}</span>'

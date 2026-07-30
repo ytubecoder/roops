@@ -314,7 +314,11 @@ def _parse_frontmatter(text: str):
             break
 
     if end_idx is None:
-        return {}, text, []
+        # Fix wave (2026-07-30, MINOR #7): an opening `---` with no closing
+        # fence degrades the same way a malformed (non-flat) frontmatter
+        # line does — {} plus a note — so this must emit one too, per this
+        # docstring's own "degrades ... plus a note" claim.
+        return {}, text, ["unclosed frontmatter fence; kept as body text"]
 
     fm_lines = lines[1:end_idx]
     body = "\n".join(lines[end_idx + 1 :])
@@ -838,7 +842,21 @@ def _build_rubric(frontmatter: dict, body: str, flags: dict, axes: dict) -> dict
     for rubric_id, reasons in INCOMPATIBLE_RUBRIC_MAP.items():
         hits = [reason for flag_name, reason in reasons if flags.get(flag_name)]
         if hits:
-            rubric[rubric_id] = {"bucket": "incompatible", "value": " ".join(hits)}
+            if rubric_id == "q7_axes":
+                # Fix wave (2026-07-30, MINOR #4): q7_axes's "derived" value
+                # above already states the four floor axis values loop.conf
+                # will carry — a plain overwrite here (like every other
+                # rubric_id gets) would drop them from SPEC.md §7 entirely
+                # for a mutating/credentialed skill, leaving §7 with only the
+                # reshaping note and no record of what the axes actually
+                # are. Append instead of replacing so SPEC.md §7 always
+                # states both.
+                rubric[rubric_id] = {
+                    "bucket": "incompatible",
+                    "value": rubric[rubric_id]["value"] + " " + " ".join(hits),
+                }
+            else:
+                rubric[rubric_id] = {"bucket": "incompatible", "value": " ".join(hits)}
 
     return rubric
 
@@ -1485,8 +1503,8 @@ def _validate_structured_answers(answers: dict) -> None:
     ):
         raise SkillApplyError(
             "invalid answers.json: 'model' must be a single whitespace-free "
-            f"token (no spaces, tabs, or newlines) — loop.conf writes it as a "
-            f"bare, unquoted value — got {model!r}"
+            f"token with no double quote (no spaces, tabs, newlines, or '\"') "
+            f"— loop.conf writes it as a bare, unquoted value — got {model!r}"
         )
 
     timeout_s = answers.get("timeout_s")

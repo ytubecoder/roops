@@ -526,6 +526,67 @@ test_enabled_false_refused() {
 }
 
 # ===========================================================================
+# schedule=manual refused on a launchd-triggered firing, except --trigger
+# manual (IMPORTANT #2b, fix wave 2026-07-30) -- same shape as the
+# enabled=false guard above. `loopctl install` already refuses to bootstrap a
+# schedule=manual loop, but a loop's live loop.conf can end up schedule=manual
+# while an OLDER plist stays bootstrapped (e.g. an --overwrite that forces
+# schedule=manual for an acknowledged-blocked skill without touching the
+# plist) -- every launchd-triggered firing always arrives as --trigger
+# launchd regardless of whether launchd fired it on schedule or via an
+# explicit kickstart, so this guard is what actually stops it from running
+# unattended.
+# ===========================================================================
+
+test_schedule_manual_refused_on_launchd_trigger() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopman agent >/dev/null  # make_loop's own default is schedule=manual
+
+  run_runner "$root" loopman --trigger launchd
+  assert_eq "schedule=manual: launchd trigger exit 0" "0" "$RUNNER_EXIT"
+  assert_eq "schedule=manual: launchd trigger creates no run row" "0" "$(run_count "$root" loopman)"
+
+  run_runner "$root" loopman --trigger manual
+  assert_eq "schedule=manual: manual trigger exit 0" "0" "$RUNNER_EXIT"
+  assert_eq "schedule=manual: manual trigger DOES run" "1" "$(run_count "$root" loopman)"
+  assert_eq "schedule=manual: manual trigger completes" "completed" "$(last_run_field "$root" loopman runner_status)"
+  rm -rf "$root"
+}
+
+test_schedule_manual_refused_on_kickstart_trigger() {
+  # kickstart is the other non-manual --trigger value run-loop.sh's own arg
+  # parsing accepts (usage comment: --trigger launchd|manual|kickstart) --
+  # covered separately from launchd so the guard's `!= manual` condition
+  # (not a narrower `== launchd` check) is what's actually pinned.
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopman2 agent >/dev/null
+
+  run_runner "$root" loopman2 --trigger kickstart
+  assert_eq "schedule=manual: kickstart trigger exit 0" "0" "$RUNNER_EXIT"
+  assert_eq "schedule=manual: kickstart trigger creates no run row" "0" "$(run_count "$root" loopman2)"
+  rm -rf "$root"
+}
+
+test_non_manual_schedule_still_runs_on_launchd_trigger() {
+  # The guard must be specific to schedule=manual -- a loop with a real
+  # interval schedule must still run normally on --trigger launchd (the
+  # enabled=false guard's own sibling test already covers this shape for
+  # enabled; this pins it for the new schedule guard so it can't have been
+  # written as an unconditional "launchd never runs" refusal).
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopint agent "schedule=interval:15m" >/dev/null
+
+  run_runner "$root" loopint --trigger launchd
+  assert_eq "schedule=interval: launchd trigger exit 0" "0" "$RUNNER_EXIT"
+  assert_eq "schedule=interval: launchd trigger DOES run" "1" "$(run_count "$root" loopint)"
+  assert_eq "schedule=interval: launchd trigger completes" "completed" "$(last_run_field "$root" loopint runner_status)"
+  rm -rf "$root"
+}
+
+# ===========================================================================
 # --dry-run: prompt to stdout, no lock/db/engine touched
 # ===========================================================================
 
@@ -712,6 +773,11 @@ test_retention_pruning_cross_loop_isolation
 
 echo "== bin/run-loop.sh: enabled=false =="
 test_enabled_false_refused
+
+echo "== bin/run-loop.sh: schedule=manual (IMPORTANT #2b) =="
+test_schedule_manual_refused_on_launchd_trigger
+test_schedule_manual_refused_on_kickstart_trigger
+test_non_manual_schedule_still_runs_on_launchd_trigger
 
 echo "== bin/run-loop.sh: --dry-run =="
 test_dry_run

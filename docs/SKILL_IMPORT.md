@@ -27,8 +27,12 @@ numeric-content hint (`count`/`number of`/`wc -l`/a bare digit) decides whether 
 offers table/list panel options in addition to number/trend. The result is a structured gap
 analysis: what the skill already answers, what can be mechanically derived, what's missing, and
 what the harness genuinely can't run as written. That's it. `parse_skill()` and `analyze()` in
-`bin/skill_import.py` do not read the network, do not shell out, and do not import anything beyond
-`hashlib`, `os`, `re`.
+`bin/skill_import.py` do not read the network, do not shell out, and never invoke a model. The
+module itself imports only stdlib: `hashlib`, `os`, `re`, `json` (used by `apply()`'s
+`_render_dashboard_json` to parse a `q10_metrics` answer, not by `parse_skill()`/`analyze()`), and
+`importlib.util` — the last of which is used at module load time (`_load_schedule_module()`) to
+`exec_module` the sibling `bin/schedule.py` in isolation, the same pattern `bin/loopconf.py` uses for
+the same reason.
 
 What this buys you: a full read of a real skill costs nothing and produces an accurate skeleton
 of the eleven-question intake interview (`docs/LOOP_AUTHORING.md` §2) before a human or a
@@ -355,9 +359,18 @@ abfdf21dc02cf0bae24104e0a5158d40f71e18e5ecc3b083a6248d68c939901c`:
     "q4_cadence": "user",
     "q5_scope": "agent"
   },
-  "acknowledge_blocked": false
+  "acknowledge_blocked": false,
+  "timeout_s": 300,
+  "retry_transient": 1
 }
 ```
+
+Note the top-level `timeout_s`/`retry_transient` keys above, restating in structured form exactly
+what `q11_budget`'s prose says ("retry 1; timeout 300") — per the rule two paragraphs up,
+`q11_budget`'s free text alone sets nothing in `loop.conf`. Leaving them out here (an earlier version
+of this example did) is the exact confusion §7 warns against: the scaffolded `loop.conf` would
+silently fall back to `timeout_s=900`/`retry_transient=1` while `SPEC.md` §11 still read "timeout
+300" from the prose, with `loopctl validate` seeing nothing wrong.
 
 `loopctl import tests/fixtures/skills/clean-check --apply --answers <that file> --root <root>`
 scaffolds `loops.d/repo-hygiene-check/` fully pre-filled — `SPEC.md` with all eleven sections

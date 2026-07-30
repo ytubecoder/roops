@@ -2,6 +2,7 @@
 state/
 reports/
 dashboard/loops.html
+dashboard/.loops-dashboard-*.tmp
 launchd/*.plist
 
 # scratch / tooling

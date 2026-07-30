@@ -1062,6 +1062,53 @@ class TestQuery(DbTestCase):
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["loop_name"], "loopA")
 
+    def test_loops_summary_same_second_tie_returns_one_row_deterministically(self):
+        # MINOR #1 (fix wave, 2026-07-30): the old MAX(started_at) self-join
+        # could return MULTIPLE rows per loop_name when two runs share a
+        # started_at (e.g. a skipped-overlap row written the same second a
+        # real run starts) -- different consumers then disagreed about which
+        # of the tied rows to use. Exactly one row per loop_name now, always,
+        # deterministically tie-broken by rowid DESC (later-inserted wins).
+        same_ts = "2026-07-22T14:00:00Z"
+        for run_id, status in (("run-a", "completed"), ("run-b", "skipped-overlap")):
+            run_cli(
+                [
+                    "start-run",
+                    "--root",
+                    self.tmp,
+                    "--run-id",
+                    run_id,
+                    "--loop",
+                    "loopA",
+                    "--engine",
+                    "codex",
+                    "--trigger",
+                    "manual",
+                    "--started-at",
+                    same_ts,
+                ]
+            )
+            r = run_cli(
+                [
+                    "finish-run",
+                    "--root",
+                    self.tmp,
+                    "--run-id",
+                    run_id,
+                    "--runner-status",
+                    status,
+                    "--finished-at",
+                    same_ts,
+                ]
+            )
+            self.assertEqual(r.returncode, 0, msg=r.stderr)
+
+        r = run_cli(["query", "loops-summary", "--root", self.tmp])
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["run_id"], "run-b")
+
     def test_last_runs(self):
         for i in range(3):
             run_cli(

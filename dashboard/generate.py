@@ -76,6 +76,16 @@ def _default_schedule_parse(root):
     return _parse
 
 
+def _default_page_envelope(root):
+    path = os.path.join(root, "bin", "page_envelope.py")
+    if not os.path.isfile(path):
+        return None
+    try:
+        return _load_module_from_path(path, "loops_page_envelope")
+    except Exception:  # noqa: BLE001 — §10: degrade, never crash the page
+        return None
+
+
 # --------------------------------------------------------------------------------------------
 # Pure logic — precedence, staleness, disposition text. Unit-testable without any I/O.
 # --------------------------------------------------------------------------------------------
@@ -395,6 +405,86 @@ def _latest_run(conn, loop_name):
     return dict(row) if row else None
 
 
+def _latest_promoted_run(conn, loop_name):
+    if conn is None:
+        return None
+    try:
+        cur = conn.execute(
+            "SELECT run_id FROM runs WHERE loop_name = ? AND runner_status = 'completed' "
+            "AND contract_path IS NOT NULL ORDER BY started_at DESC LIMIT 1",
+            (loop_name,),
+        )
+        row = cur.fetchone()
+    except sqlite3.Error:
+        return None
+    return row[0] if row else None
+
+
+_DATED_PAGE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{4}\.html$")
+
+
+def _discover_report_page_names(root):
+    reports_dir = os.path.join(root, "reports")
+    try:
+        entries = sorted(os.listdir(reports_dir))
+    except OSError:
+        return []
+    names = []
+    for entry in entries:
+        report_dir = os.path.join(reports_dir, entry)
+        if not os.path.isdir(report_dir):
+            continue
+        try:
+            files = os.listdir(report_dir)
+        except OSError:
+            continue
+        if "latest.html" in files or any(_DATED_PAGE_RE.match(name) for name in files):
+            names.append(entry)
+    return names
+
+
+def _page_state(root, name, conn, envelope_mod):
+    """Returns {enabled, href, meta, stale, dated:[names], historical}."""
+    report_dir = os.path.join(root, "reports", name)
+    latest = os.path.join(report_dir, "latest.html")
+    render_sh = os.path.join(root, "loops.d", name, "render.sh")
+    enabled = os.path.isfile(render_sh) and os.access(render_sh, os.X_OK)
+    dated = []
+    if os.path.isdir(report_dir):
+        try:
+            dated = sorted(
+                (entry for entry in os.listdir(report_dir) if _DATED_PAGE_RE.match(entry)),
+                reverse=True,
+            )
+        except OSError:
+            dated = []
+    has_latest = os.path.isfile(latest)
+    state = {
+        "enabled": enabled,
+        "href": None,
+        "meta": None,
+        "stale": False,
+        "dated": dated,
+        "historical": bool(dated or has_latest) and not enabled,
+    }
+    if not has_latest:
+        return state
+    state["href"] = f"../reports/{name}/latest.html"
+    read_meta = getattr(envelope_mod, "read_meta", None) if envelope_mod else None
+    if callable(read_meta):
+        try:
+            meta = read_meta(latest)
+        except Exception:  # noqa: BLE001 — §10: bad page content never stops the dashboard
+            meta = None
+        if isinstance(meta, dict):
+            state["meta"] = meta
+    if enabled and state["meta"] is not None:
+        promoted = _latest_promoted_run(conn, name)
+        if promoted is not None and state["meta"].get("run_id") != promoted:
+            state["stale"] = True
+    return state
+
+
 def _recent_runs(conn, loop_name, limit=15):
     if conn is None:
         return []
@@ -652,8 +742,36 @@ main { padding: 0 0 8px; }
 }
 .badge.harness { color: var(--shu); border: 1px solid var(--shu); }
 .badge.stale { color: var(--ochre); border: 1px solid var(--ochre); }
+.badge.page\\2d stale { color: var(--ochre); border: 1px solid var(--ochre); }
 .badge.died { color: var(--washi); background: var(--shu); border: 1px solid var(--shu); }
 .badge.hold { color: var(--ochre); border: 1px solid var(--ochre); }
+.badge.historical { color: var(--ai); border: 1px solid var(--ai); }
+.badge.no-meta { color: var(--nibi); border: 1px dashed var(--nibi); }
+.badge.no-page { color: var(--nibi); border: 1px dashed var(--hair2); background: rgba(255,255,255,.2); }
+
+/* ---------- report pages screen ---------- */
+.reports-list { display: grid; gap: 0; border-top: 1px solid var(--hair); }
+.report-entry {
+  padding: clamp(18px, 2.6vw, 30px) clamp(20px, 4vw, 44px);
+  border-bottom: 1px solid var(--hair);
+}
+.report-entry h2 {
+  font-size: 15px; line-height: 1.6; display: flex; flex-wrap: wrap;
+  gap: 4px 8px; align-items: baseline;
+}
+.report-entry h2 a { font-family: var(--mono); font-size: 13px; text-decoration-thickness: 1px; }
+.report-entry .chips {
+  margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px 18px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+  color: var(--nibi); text-transform: uppercase;
+}
+.report-entry .chips:empty { display: none; }
+.report-entry .history {
+  margin-top: 9px; display: flex; flex-wrap: wrap; gap: 4px 12px;
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.8;
+}
+.report-entry .history:empty { display: none; }
+.report-entry .history a { overflow-wrap: anywhere; }
 
 /* ---------- per-loop sections ---------- */
 section.loop { padding: clamp(22px, 3vw, 38px) clamp(20px, 4vw, 44px); border-top: 1px solid var(--hair); }
@@ -1097,9 +1215,19 @@ def _render_loop_row(loop, now):
         sw = '<span class="sw off" title="no schedule loaded — supervised runs only">休</span>'
         next_html = '<span class="rm-next off">no schedule loaded</span>'
 
-    report_link = ""
+    page = loop.get("page") or {}
+    links = []
+    if page.get("href"):
+        badge = (
+            ' <span class="badge page-stale">stale</span>'
+            if page.get("stale")
+            else ""
+        )
+        links.append(f'<a href="{e(page["href"])}">page</a>{badge}')
     if loop["report_href"]:
-        report_link = f'<a href="{e(loop["report_href"])}">report</a>'
+        label = "md" if page.get("href") else "latest"
+        links.append(f'<a href="{e(loop["report_href"])}">{label}</a>')
+    report_link = " · ".join(links)
 
     toko = "".join(loop["toko_lines"]) or _toko_line(
         "未", "", '<span class="muted">never run</span>'
@@ -1225,9 +1353,14 @@ def _render_loop_section(loop, conn, now):
 # --------------------------------------------------------------------------------------------
 
 
-def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
+def _resolve_loop(
+    root, name, conn, loopconf_parse, schedule_parse, now, envelope_mod=None
+):
     conf_path = os.path.join(root, "loops.d", name, "loop.conf")
-    conf, errors = loopconf_parse(conf_path)
+    try:
+        conf, errors = loopconf_parse(conf_path)
+    except Exception as exc:  # noqa: BLE001 — §10: bad config must degrade, never crash
+        conf, errors = {}, [f"loop.conf parse failed: {exc}"]
 
     dashboard_json_path = os.path.join(root, "loops.d", name, "dashboard.json")
     dashboard_json = _read_json(dashboard_json_path)
@@ -1238,6 +1371,7 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
     report_href = None
     if os.path.isfile(os.path.join(root, "reports", name, "latest.md")):
         report_href = f"../reports/{name}/latest.md"
+    page = _page_state(root, name, conn, envelope_mod)
 
     latest_run = _latest_run(conn, name)
     recent_runs = _recent_runs(conn, name)
@@ -1339,6 +1473,7 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
         "dashboard_json": dashboard_json,
         "latest_json": latest_json,
         "report_href": report_href,
+        "page": page,
         "latest_run": latest_run,
         "recent_runs": recent_runs,
         "heartbeat": heartbeat,
@@ -1355,25 +1490,69 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
     }
 
 
-def generate(
-    root=None, out_file=None, loopconf_parse=None, schedule_parse=None, now=None
+def _resolve_dashboard_loops(
+    root,
+    conn,
+    loopconf_parse,
+    schedule_parse,
+    now,
+    envelope_mod,
+    include_report_only=False,
 ):
-    """Generates dashboard/loops.html. Writes via tmp-file + os.rename (atomic)."""
+    names = _discover_loops(root)
+    loops = [
+        _resolve_loop(
+            root, name, conn, loopconf_parse, schedule_parse, now, envelope_mod
+        )
+        for name in names
+    ]
+    if not include_report_only:
+        return loops
+    loop_by_name = {loop["name"]: loop for loop in loops}
+    for name in _discover_report_page_names(root):
+        if name not in loop_by_name:
+            loop_by_name[name] = _resolve_loop(
+                root, name, conn, loopconf_parse, schedule_parse, now, envelope_mod
+            )
+    return [loop_by_name[name] for name in sorted(loop_by_name)]
+
+
+def generate(
+    root=None,
+    out_file=None,
+    loopconf_parse=None,
+    schedule_parse=None,
+    now=None,
+    reports_out_file=None,
+    return_html=False,
+):
+    """Generates dashboard/loops.html and dashboard/reports.html via atomic renames."""
     root = root or os.environ.get("LOOPS_ROOT") or os.getcwd()
     root = os.path.abspath(root)
     out_file = out_file or os.path.join(root, "dashboard", "loops.html")
+    reports_out_file = reports_out_file or os.path.join(
+        root, "dashboard", "reports.html"
+    )
     now = now or datetime.now(timezone.utc)
 
     _loopconf_parse = loopconf_parse or _default_loopconf_parse(root)
     _schedule_parse = schedule_parse or _default_schedule_parse(root)
+    envelope_mod = _default_page_envelope(root)
 
     conn = _open_db(root)
     try:
-        names = _discover_loops(root)
-        loops = [
-            _resolve_loop(root, name, conn, _loopconf_parse, _schedule_parse, now)
-            for name in names
-        ]
+        loops = _resolve_dashboard_loops(
+            root, conn, _loopconf_parse, _schedule_parse, now, envelope_mod
+        )
+        report_loops = _resolve_dashboard_loops(
+            root,
+            conn,
+            _loopconf_parse,
+            _schedule_parse,
+            now,
+            envelope_mod,
+            include_report_only=True,
+        )
 
         counts = {"green": 0, "amber": 0, "red": 0, "grey": 0}
         for loop in loops:
@@ -1388,12 +1567,54 @@ def generate(
         html = _render_page(
             loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn
         )
+        reports_html = _render_reports_page(report_loops, now)
     finally:
         if conn is not None:
             conn.close()
 
     _atomic_write(out_file, html)
-    return out_file
+    _atomic_write(reports_out_file, reports_html)
+    return html if return_html else out_file
+
+
+def generate_reports(
+    root=None,
+    reports_out_file=None,
+    loopconf_parse=None,
+    schedule_parse=None,
+    now=None,
+    return_html=False,
+):
+    """Generates dashboard/reports.html. Thin wrapper used by tests."""
+    root = root or os.environ.get("LOOPS_ROOT") or os.getcwd()
+    root = os.path.abspath(root)
+    reports_out_file = reports_out_file or os.path.join(
+        root, "dashboard", "reports.html"
+    )
+    now = now or datetime.now(timezone.utc)
+
+    _loopconf_parse = loopconf_parse or _default_loopconf_parse(root)
+    _schedule_parse = schedule_parse or _default_schedule_parse(root)
+    envelope_mod = _default_page_envelope(root)
+
+    conn = _open_db(root)
+    try:
+        loops = _resolve_dashboard_loops(
+            root,
+            conn,
+            _loopconf_parse,
+            _schedule_parse,
+            now,
+            envelope_mod,
+            include_report_only=True,
+        )
+        html = _render_reports_page(loops, now)
+    finally:
+        if conn is not None:
+            conn.close()
+
+    _atomic_write(reports_out_file, html)
+    return html if return_html else reports_out_file
 
 
 def _render_page(
@@ -1426,6 +1647,7 @@ def _render_page(
         f'<span class="chip">spend today <b>{e(spend_today_html)}</b></span>'
         f'<span class="chip">spend 7d <b>{e(spend_7d_html)}</b></span>'
         f'<span class="chip muted">regenerated {e(now.strftime("%Y-%m-%dT%H:%M:%SZ"))}</span>'
+        '<span class="chip"><a href="reports.html">reports</a></span>'
         "</div></div>"
     )
 
@@ -1445,6 +1667,110 @@ def _render_page(
 
     body = f"<main>{garden}{sections}</main>"
     return _wrap_html(top, body)
+
+
+def _safe_format_relative(ts, now):
+    try:
+        return format_relative(ts, now)
+    except (AttributeError, TypeError, ValueError):
+        return "unknown"
+
+
+def _render_reports_page(loops, now):
+    entries = []
+    for loop in loops:
+        page = loop.get("page") or {}
+        if not (page.get("enabled") or page.get("href") or page.get("dated")):
+            continue
+        name = loop["name"]
+        meta = page.get("meta")
+        historical = (
+            ' <span class="badge historical">historical</span>'
+            if page.get("historical")
+            else ""
+        )
+        if page.get("href") and meta:
+            totals = meta.get("totals")
+            if not isinstance(totals, dict):
+                totals = {}
+            chips = "".join(
+                f'<span class="chip">{e(str(k))} <b>{e(str(v))}</b></span>'
+                for k, v in totals.items()
+            )
+            stale = (
+                ' <span class="badge page-stale">stale</span>'
+                if page.get("stale")
+                else ""
+            )
+            generated_at = meta.get("generated_at") or ""
+            page_class = meta.get("page_class") or ""
+            head = (
+                f'<a href="{e(page["href"])}">{e(meta.get("title") or name)}</a>'
+                f"{stale}{historical} "
+                f'<span class="muted">{e(page_class)} · '
+                f"{e(_safe_format_relative(generated_at, now))}"
+                f" ({e(generated_at)})</span>"
+            )
+        elif page.get("href"):
+            head = (
+                f'<a href="{e(page["href"])}">{e(name)}</a> '
+                f'<span class="badge no-meta">no meta</span>{historical}'
+            )
+            chips = ""
+        elif page.get("dated") and page.get("historical"):
+            head = f'{e(name)} <span class="badge historical">historical</span>'
+            chips = ""
+        else:
+            head = (
+                f'{e(name)} <span class="badge no-page">'
+                "no page yet — last render failed or has not run</span>"
+            )
+            chips = ""
+        dated = page.get("dated") or []
+        shown = dated[:30]
+        more = (
+            f' <span class="muted">+{len(dated) - 30} older</span>'
+            if len(dated) > 30
+            else ""
+        )
+        history = " ".join(
+            f'<a href="../reports/{e(name)}/{e(d)}">{e(d)}</a>' for d in shown
+        ) + more
+        entries.append(
+            f'<section class="report-entry"><h2>{head}</h2>'
+            f'<div class="chips">{chips}</div>'
+            f'<div class="history">{history}</div></section>'
+        )
+    body = "".join(entries) or '<div class="empty">No page-enabled loops yet.</div>'
+    return _reports_document(body, now)
+
+
+def _reports_document(body, now):
+    regenerated = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    top = (
+        '<div class="topstrip"><span class="seal-mini">頁</span>'
+        "<h1>reports<small>the garden · 庭</small></h1>"
+        '<div class="head-stats">'
+        f'<span class="chip muted">regenerated {e(regenerated)}</span>'
+        '<span class="chip"><a href="loops.html">loops</a></span>'
+        "</div></div>"
+    )
+    intro = (
+        '<div class="zone"><div class="kicker"><b>頁</b> report pages'
+        '<span class="note">latest envelopes · dated history from filenames</span>'
+        "</div></div>"
+    )
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        "<title>reports — 庭 the garden</title>"
+        f"<style>{CSS}</style></head><body>"
+        f'<div class="sheet">{top}<main>{intro}'
+        f'<div class="reports-list">{body}</div></main>'
+        "<footer>loops harness — static sheet · report/propose-only · "
+        "page metadata is read only from envelopes</footer></div>"
+        "</body></html>"
+    )
 
 
 def _wrap_html(top, body):
@@ -1497,8 +1823,15 @@ def main(argv=None):
         default=None,
         help="output HTML path (default: <root>/dashboard/loops.html)",
     )
+    parser.add_argument(
+        "--reports-out",
+        default=None,
+        help="reports HTML path (default: <root>/dashboard/reports.html)",
+    )
     args = parser.parse_args(argv)
-    out = generate(root=args.root, out_file=args.out)
+    out = generate(
+        root=args.root, out_file=args.out, reports_out_file=args.reports_out
+    )
     print(out)
     return 0
 

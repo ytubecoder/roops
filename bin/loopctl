@@ -410,6 +410,12 @@ def _validate_one(root, from_dir, name):
                 "dangerous combo (rule 6): type=watchdog requires an executable precheck.sh"
             )
 
+    # Amendment 2: an optional render.sh makes the loop page-enabled — but only
+    # when executable; present-and-inert is always a mistake worth failing loudly.
+    render_sh = os.path.join(loop_dir, "render.sh")
+    if os.path.isfile(render_sh) and not os.access(render_sh, os.X_OK):
+        errors.append("render.sh present but not executable")
+
     # Rule 6 (part): engine adapter must exist. Resolved under --root (engines/ is
     # produced by a concurrently-built task, never under this script's own dir).
     engine = conf.get("engine")
@@ -1020,11 +1026,68 @@ def cmd_resume(args):
     return _set_enabled(args, True)
 
 
+def _apply_schedule(root, from_dir, name, spec):
+    """Validates `spec` against the §5.1 grammar, rewrites loop.conf's
+    `schedule` key, and — if the loop is installed (a plist exists) —
+    re-renders the plist to match. Never kickstarts: rescheduling must not
+    fire a run. `spec == "manual"` uninstalls (bootout + remove plist)
+    instead of re-rendering, matching install's own refusal to ever install
+    a manual-scheduled loop."""
+    conf_path = os.path.join(root, from_dir, name, "loop.conf")
+    if not os.path.isfile(conf_path):
+        raise ValueError(f"loop not found: {name}")
+    schedule.parse(spec)  # raises ValueError on bad grammar — validate BEFORE any write
+    conf, _errors = loopconf.parse(conf_path)
+    old_spec = conf.get("schedule", "")
+    _rewrite_conf_key(conf_path, "schedule", spec)
+
+    label = _service_label(name)
+    plist_path = _plist_path(root, name)
+    uid = os.getuid()
+    if os.path.isfile(plist_path):
+        if spec == "manual":
+            _launchctl(["bootout", f"gui/{uid}/{label}"])  # best-effort
+            os.remove(plist_path)
+        else:
+            conf, _errors = loopconf.parse(conf_path)  # re-read: schedule now updated
+            with open(plist_path, "wb") as f:
+                f.write(_render_plist_xml(root, name, conf))
+            if str(conf.get("enabled", "true")).lower() != "false":
+                _launchctl(["bootout", f"gui/{uid}/{label}"])
+                _launchctl(["bootstrap", f"gui/{uid}", plist_path])
+                # NO kickstart — rescheduling must never fire a run.
+
+    return old_spec, spec
+
+
+def cmd_set_schedule(args):
+    try:
+        old, new = _apply_schedule(args.root, args.from_dir, args.name, args.spec)
+    except ValueError as exc:
+        print(f"set-schedule failed: {exc}", file=sys.stderr)
+        return 1
+
+    dash = _dashboard_module()
+    try:
+        dash.generate(root=args.root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
+    except Exception as e:  # noqa: BLE001 — dashboard regen is best-effort; the schedule change itself succeeded
+        print(f"warning: dashboard regen failed: {e}", file=sys.stderr)
+
+    print(f"schedule {args.name}: {old or '(unset)'} -> {new}")
+    return 0
+
+
 def cmd_dashboard(args):
     dash = _dashboard_module()
     out = dash.generate(root=args.root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
     print(out)
     return 0
+
+
+def cmd_serve(args):
+    import console
+
+    return console.serve(args.root, args.port)
 
 
 def cmd_findings(args):
@@ -1093,7 +1156,7 @@ def cmd_disposition(args, action):
     dash = _dashboard_module()
     try:
         dash.generate(root=root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
-    except Exception as e:  # noqa: BLE001 — dashboard regen is best-effort; disposition succeeded
+    except Exception as e:  # noqa: BLE001 — dashboard regen is best-effort; disposition itself succeeded
         print(f"warning: dashboard regen failed: {e}", file=sys.stderr)
 
     print(f"{action} {args.loop} {args.finding_id}")
@@ -1290,7 +1353,7 @@ def _default_root():
     return os.environ.get("LOOPS_ROOT", os.path.expanduser("~/projects/loops"))
 
 
-def _common_parser(*, hidden=False, suppress_defaults=False):
+def _common_parser(*, hidden=False, suppress_defaults=False, include_from=True):
     """The `--root`/`--json`/`--from`/`--actor` flags shared by every verb's
     subparser, AND (Amendment 2 — 2026-07-30 fix round 1) by the top-level
     parser `p` itself, in two deliberately different flavors — conflating
@@ -1306,6 +1369,10 @@ def _common_parser(*, hidden=False, suppress_defaults=False):
       invocation doesn't repeat a flag after the verb, the subparser's own
       re-parse doesn't clobber whatever the top-level parser already
       resolved for it with a fresh default.
+    - `include_from=False` (merge with main, 2026-07-30): omit `--from`
+      entirely. Only `serve` uses it — bin/console.py reads loops.d
+      unconditionally and has no --from plumbing, so accepting the flag
+      there would silently ignore it, a flag that lies.
     """
     common = argparse.ArgumentParser(add_help=False)
     help_ = argparse.SUPPRESS if hidden else None
@@ -1320,13 +1387,14 @@ def _common_parser(*, hidden=False, suppress_defaults=False):
         default=(sup if suppress_defaults else False),
         help=help_,
     )
-    common.add_argument(
-        "--from",
-        dest="from_dir",
-        choices=["loops.d", "examples"],
-        default=(sup if suppress_defaults else "loops.d"),
-        help=help_,
-    )
+    if include_from:
+        common.add_argument(
+            "--from",
+            dest="from_dir",
+            choices=["loops.d", "examples"],
+            default=(sup if suppress_defaults else "loops.d"),
+            help=help_,
+        )
     common.add_argument(
         "--actor",
         default=(sup if suppress_defaults else os.environ.get("USER", "unknown")),
@@ -1360,6 +1428,7 @@ def build_parser():
     # `TestGlobalFlagPlacement`.
     common_top = _common_parser(hidden=True)
     common_sub = _common_parser(suppress_defaults=True)
+    common_sub_nofrom = _common_parser(suppress_defaults=True, include_from=False)
 
     p = argparse.ArgumentParser(prog="loopctl", parents=[common_top])
     sub = p.add_subparsers(dest="verb")
@@ -1395,7 +1464,18 @@ def build_parser():
     resume_p = sub.add_parser("resume", parents=[common_sub])
     resume_p.add_argument("name")
 
+    set_schedule_p = sub.add_parser("set-schedule", parents=[common_sub])
+    set_schedule_p.add_argument("name")
+    set_schedule_p.add_argument("spec")
+
     sub.add_parser("dashboard", parents=[common_sub])
+
+    # `serve` takes the no-`--from` flavor (rationale in `_common_parser`).
+    # `main()` additionally rejects a PRE-verb `--from` with `serve`: this
+    # branch's top-level parser carries a hidden `--from` that main's did
+    # not, so without that check the flag would be silently swallowed.
+    serve_p = sub.add_parser("serve", parents=[common_sub_nofrom])
+    serve_p.add_argument("--port", type=int, default=8929)
 
     findings_p = sub.add_parser("findings", parents=[common_sub])
     findings_p.add_argument("loop")
@@ -1439,6 +1519,16 @@ def main(argv=None):
     if extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
 
+    # (merge with main, 2026-07-30) `serve` deliberately has no `--from`
+    # (bin/console.py reads loops.d unconditionally). On main that made a
+    # pre-verb `--from` an argparse error; this branch's top-level parser
+    # carries a hidden `--from`, which would otherwise swallow it silently —
+    # exactly the flag-that-lies main's own comment set out to avoid.
+    if getattr(args, "verb", None) == "serve" and any(
+        a == "--from" or a.startswith("--from=") for a in (argv or sys.argv[1:])
+    ):
+        parser.error("serve does not accept --from (the console always reads loops.d)")
+
     dispatch = {
         "new": cmd_new,
         "validate": cmd_validate,
@@ -1449,7 +1539,9 @@ def main(argv=None):
         "uninstall": cmd_uninstall,
         "pause": cmd_pause,
         "resume": cmd_resume,
+        "set-schedule": cmd_set_schedule,
         "dashboard": cmd_dashboard,
+        "serve": cmd_serve,
         "findings": cmd_findings,
         "import": cmd_import,
         "ack": lambda a: cmd_disposition(a, "ack"),

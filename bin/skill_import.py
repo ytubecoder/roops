@@ -1224,6 +1224,9 @@ is v2 — record the aspiration here, but ship single-shot for v1]
 
 11. Engine/model + budget
 [FILL: engine, model, expected tokens/run, retry_transient, timeout_s]
+
+12. Page output
+[FILL: none — OR page class (snapshot|findings), what the page shows, groups/stats]
 """
 
 _PRECHECK_SH_TEMPLATE = """\
@@ -1305,13 +1308,13 @@ def _render_spec_md(name: str, rubric: dict, answers: dict) -> str:
     template = _SPEC_MD_TEMPLATE.replace("__NAME__", name)
     header_line, _, _ = template.partition("\n\n")
     sections = _spec_template_sections(template)
-    if len(sections) != len(RUBRIC_IDS):
+    if len(sections) < len(RUBRIC_IDS):
         # `assert` vanishes under `python -O` — this invariant (the template
-        # has exactly RUBRIC_IDS-many sections) must not silently stop being
-        # checked in an optimized run.
+        # carries at least RUBRIC_IDS-many sections, in RUBRIC_IDS order)
+        # must not silently stop being checked in an optimized run.
         raise RuntimeError(
             f"SPEC.md template section count drifted: got {len(sections)} "
-            f"sections, expected {len(RUBRIC_IDS)} (RUBRIC_IDS)"
+            f"sections, expected at least {len(RUBRIC_IDS)} (RUBRIC_IDS)"
         )
 
     rendered = []
@@ -1319,6 +1322,17 @@ def _render_spec_md(name: str, rubric: dict, answers: dict) -> str:
         value = _resolved(rubric, answers, rubric_id)
         body_text = value.strip() if value else placeholder
         rendered.append(header + "\n" + body_text)
+
+    # (merge with main, 2026-07-30) Sections BEYOND the eleven intake
+    # questions — currently just §12 "Page output", added on main for the
+    # console/pagekit work — have no rubric id and nothing in an imported
+    # skill to derive one from. They are answered `none`, which is that
+    # section's own documented first choice: an imported loop emits no page
+    # unless a human adds one. Leaving the `[FILL:` placeholder instead
+    # would make every import fail `loopctl validate`, breaking the
+    # scaffold-passes-validate-with-zero-edits guarantee.
+    for header, _placeholder in sections[len(RUBRIC_IDS) :]:
+        rendered.append(header + "\nnone")
 
     return header_line + "\n\n" + "\n\n".join(rendered) + "\n"
 

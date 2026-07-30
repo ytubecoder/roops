@@ -79,9 +79,9 @@ Dashboard regeneration (best-effort; a dashboard failure never changes the run's
 
 ## 2. The intake interview
 
-Before scaffolding anything, walk through these eleven questions — with generalissimo if it's a real loop,
+Before scaffolding anything, walk through these twelve questions — with generalissimo if it's a real loop,
 or as a self-interview if you're an agent producing the `SPEC.md` yourself. Answer them **in this
-exact order**; `loopctl new` seeds `SPEC.md` with these same eleven headings (§7), so the
+exact order**; `loopctl new` seeds `SPEC.md` with these same twelve headings (§7), so the
 interview and the spec file are the same document.
 
 **1. Purpose & stop condition.** What is this loop for, and what does "done" look like at two
@@ -165,12 +165,16 @@ expected tokens/run (order of magnitude is fine — "a few hundred tokens" vs. "
 matters more than precision), `retry_transient` (default 1, max 3), `timeout_s` (30–7200, default
 900 — pick something proportional to the actual work, not the ceiling).
 
+**12. Page output** — does this loop need a full report page (`docs/REPORT_PAGES.md`)?
+If yes: which page class (`snapshot` | `findings`), which data lands on it, and what its
+groups/stat-strip show. Default: no page.
+
 **Mapping to `SPEC.md`:** `loopctl new <name>` scaffolds `loops.d/<name>/SPEC.md` (or
-`examples/<name>/SPEC.md` with `--from examples`) with exactly these eleven numbered headings,
+`examples/<name>/SPEC.md` with `--from examples`) with exactly these twelve numbered headings,
 each holding a `[FILL: ...]` placeholder. `loopctl validate` hard-fails while any `[FILL:` marker
 remains — the spec is not decoration, it's a build gate. Filling it in **is** answering the
 interview; `examples/hello-loop/SPEC.md` and `examples/hello-watchdog/SPEC.md` are full worked
-answers to all eleven questions if you want to see the shape a real answer takes.
+answers to all twelve questions if you want to see the shape a real answer takes.
 
 ## 3. The contract
 
@@ -379,12 +383,12 @@ property, not a separate system:
 ## 7. Build process walkthrough
 
 ```
-1. Spec        — walk the eleven-question intake interview (§2) with generalissimo (or self-interview).
+1. Spec        — walk the twelve-question intake interview (§2) with generalissimo (or self-interview).
 2. Scaffold     — `loopctl new <name> --type agent|watchdog --engine codex|claude`
                    (add `--from examples` if this is a pilot/regression fixture, not a real loop).
                    (or: `loopctl import <skill-path> --analyze / --apply` — see
                    `docs/SKILL_IMPORT.md` — when converting an existing Agent Skill)
-3. Fill         — loop.conf, precheck.sh, prompt.md, dashboard.json, SPEC.md. No [FILL:] left.
+3. Fill         — loop.conf, precheck.sh, prompt.md, dashboard.json, SPEC.md, render.sh. No [FILL:] left.
 4. Validate     — `loopctl validate <name> [--from examples]` — exit 0 required before anything else.
 5. Supervised run — `loopctl run <name> [--from examples]` (foreground, streams progress). Read
                    the resulting report AND the dashboard rendering side-by-side against ground
@@ -424,7 +428,7 @@ a `## Finding identity` heading (so the heading-presence check already passes ou
 its content is a `[FILL: ...]` hint you must replace with your loop's actual derivation rule.
 Validated straight off the scaffold (engine adapter present, i.e. against a real repo root),
 `loopctl validate` fails on exactly one thing: **`SPEC.md` still contains `[FILL:` placeholders**
-— fill in all eleven sections (§2) and it passes.
+— fill in all twelve sections (§2) and it passes.
 
 ### The disposition workflow — the human side of the loop
 

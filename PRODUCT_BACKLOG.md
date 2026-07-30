@@ -13,6 +13,15 @@ Priority: medium | Status: for-review
 ### B-06: loop-sensei: fleet examiner loop — built, verified (real-engine planted-failure runs), installed to launchd
 Priority: medium | Status: for-review
 
+### B-07: Garden dashboard: roops design applied to generate.py (stamps, tokonoma, 巡/休 install state; §10 style+staleness amendment)
+Priority: medium | Status: for-review
+
+### B-08: Report pages (third output tier) + kagi-ban pilot loop
+Priority: medium | Status: for-review
+
+### B-09: set-schedule: best-effort dashboard regen (false 400 fix) + close §10 paused-staleness question
+Priority: medium | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1: reliable runs + manual run-everything trigger + clean schedules screen

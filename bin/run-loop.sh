@@ -539,7 +539,7 @@ def prune_dir(d, keep_names=(), only_match=None):
             except OSError:
                 pass
 
-prune_dir(os.path.join(root, "reports", name), keep_names=("latest.md", "latest.json"))
+prune_dir(os.path.join(root, "reports", name), keep_names=("latest.md", "latest.json", "latest.html"))
 
 # state/runs/* is a GLOBAL directory shared by every loop in the tree: a
 # short-retention loop must only prune run dirs it owns, never another
@@ -925,6 +925,108 @@ ENGINE_STATUS_REASON="$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])
 ENGINE_HEADLINE="$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["headline"])' "$PROMOTE_OUT")"
 REPORT_PATH_REL="$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["dated_report"])' "$PROMOTE_OUT")"
 CONTRACT_PATH_REL="state/runs/$RUN_ID/contract.json"
+
+# ---------------------------------------------------------------------------
+# Step 6.5 (Amendment 2): loop-data commit + report page render. Only for a
+# promoted run; NOTHING here may change runner_status / exit code.
+# ---------------------------------------------------------------------------
+
+RENDER_SH="$LOOP_DIR/render.sh"
+PAGE_TMP="$OUT_DIR/page.html"
+RENDER_LOG="$OUT_DIR/page-render.log"
+LOOP_DATA_DIR="$ROOT/state/loop-data/$NAME"
+
+commit_loop_data() {
+  local commit_dir="$OUT_DIR/loop-data.commit"
+  [ -d "$commit_dir" ] || return 0
+  mkdir -p "$LOOP_DATA_DIR" || { log_err "loop-data dir create failed (ignored)"; return 0; }
+  chmod 700 "$ROOT/state/loop-data" "$LOOP_DATA_DIR" 2>/dev/null || true
+  local f
+  for f in "$commit_dir"/*; do
+    [ -f "$f" ] || continue
+    mv -f "$f" "$LOOP_DATA_DIR/$(basename "$f")" 2>/dev/null || \
+      log_err "loop-data commit failed for $(basename "$f") (ignored)"
+    chmod 600 "$LOOP_DATA_DIR/$(basename "$f")" 2>/dev/null || true
+  done
+  return 0
+}
+
+_render_runner_fn() {
+  cd "$LOOP_DIR"
+  LOOP_NAME="$NAME" RUN_ID="$RUN_ID" LOOPS_ROOT="$ROOT" OUT_DIR="$OUT_DIR" \
+    LATEST_JSON="$REPORT_DIR/latest.json" LOOP_DATA_DIR="$LOOP_DATA_DIR" \
+    PAGEKIT="$ROOT/pagekit" PAGE_OUT="$PAGE_TMP" \
+    exec "$RENDER_SH" > "$OUT_DIR/.render.raw.log" 2>&1
+}
+
+finish_render_log() {
+  # Cap (64 KiB) + redact the raw render log into page-render.log, then
+  # append $1 as the outcome line.
+  local raw="$OUT_DIR/.render.raw.log" size=0
+  if [ -f "$raw" ]; then
+    size=$(wc -c < "$raw" | tr -d ' ') || size=0
+  fi
+  if [ "$size" -gt "$PRECHECK_CAP_BYTES" ]; then
+    dd if="$raw" of="$RENDER_LOG" bs=1 count="$PRECHECK_CAP_BYTES" 2>/dev/null || \
+      { : > "$RENDER_LOG"; } 2>/dev/null || true
+    printf '\n...[TRUNCATED: render log exceeded 64KiB cap]\n' >> "$RENDER_LOG" || true
+  else
+    cp "$raw" "$RENDER_LOG" 2>/dev/null || { : > "$RENDER_LOG"; } 2>/dev/null || true
+  fi
+  printf '%s\n' "$1" >> "$RENDER_LOG" || true
+  chmod 600 "$RENDER_LOG" 2>/dev/null || true
+  redact_file_inplace "$RENDER_LOG" || { log_err "render log redaction failed (ignored)"; true; }
+  rm -f "$raw"
+  return 0
+}
+
+render_page() {
+  [ -f "$RENDER_SH" ] && [ -x "$RENDER_SH" ] || return 0
+  local render_timeout="$CONF_TIMEOUT_S"
+  if [ "$render_timeout" -gt "$PRECHECK_MAX_TIMEOUT_S" ]; then
+    render_timeout="$PRECHECK_MAX_TIMEOUT_S"
+  fi
+  run_with_pgroup_timeout "$render_timeout" _render_runner_fn
+  if [ "$RWT_TIMED_OUT" = "1" ]; then
+    finish_render_log "RENDER FAILED: timed out after ${render_timeout}s"
+    return 0
+  fi
+  if [ "$RWT_EXIT_CODE" != "0" ]; then
+    finish_render_log "RENDER FAILED: render.sh exit $RWT_EXIT_CODE"
+    return 0
+  fi
+  local gate_errors
+  if ! gate_errors="$("$PY" "$ROOT/bin/page_envelope.py" check --file "$PAGE_TMP" \
+      --expect-run-id "$RUN_ID" --expect-loop "$NAME" 2>&1)"; then
+    finish_render_log "PROMOTION GATE FAILED: ${gate_errors}"
+    return 0
+  fi
+  local dated_html
+  local tmp_dated="$REPORT_DIR/.page.dated.tmp" tmp_latest="$REPORT_DIR/.page.latest.tmp"
+  dated_html="$(date -u +%Y-%m-%d-%H%M).html"
+  if ! cp "$PAGE_TMP" "$tmp_dated" || ! cp "$PAGE_TMP" "$tmp_latest"; then
+    finish_render_log "RENDER FAILED: could not stage promotion copies"
+    rm -f "$tmp_dated" "$tmp_latest"
+    return 0
+  fi
+  chmod 600 "$tmp_dated" "$tmp_latest" 2>/dev/null || true
+  if ! mv "$tmp_dated" "$REPORT_DIR/$dated_html"; then
+    finish_render_log "RENDER FAILED: could not promote dated page"
+    rm -f "$tmp_dated" "$tmp_latest"
+    return 0
+  fi
+  if ! mv "$tmp_latest" "$REPORT_DIR/latest.html"; then
+    finish_render_log "RENDER FAILED: could not promote latest page"
+    rm -f "$tmp_latest"
+    return 0
+  fi
+  finish_render_log "page promoted: reports/$NAME/$dated_html"
+  printf 'page promoted: reports/%s/%s\n' "$NAME" "$dated_html" || true
+  return 0
+}
+
+commit_loop_data || true
+render_page || true
 
 FINAL_LOOP_STATUS="$ENGINE_LOOP_STATUS"
 FINAL_EFFECTIVE_STATUS="$ENGINE_EFFECTIVE_STATUS"

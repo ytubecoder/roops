@@ -1,0 +1,9 @@
+{"panels":[
+  {"title":"Exposures","metric":"av.total","type":"number","unit":"findings",
+   "direction":"higher_is_worse","thresholds":{"warn":1,"alert":19},"missing":"gap"},
+  {"title":"High severity","metric":"av.high","type":"number","unit":"findings",
+   "direction":"higher_is_worse","thresholds":{"warn":1,"alert":18},"missing":"gap"},
+  {"title":"New this run","metric":"av.new","type":"number","unit":"findings",
+   "direction":"higher_is_worse","thresholds":{"warn":1,"alert":3},"missing":"gap"},
+  {"title":"Exposures (trend)","metric":"av.total","type":"trend","window_days":30,"missing":"hold"}
+]}

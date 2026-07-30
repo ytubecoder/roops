@@ -1,0 +1,60 @@
+# Publish roops site
+# Project: loops (site/)
+# Frequency: after any edit to site/index.html, site/ui.html, or site/brandkit/index.html
+# Description: Verify pages locally in a real browser, publish to https://ytubecoder.github.io/roops/ via the public ytubecoder.github.io repo, confirm live, taildrop copies to the desktop machine
+
+## Prerequisites
+- Changes saved to ~/projects/loops/site (index.html, ui.html, and/or brandkit/index.html)
+- Design conformance checked against site/CLAUDE.md (tokens, seal-font rule, marubatsu, reduced-motion + 390px)
+- MOCK DATA ONLY — the publish target is public; never put internal loop names or real business data on these pages
+- ~/projects/ytubecoder.github.io cloned (public Pages host; roops/ folder serves the site)
+- Tailscale up, desktop-7dms6vl visible in `tailscale status`
+
+## Steps
+
+1. Serve the folder on a throwaway localhost port
+   - Run: cd ~/projects/loops/site && python3 -m http.server 8664 --bind 127.0.0.1 (background; pick another free port if busy)
+   - Expected outcome: server pid printed; http://127.0.0.1:8664/ responds
+   - If fails: check `lsof -i :8664` and pick a different port
+
+2. Verify the changed page(s) in the Playwright MCP browser
+   - Navigate to http://127.0.0.1:8664/<page>.html; check console for errors; screenshot changed zones
+   - index.html gotcha: scroll-reveal content is opacity-0 below the fold — force with `document.querySelectorAll('.reveal').forEach(el=>el.classList.add('in'))` before element screenshots
+   - ui.html: exercise whatever interaction the edit touched (stamp, toggle, engawa, lightbox) via evaluate; re-check at 390px if layout changed
+   - brandkit/index.html gotcha: verify at http://127.0.0.1:8664/brandkit/ (folder-with-index; both URL forms work, but verify the folder form — it's the production URL shape); same .reveal force-gotcha as index.html applies
+   - Expected outcome: 0 console errors (favicon 404 excepted locally), zones render correctly, no horizontal overflow at 390px
+   - If fails: fix the page, re-verify before proceeding
+
+3. Close the browser and kill the server
+   - Run: browser_close, then kill the http.server pid
+   - Expected outcome: port free (`lsof -i :8664` empty); no resident browser (browser-windows policy)
+   - If fails: find and kill leftover pids before continuing
+
+4. Commit the source of truth
+   - Run: cd ~/projects/loops && git add site/<changed files> && git commit (push per the repo's normal flow)
+   - Expected outcome: commit lands on main
+   - If fails: pull/rebase, resolve, re-commit
+
+5. Publish to the Pages host repo
+   - Run: cp ~/projects/loops/site/index.html ~/projects/loops/site/ui.html ~/projects/ytubecoder.github.io/roops/
+   - Run: mkdir -p ~/projects/ytubecoder.github.io/roops/brandkit && cp ~/projects/loops/site/brandkit/index.html ~/projects/ytubecoder.github.io/roops/brandkit/
+   - Run: cd ~/projects/ytubecoder.github.io && git add roops/ && git commit -m "publish roops site" && git push
+   - Expected outcome: push accepted; Pages legacy build starts automatically
+   - If fails: pull/rebase in the host repo, resolve, re-push
+
+6. Confirm the deploy is live
+   - Run: curl --retry 15 --retry-delay 6 --retry-all-errors -sf -o /dev/null -w "%{http_code}" "https://ytubecoder.github.io/roops/<page>.html?v=$(date +%s)"
+   - Run: curl --retry 15 --retry-delay 6 --retry-all-errors -sf -o /dev/null -w "%{http_code}" "https://ytubecoder.github.io/roops/brandkit/?v=$(date +%s)"
+   - Expected outcome: both index.html (or /roops/) and brandkit/ return HTTP 200 (build takes ~30-60s; the cache-buster query matters)
+   - If fails: check `gh api repos/ytubecoder/ytubecoder.github.io/pages/builds/latest --jq .status`
+
+7. Taildrop copies to the desktop machine
+   - Run: cp ~/projects/loops/site/brandkit/index.html /tmp/roops-brandkit.html
+   - Run: tailscale file cp ~/projects/loops/site/index.html ~/projects/loops/site/ui.html /tmp/roops-brandkit.html desktop-7dms6vl:
+   - Expected outcome: TAILDROP_OK-style clean exit (version-mismatch warning is harmless); three distinctly-named files land in the desktop's Tailscale inbox/Downloads
+   - If fails: `tailscale status` — confirm desktop-7dms6vl is online, retry
+
+## Verification
+- Live URLs return 200 and render the new content (cache-busted)
+- No local server or browser left running
+- User has fresh copies on the desktop machine

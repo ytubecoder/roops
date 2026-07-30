@@ -148,8 +148,8 @@ CREATE INDEX IF NOT EXISTS idx_events_loop_ts ON loop_events(loop_name, ts DESC)
 
 ### 4.1 `loopctl import <skill-path> --analyze [--json]`
 Purely static (stdlib Python), zero tokens. Parses the skill, then classifies every item of the
-eleven-question intake rubric (`docs/LOOP_AUTHORING.md` §2, stable ids `q1_purpose` …
-`q11_budget`) into one of four buckets:
+twelve-question intake rubric (`docs/LOOP_AUTHORING.md` §2, stable ids `q1_purpose` …
+`q12_page`) into one of four buckets:
 
 | Bucket | Meaning | Examples |
 |---|---|---|
@@ -164,6 +164,10 @@ suggested_answerer: "agent"|"user"}` — the "give info, show options" pattern, 
 supervising agent to relay. Presentation choices (q10: which metrics become panels, panel
 types, thresholds) are first-class `options[]` entries with `suggested_answerer:"user"` where
 taste matters, `"agent"` where a sane default exists.
+(**Report-pages delta, 2026-07-30:** the rubric now carries `q12_page` — see
+`docs/REPORT_PAGES_PLAN.md` §6. The analyzer suggests a page when the skill produces a
+rich artifact/HTML, `suggested_answerer:"user"`; `--apply` scaffolds `render.sh` INERT —
+non-executable, commented body — under the same never-write-executable-extractions rule.)
 
 **Supported input layouts** (council round — a matrix, not endless special-casing): a directory
 containing `SKILL.md` (bundled `references/`/`scripts/`/assets read as context), or a bare
@@ -233,7 +237,7 @@ shape); `q11_budget`'s free text does NOT set any of the latter three, by design
 draft regex-scraped them out of the prose and shipped real bugs from it). Full shape and
 validation rules: `docs/SKILL_IMPORT.md` §7.
 
-Scaffolds `loops.d/<name>/` fully pre-filled: `SPEC.md` with all eleven sections answered (no
+Scaffolds `loops.d/<name>/` fully pre-filled: `SPEC.md` with all twelve sections answered (no
 `[FILL:]` left when answers are complete), `prompt.md` = reshaped skill body + the contract
 sections + `## Finding identity`, `loop.conf` incl. tags and axes, the template `precheck.sh`
 with commented proposals, `dashboard.json` from the chosen panels. Records the `imported`

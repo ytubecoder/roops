@@ -1,5 +1,79 @@
 # Session Log
 
+## 2026-07-30 — Report pages shipped (third output tier) + pilot loop `kagi-ban` live
+
+### Summary
+- **Report-page tier live** (`d6ebceb..44e0942`): runner step 6.5 (loop-data commit → render under a
+  process-group timeout → `bin/page_envelope.py` promotion gate → dated-then-latest atomic promotion),
+  `loopctl validate` rejects a non-executable `render.sh`, dashboard row page-links with `stale` badge
+  plus a new `reports.html` screen, `pagekit/` kit + sanitized fixture, authoring guide + rubric q12
+  (intake is now twelve questions). INTERFACES Amendment 2 freezes the contract. 615 → 649 tests.
+- **`kagi-ban` (av exposure audit) is the first page-enabled loop** and the second on launchd
+  (`daily:07:40`). Steady state 16 exposures (14 high, 2 medium), page served over the tailnet vhost
+  (`/reports/<name>/…`, path-scoped Caddy roots so `state/`, `loops.d/`, `bin/` stay unreachable).
+- **Execution model:** subagent-driven development with external CLI agents as implementers (grok ×5,
+  codex ×3 + the fix wave), Claude reviewer subagents gating each task, foreman reviewing every diff
+  before merge. Three tasks needed one fix round each; a whole-branch review found two live Criticals.
+
+### Lessons Learned
+- **Accepted:** peons implement, Claude reviews. Every task shipped with red→green evidence, and the
+  reviewers caught what the implementers' own reports asserted away — including a retention test that
+  passed vacuously (proved by reverting the keep-list in a scratch copy and watching it still pass)
+  and a chip assertion that matched inlined CSS rather than a rendered chip.
+- **Accepted:** the supervised gauntlet is not a formality. Three defects existed only against the
+  real machine: the gate refusing `av`'s own "access token: /path" prose, a trigger-dependent PATH,
+  and `redact.py` corrupting a finding id. All three were invisible to 649 hermetic tests.
+- **Gotcha:** `redact.py`'s generic KV rule eats the rest of the line after `token:`/`password:`,
+  which silently corrupted the finding id `av:gh-cli-hosts-token:<sha8>` in the redacted precheck
+  digest — *stably*, so id-stability checks passed. Fixed with a `(?<![A-Za-z0-9-])` lookbehind
+  (hyphen compounds pass, `GITHUB_TOKEN=` still redacts). Any loop whose source names or prose carry
+  a secret keyword is exposed to this class.
+- **Gotcha:** a scanner that reads ambient process state produces different answers under launchd
+  than under a shell. `av` flags user-writable dirs that *precede* system paths, so the launchd run
+  lost four exposures and falsely resolved them — then committed that as the baseline. Prechecks that
+  observe the environment must pin it explicitly.
+- **Gotcha:** the long-standing "20 exposures" baseline in `~/projects/av-audit/` was itself a
+  harness-PATH artifact. 16 is the canonical login-shell view; do not "restore" the 20.
+- **Rejected:** treating a reviewer finding as settled because the plan mandated the code. The
+  vacuous chip assertion was copied verbatim from the plan and was still wrong; plan authorship does
+  not grade its own work.
+- **Gotcha:** grok peons cannot `git commit` inside a linked worktree (sandbox blocks the gitdir
+  under the main repo's `.git/worktrees/…`); all six dispatches improvised escapes, one of which left
+  the branch tip unsynced and needed `git fetch` + `git update-ref` before `peon merge` would accept
+  it. Codex peons were unaffected.
+
+### Decisions
+- **Redaction fixed at two layers, deliberately.** The renderer neutralizes keyword-separator prose
+  (loop-local) *and* the harness lookbehind fixes the class (shared). The first alone would have left
+  every future loop exposed; the second alone would not have covered av's page prose.
+- **Route (ii) over route (i) for the redact fix** — tighten the shared pattern rather than re-key
+  kagi-ban's ids, because the generic rule is defense-in-depth by its own docstring while the
+  specific token patterns remain the real control. Tradeoff documented in the file; ack pending.
+- **Did not push or stash another agent's work.** The roops rebrand agent worked in the same checkout
+  throughout; merges were stash-sandwiched around its dirty files, one INTERFACES §10 conflict was
+  resolved keeping both texts, and its ~11 unpushed commits were left alone.
+- **Deferred to generalissimo:** normalizing two plan-mandated cosmetics (`## 12.` SPEC heading,
+  `q12.` label — reviewer-verified safe), cleaning up the stale corrupt finding-id row, and acking the
+  lookbehind tradeoff. Parked in `docs/REPORT_PAGES_FOLLOWUP_WARMSTART.md` with the follow-up backlog.
+
+## 2026-07-30 — Garden dashboard shipped: roops design applied to generate.py (B-07); §10 amended; orphan plists cleaned
+
+### Summary
+- **Garden restyle live** (`be381f5`): `dashboard/generate.py` presentation layer rewritten to the roops design system — hanko stamps (済/注/警/未) rendering the unchanged §4.3 precedence, per-loop tokonoma in the global row (headline + standing findings as marubatsu lines, derived from fields the page already renders), pancake chip 巡 ×N from `times_seen`, measures-style panels, 巡/休/手 schedule-state column. All §10 semantics and B-05 failure surfacing preserved; raw-metrics drawer now defaults closed. Mockup-first flow: a real-data mockup (scratchpad, Playwright-verified at 1440/390) was approved before the generator was touched.
+- **INTERFACES §10 amended twice (dated):** style bullet now specifies the garden system; staleness applies only to *installed* loops (install = plist file presence, display-only, subprocess-free). Supervised-only loops render 休 "no schedule loaded" instead of fleet-wide stale badges + fake next-run estimates. One test updated to install its fixture; one new test pins the uninstalled path (616 total).
+- **Data fixes:** copy-pasted "Open google actions" panel titles corrected in ads-intl/ads-reddit/ads-x `dashboard.json`; five orphaned ads-* launchd plists deleted (files present, `launchctl print` confirmed nothing loaded — contradicted B-03's "scheduling is phase 2").
+
+### Lessons Learned
+- **Accepted:** test-inventory-before-rewrite — an Explore agent enumerated every load-bearing HTML literal in `test_dashboard.py` (~15 exact strings: badge spans, `finding suppressed`, `handoff`, `>7<`, "needs attention N"…) before the template rewrite; the rewrite then passed all 60 dashboard tests first try.
+- **Gotcha:** the no-network test forbids the substring `http://` anywhere in the page — that bans webfonts AND `xmlns="http://www.w3.org/2000/svg"` inside data-URIs, so the garden uses local Hiragino Mincho and attribute-free inline SVG. [Promoted to CLAUDE.md]
+- **Gotcha:** plist file ≠ installed — five ads plists existed unbootstrapped, so the dashboard's file-presence check showed 巡/stale for loops that would never fire; verified with `launchctl print` before deleting. [Promoted to CLAUDE.md]
+- **Rejected:** making dashboard regeneration a loop (user asked "why can't we dogfood?") — the runner already regenerates the page as step 7 of every run (§7), and the dashboard is the oversight surface: model-authored rendering would violate the core invariant. The legit dogfooding shape is a future `niwashi` (庭師) gardener loop that *audits* the garden (plist orphans, panel-label lint, mtime vs sqlite) — it would have caught both data bugs found by hand this session.
+
+### Decisions
+- `skipped-precheck` stays amber (contract-mandated) — only the tokonoma wording improved (loop-sensei's healthy skip now reads as 〇 "precheck produced no output"); a green rendering needs a §4.4/§4.3 amendment, deliberately deferred.
+- Two garden design questions deferred to the owner: the ikebana vase caps at 3 stems but real loops carry 5–7 findings, and shin/soe/hikae tiers double as severity (breaks when all findings share one severity).
+- Interactive hanko buttons (clipboard-copy of loopctl commands), fleet ledger zone, and niwashi loop are the ordered follow-up list; none started.
+
 ## 2026-07-30 — Roops rebrand: brand system, public site, full UI concept (separate repo)
 
 ### Summary

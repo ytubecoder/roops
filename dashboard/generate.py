@@ -76,6 +76,16 @@ def _default_schedule_parse(root):
     return _parse
 
 
+def _default_page_envelope(root):
+    path = os.path.join(root, "bin", "page_envelope.py")
+    if not os.path.isfile(path):
+        return None
+    try:
+        return _load_module_from_path(path, "loops_page_envelope")
+    except Exception:  # noqa: BLE001 — §10: degrade, never crash the page
+        return None
+
+
 # --------------------------------------------------------------------------------------------
 # Pure logic — precedence, staleness, disposition text. Unit-testable without any I/O.
 # --------------------------------------------------------------------------------------------
@@ -460,6 +470,90 @@ def _latest_run(conn, loop_name):
     return dict(row) if row else None
 
 
+def _latest_promoted_run(conn, loop_name):
+    if conn is None:
+        return None
+    try:
+        cur = conn.execute(
+            "SELECT run_id FROM runs WHERE loop_name = ? AND runner_status = 'completed' "
+            "AND contract_path IS NOT NULL ORDER BY started_at DESC LIMIT 1",
+            (loop_name,),
+        )
+        row = cur.fetchone()
+    except sqlite3.Error:
+        return None
+    return row[0] if row else None
+
+
+_DATED_PAGE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{4}\.html$")
+
+
+def _discover_report_page_names(root):
+    reports_dir = os.path.join(root, "reports")
+    try:
+        entries = sorted(os.listdir(reports_dir))
+    except OSError:
+        return []
+    names = []
+    for entry in entries:
+        report_dir = os.path.join(reports_dir, entry)
+        if not os.path.isdir(report_dir):
+            continue
+        try:
+            files = os.listdir(report_dir)
+        except OSError:
+            continue
+        if "latest.html" in files or any(_DATED_PAGE_RE.match(name) for name in files):
+            names.append(entry)
+    return names
+
+
+def _page_state(root, name, conn, envelope_mod):
+    """Returns {enabled, href, meta, stale, dated:[names], historical}."""
+    report_dir = os.path.join(root, "reports", name)
+    latest = os.path.join(report_dir, "latest.html")
+    render_sh = os.path.join(root, "loops.d", name, "render.sh")
+    enabled = os.path.isfile(render_sh) and os.access(render_sh, os.X_OK)
+    dated = []
+    if os.path.isdir(report_dir):
+        try:
+            dated = sorted(
+                (
+                    entry
+                    for entry in os.listdir(report_dir)
+                    if _DATED_PAGE_RE.match(entry)
+                ),
+                reverse=True,
+            )
+        except OSError:
+            dated = []
+    has_latest = os.path.isfile(latest)
+    state = {
+        "enabled": enabled,
+        "href": None,
+        "meta": None,
+        "stale": False,
+        "dated": dated,
+        "historical": bool(dated or has_latest) and not enabled,
+    }
+    if not has_latest:
+        return state
+    state["href"] = f"../reports/{name}/latest.html"
+    read_meta = getattr(envelope_mod, "read_meta", None) if envelope_mod else None
+    if callable(read_meta):
+        try:
+            meta = read_meta(latest)
+        except Exception:  # noqa: BLE001 — §10: bad page content never stops the dashboard
+            meta = None
+        if isinstance(meta, dict):
+            state["meta"] = meta
+    if enabled and state["meta"] is not None:
+        promoted = _latest_promoted_run(conn, name)
+        if promoted is not None and state["meta"].get("run_id") != promoted:
+            state["stale"] = True
+    return state
+
+
 def _recent_runs(conn, loop_name, limit=15):
     if conn is None:
         return []
@@ -593,131 +687,448 @@ def _read_json(path):
 # --------------------------------------------------------------------------------------------
 
 CSS = """
-:root { color-scheme: dark; }
-* { box-sizing: border-box; }
+/* garden dashboard — roops design system (B-04/B-07). Tokens are the roops set; no network
+   assets (Section 10): local mincho only, no webfonts, no textures, no urls of any scheme. */
+:root {
+  color-scheme: light;
+  --sumi: #1C1A17; --sumi-deep: #16130F;
+  --washi: #F2EDE3; --washi-shade: #E9E2D3;
+  --shu: #C73E2B; --shu-deep: #A93321;
+  --ai: #2E4A5B; --nibi: #8C8578; --koke: #6B7A5C; --ochre: #A87A2A;
+  --hair: rgba(28,26,23,.14); --hair2: rgba(28,26,23,.22);
+  --serif: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-  margin: 0; padding: 0 0 3rem;
-  background: #0b0e14; color: #d7dce3;
-  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--sumi-deep); color: var(--sumi);
+  font-family: var(--serif); font-size: 14px; line-height: 1.6;
+  padding: clamp(10px, 2.5vw, 36px);
 }
-a { color: #6fb3ff; }
-a:hover { color: #9ccbff; }
-h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; margin: 0; }
+a { color: var(--ai); }
+a:hover { color: var(--shu); }
+h1, h2, h3 { font-weight: 500; letter-spacing: .01em; }
+.sheet {
+  position: relative; max-width: 1320px; margin: 0 auto;
+  background: var(--washi); border-radius: 4px; overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0,0,0,.5), 0 24px 80px -24px rgba(0,0,0,.8);
+}
+.sheet::before, .sheet::after { content: ""; position: absolute; width: 24px; height: 24px; pointer-events: none; z-index: 2; }
+.sheet::before { top: 14px; left: 14px; border-top: 1px solid var(--nibi); border-left: 1px solid var(--nibi); }
+.sheet::after { bottom: 14px; right: 14px; border-bottom: 1px solid var(--nibi); border-right: 1px solid var(--nibi); }
+
+/* ---------- header ---------- */
 .topstrip {
-  display: flex; flex-wrap: wrap; gap: 1.25rem; align-items: center;
-  background: #11151d; border-bottom: 1px solid #232a36; padding: 0.9rem 1.4rem;
-  position: sticky; top: 0; z-index: 5;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px;
+  padding: 20px clamp(20px, 4vw, 44px); border-bottom: 1px solid var(--hair2);
 }
-.topstrip h1 { font-size: 1.05rem; color: #f2f4f8; margin-right: 0.5rem; }
-.chip {
-  display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.65rem;
-  border-radius: 999px; background: #1a2029; font-size: 0.8rem; font-weight: 600;
-  border: 1px solid #262e3b;
+.seal-mini {
+  width: 34px; height: 34px; background: var(--shu); color: var(--washi);
+  font-family: var(--serif); font-size: 19px; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  transform: rotate(-2deg); flex: none;
 }
-.chip .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; }
-.needs-attention { border-color: #7a3a3a; background: #241416; color: #ff9d9d; }
-.spacer { flex: 1; }
-.muted { color: #808a99; font-weight: 400; }
-main { padding: 1.4rem; max-width: 1400px; margin: 0 auto; }
-table.loops { width: 100%; border-collapse: collapse; margin-bottom: 2rem; }
-table.loops th {
-  text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
-  color: #808a99; padding: 0.4rem 0.7rem; border-bottom: 1px solid #232a36;
+.topstrip h1 { font-size: 17px; white-space: nowrap; }
+.topstrip h1 small {
+  display: block; font-family: var(--mono); font-size: 9.5px; font-weight: 400;
+  letter-spacing: .3em; color: var(--nibi); text-transform: uppercase; margin-top: 1px;
 }
-table.loops td { padding: 0.55rem 0.7rem; border-bottom: 1px solid #171c25; vertical-align: middle; }
-table.loops tr:hover td { background: #12161f; }
-.light { display: inline-block; width: 0.85rem; height: 0.85rem; border-radius: 50%; margin-right: 0.5rem; vertical-align: -1px; }
-.light.green { background: #37d67a; box-shadow: 0 0 8px #37d67a55; }
-.light.amber { background: #f2b23c; box-shadow: 0 0 8px #f2b23c55; }
-.light.red { background: #ff5c5c; box-shadow: 0 0 8px #ff5c5c55; }
-.light.grey { background: #4a5364; }
-.badge { display: inline-block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.03em; padding: 0.1rem 0.4rem; border-radius: 4px; margin-left: 0.35rem; }
-.badge.harness { background: #4a1010; color: #ff9d9d; border: 1px solid #7a3a3a; }
-.badge.stale { background: #4a3a10; color: #ffd68a; border: 1px solid #7a5a2a; }
-.badge.died { background: #4a1010; color: #ff9d9d; border: 1px solid #7a3a3a; }
-.badge.overdue { background: #4a3a10; color: #ffd68a; border: 1px solid #7a5a2a; }
-.badge.running { background: #10304a; color: #8ad4ff; border: 1px solid #2a5a7a;
-  animation: pulse-badge 1.6s ease-in-out infinite; }
-@keyframes pulse-badge { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-.loop-name { font-weight: 700; color: #f2f4f8; }
+.head-stats {
+  margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px clamp(14px, 2.5vw, 34px);
+  align-items: baseline; font-family: var(--mono); font-size: 11px;
+  letter-spacing: .14em; color: var(--nibi); text-transform: uppercase;
+}
+.chip { white-space: nowrap; }
+.chip b { font-weight: 400; color: var(--sumi); }
+.chip .jp { font-family: var(--serif); letter-spacing: 0; }
+.chip.needs-attention { color: var(--shu); }
+.chip.needs-attention b { color: var(--shu); }
+.spacer { display: none; }
+.muted { color: var(--nibi); font-weight: 400; }
+
+/* ---------- section chrome ---------- */
+main { padding: 0 0 8px; }
+.zone { padding: clamp(22px, 3vw, 38px) clamp(20px, 4vw, 44px); }
+.zone + .zone { border-top: 1px solid var(--hair); }
+.kicker {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .28em;
+  text-transform: uppercase; color: var(--nibi);
+  display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px;
+}
+.kicker b { color: var(--shu); font-weight: 400; font-size: 13px; letter-spacing: 0; font-family: var(--serif); }
+.kicker .note { margin-left: auto; letter-spacing: .14em; font-size: 10px; }
+
+/* ---------- the garden (global view) ---------- */
+.garden { border: 1px solid var(--hair2); border-radius: 3px; background: rgba(255,255,255,.25); overflow-x: auto; }
+.loop-row {
+  display: grid; grid-template-columns: 44px 1.1fr 1.5fr 190px 30px; gap: 16px;
+  align-items: center; padding: 12px 18px; min-width: 960px;
+  border-bottom: 1px solid var(--hair);
+}
+.loop-row:last-child { border-bottom: none; }
+.loop-row:hover { background: rgba(28,26,23,.035); }
+.stamp-cell { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.stamp {
+  width: 28px; height: 28px; border-radius: 3px; font-size: 14px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--serif); transform: rotate(-2deg); flex: none;
+}
+.stamp.green { border: 1.5px solid var(--koke); color: var(--koke); }
+.stamp.amber { border: 1.5px solid var(--ochre); color: var(--ochre); }
+.stamp.red { background: var(--shu); color: var(--washi); }
+.stamp.grey { border: 1.5px solid var(--nibi); color: var(--nibi); }
+.loop-name { font-family: var(--mono); font-size: 12.5px; font-weight: 400; color: var(--sumi); }
 .loop-name a { color: inherit; text-decoration: none; }
 .loop-name a:hover { text-decoration: underline; }
-section.loop {
-  background: #11151d; border: 1px solid #232a36; border-radius: 10px;
-  padding: 1.1rem 1.3rem; margin-bottom: 1.2rem;
+.loop-name small {
+  display: block; font-size: 10px; color: var(--nibi); letter-spacing: .06em; margin-top: 2px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-section.loop h2 { font-size: 1.05rem; color: #f2f4f8; }
-section.loop h2 .light { margin-right: 0.6rem; }
-.panels { display: flex; flex-wrap: wrap; gap: 0.8rem; margin: 0.9rem 0; }
-.panel {
-  background: #171c25; border: 1px solid #232a36; border-radius: 8px; padding: 0.7rem 0.9rem;
-  min-width: 150px;
+
+/* the tokonoma — each loop hangs its own output */
+.toko {
+  position: relative; height: 64px; border-radius: 3px;
+  background: var(--washi-shade); border: 1px solid var(--hair2);
+  box-shadow: inset 0 1px 3px -2px rgba(28,26,23,.55), inset 0 -1px 0 rgba(255,255,255,.4);
 }
-.panel .title { font-size: 0.72rem; text-transform: uppercase; color: #808a99; letter-spacing: 0.03em; }
-.panel .value { font-size: 1.35rem; font-weight: 700; color: #f2f4f8; margin-top: 0.15rem; }
-.panel .value.warn { color: #f2b23c; }
-.panel .value.alert { color: #ff5c5c; }
-.panel .spark { color: #6fb3ff; margin-top: 0.3rem; }
-table.list-panel { border-collapse: collapse; font-size: 0.82rem; }
-table.list-panel td, table.list-panel th { padding: 0.15rem 0.5rem; }
-.findings { margin: 0.9rem 0; }
-.finding { padding: 0.5rem 0.7rem; border-radius: 6px; margin-bottom: 0.4rem; background: #171c25; border: 1px solid #232a36; }
-.finding.suppressed { opacity: 0.5; background: #12151b; }
-.finding .fid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: #9fb0c3; }
-.finding .sev { font-weight: 700; margin-right: 0.4rem; text-transform: uppercase; font-size: 0.7rem; }
-.finding .sev.warn { color: #f2b23c; }
-.finding .sev.alert { color: #ff5c5c; }
-.finding .sev.info { color: #6fb3ff; }
-.finding .recurrence { color: #808a99; font-size: 0.8rem; margin-left: 0.4rem; }
-.finding .cmd { display: block; margin-top: 0.3rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.76rem; color: #6fb3ff; background: #0b0e14; padding: 0.2rem 0.5rem; border-radius: 4px; }
-details.finding-handoff { margin-top: 0.4rem; }
-details.finding-handoff summary { cursor: pointer; color: #808a99; font-size: 0.76rem; }
-.finding-handoff pre { background: #0b0e14; padding: 0.5rem 0.6rem; border-radius: 6px; overflow-x: auto;
-  margin-top: 0.3rem; font-size: 0.74rem; white-space: pre-wrap; word-break: break-word; }
-.runs-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 0.5rem; }
-.runs-table th { text-align: left; color: #808a99; font-weight: 600; padding: 0.25rem 0.5rem; border-bottom: 1px solid #232a36; }
-.runs-table td { padding: 0.25rem 0.5rem; border-bottom: 1px solid #171c25; }
-.fail-detail { color: #ff9d9d; font-size: 0.8rem; }
-details.handoff { margin: 0.7rem 0; border: 1px solid #7a3a3a; border-radius: 6px; background: #241416; }
-details.handoff summary { cursor: pointer; color: #ff9d9d; font-weight: 600; font-size: 0.85rem; padding: 0.5rem 0.7rem; }
-details.handoff .hint { color: #808a99; font-size: 0.75rem; padding: 0 0.7rem 0.4rem; }
+.toko-scroll {
+  height: 100%; overflow-y: auto; overflow-x: hidden; padding: 8px 10px;
+  scrollbar-width: thin; scrollbar-color: rgba(140,133,120,.3) transparent;
+}
+.toko-scroll::-webkit-scrollbar { width: 4px; }
+.toko-scroll::-webkit-scrollbar-thumb { background: rgba(140,133,120,.28); border-radius: 2px; }
+.toko-tag {
+  position: absolute; top: 3px; right: 5px; z-index: 1; pointer-events: none;
+  font-family: var(--mono); font-size: 8.5px; letter-spacing: .2em; text-transform: uppercase;
+  color: var(--sumi); opacity: .35; background: var(--washi-shade); padding: 0 1px 0 6px;
+}
+.toko-scroll > .obj:first-child { padding-right: 52px; }
+.obj { display: grid; grid-template-columns: 13px 1fr; gap: 5px; line-height: 14.5px; }
+.obj .mk { font-family: var(--serif); font-style: normal; font-size: 11.5px; line-height: 14.5px; text-align: center; }
+.obj .mk-ok { color: var(--koke); }
+.obj .mk-part { color: var(--ochre); }
+.obj .mk-fail { color: var(--shu); }
+.obj .oc { font-family: var(--mono); font-size: 10.5px; color: var(--sumi); overflow-wrap: anywhere; }
+
+.run-meta {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  font-family: var(--mono); text-align: right; white-space: nowrap;
+}
+.run-meta .rm-when { font-size: 11px; color: var(--nibi); }
+.run-meta .rm-cost { font-size: 10px; color: var(--nibi); opacity: .82; }
+.run-meta .rm-next { font-size: 10px; color: var(--koke); letter-spacing: .04em; }
+.run-meta .rm-next.off { color: var(--nibi); }
+.run-meta a { font-size: 10px; letter-spacing: .06em; }
+
+/* schedule state — 巡 loaded / 休 not loaded or paused / 手 manual */
+.sw-cell { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+.sw {
+  width: 24px; height: 24px; border-radius: 3px; font-family: var(--serif); font-size: 13px;
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+}
+.sw.on { border: 1.5px solid var(--koke); color: var(--koke); }
+.sw.off { border: 1.5px solid var(--hair2); color: var(--nibi); }
+.sw.off.paused { border: 1.5px dashed var(--hair2); color: var(--nibi); }
+.sw.manual { border: 1.5px dashed var(--hair2); color: var(--nibi); }
+
+/* small ink dots — run history, heartbeats */
+.light {
+  display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+  margin-right: 8px; vertical-align: -1px; transform: rotate(-2deg);
+}
+.light.green { background: var(--koke); }
+.light.amber { background: var(--ochre); }
+.light.red { background: var(--shu); }
+.light.grey { background: var(--nibi); opacity: .55; }
+.badge {
+  display: inline-block; font-family: var(--mono); font-size: 8.5px; font-weight: 400;
+  text-transform: uppercase; letter-spacing: .14em; padding: 2px 6px; border-radius: 2px;
+  margin-left: 6px; vertical-align: 1px;
+}
+.badge.harness { color: var(--shu); border: 1px solid var(--shu); }
+.badge.stale { color: var(--ochre); border: 1px solid var(--ochre); }
+.badge.page\\2d stale { color: var(--ochre); border: 1px solid var(--ochre); }
+.badge.died { color: var(--washi); background: var(--shu); border: 1px solid var(--shu); }
+.badge.hold { color: var(--ochre); border: 1px solid var(--ochre); }
+.badge.historical { color: var(--ai); border: 1px solid var(--ai); }
+.badge.no-meta { color: var(--nibi); border: 1px dashed var(--nibi); }
+.badge.no-page { color: var(--nibi); border: 1px dashed var(--hair2); background: rgba(255,255,255,.2); }
+.badge.overdue { color: var(--ochre); border: 1px solid var(--ochre); }
+.badge.running {
+  color: var(--ai); border: 1px solid var(--ai);
+  animation: pulse-badge 1.6s ease-in-out infinite;
+}
+@keyframes pulse-badge { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+
+/* ---------- report pages screen ---------- */
+.reports-list { display: grid; gap: 0; border-top: 1px solid var(--hair); }
+.report-entry {
+  padding: clamp(18px, 2.6vw, 30px) clamp(20px, 4vw, 44px);
+  border-bottom: 1px solid var(--hair);
+}
+.report-entry h2 {
+  font-size: 15px; line-height: 1.6; display: flex; flex-wrap: wrap;
+  gap: 4px 8px; align-items: baseline;
+}
+.report-entry h2 a { font-family: var(--mono); font-size: 13px; text-decoration-thickness: 1px; }
+.report-entry .chips {
+  margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px 18px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+  color: var(--nibi); text-transform: uppercase;
+}
+.report-entry .chips:empty { display: none; }
+.report-entry .history {
+  margin-top: 9px; display: flex; flex-wrap: wrap; gap: 4px 12px;
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.8;
+}
+.report-entry .history:empty { display: none; }
+.report-entry .history a { overflow-wrap: anywhere; }
+
+/* ---------- per-loop sections ---------- */
+section.loop { padding: clamp(22px, 3vw, 38px) clamp(20px, 4vw, 44px); border-top: 1px solid var(--hair); }
+section.loop h2 { font-size: 15px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+section.loop h2 .lname { font-family: var(--mono); font-size: 13.5px; }
+section.loop h2 .muted { font-size: 12px; font-weight: 400; flex-basis: 100%; max-width: 88ch; line-height: 1.55; }
+
+/* measures (帳) — declared panels */
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px;
+  background: var(--hair2); border: 1px solid var(--hair2); border-radius: 3px; margin: 18px 0; }
+.panel { background: var(--washi); padding: 14px 16px 12px; }
+.panel .title {
+  font-family: var(--mono); font-size: 9.5px; text-transform: uppercase;
+  color: var(--nibi); letter-spacing: .16em; line-height: 1.7;
+}
+.panel .value {
+  font-family: var(--mono); font-size: 24px; line-height: 1.1; letter-spacing: -.02em;
+  color: var(--sumi); margin-top: 6px;
+}
+.panel .value.warn { color: var(--ochre); }
+.panel .value.alert { color: var(--shu); }
+.panel .spark { color: var(--sumi); margin-top: 6px; display: block; }
+table.list-panel { border-collapse: collapse; font-family: var(--mono); font-size: 10.5px; margin-top: 6px; }
+table.list-panel td, table.list-panel th { padding: 2px 8px 2px 0; text-align: left; }
+table.list-panel th { color: var(--nibi); font-weight: 400; text-transform: uppercase; font-size: 9px; letter-spacing: .12em; }
+.panel ul { list-style: none; font-family: var(--mono); font-size: 10.5px; margin-top: 6px; }
+
+/* the arrangement — findings */
+.findings { margin: 18px 0; }
+.findings h3 {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .28em;
+  text-transform: uppercase; color: var(--nibi); font-weight: 400; margin-bottom: 10px;
+}
+.finding {
+  padding: 12px 4px 12px 14px; border-bottom: 1px solid var(--hair);
+  border-left: 3px solid var(--nibi);
+}
+.finding:last-child { border-bottom: none; }
+.finding[data-sev="alert"] { border-left-color: var(--shu); }
+.finding[data-sev="warn"] { border-left-color: var(--ochre); }
+.finding[data-sev="info"] { border-left-color: var(--koke); }
+.finding.suppressed { opacity: .45; }
+.finding .fid { font-family: var(--mono); font-size: 10px; color: var(--ai); letter-spacing: .06em; }
+.finding .sev {
+  font-family: var(--mono); font-weight: 400; margin-right: 8px; text-transform: uppercase;
+  font-size: 9px; letter-spacing: .2em;
+}
+.finding .sev.warn { color: var(--ochre); }
+.finding .sev.alert { color: var(--shu); }
+.finding .sev.info { color: var(--koke); }
+.finding .recurrence { color: var(--nibi); font-family: var(--mono); font-size: 10px; margin-left: 8px; }
+.finding .pchip {
+  display: inline-flex; align-items: center; gap: 5px; margin-right: 8px;
+  font-family: var(--mono); font-size: 8.5px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--nibi); border: 1px solid var(--hair2); border-radius: 3px; padding: 2px 7px 2px 5px;
+}
+.finding .pchip i { font-family: var(--serif); font-style: normal; font-size: 12px; line-height: 1; letter-spacing: 0; color: var(--sumi); }
+.finding > div { font-size: 13px; }
+.finding .cmd {
+  display: block; margin-top: 6px; font-family: var(--mono); font-size: 10px;
+  color: var(--ai); background: rgba(28,26,23,.05); border: 1px solid var(--hair);
+  padding: 3px 8px; border-radius: 2px; width: fit-content; max-width: 100%; overflow-wrap: anywhere;
+}
+details.finding-handoff { margin-top: 8px; }
+details.finding-handoff summary {
+  cursor: pointer; color: var(--nibi); font-family: var(--mono); font-size: 10px;
+  letter-spacing: .14em; text-transform: uppercase;
+}
+.finding-handoff pre {
+  background: var(--washi-shade); border: 1px solid var(--hair); margin-top: 6px;
+  padding: 10px 12px; border-radius: 3px; overflow-x: auto;
+  font-family: var(--mono); font-size: 10px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* run history */
+.runs-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 10.5px; margin-top: 8px; }
+.runs-table th {
+  text-align: left; color: var(--nibi); font-weight: 400; text-transform: uppercase;
+  font-size: 9px; letter-spacing: .16em; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair2);
+}
+.runs-table td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair); vertical-align: top; }
+section.loop > h3 {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .28em;
+  text-transform: uppercase; color: var(--nibi); font-weight: 400; margin-top: 20px;
+}
+.fail-detail { color: var(--shu); font-size: 10.5px; }
+
+/* failure handoff — the one washi-red block */
+details.handoff { margin: 14px 0; border: 1px solid var(--shu); border-radius: 3px; background: rgba(199,62,43,.05); }
+details.handoff summary {
+  cursor: pointer; color: var(--shu); font-family: var(--mono); font-size: 11px;
+  letter-spacing: .1em; padding: 9px 13px;
+}
+details.handoff .hint { color: var(--nibi); font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; padding: 0 13px 6px; }
 details.handoff textarea {
-  display: block; width: calc(100% - 1.4rem); margin: 0 0.7rem 0.7rem; height: 9.5rem;
-  background: #0b0e14; color: #d7dce3; border: 1px solid #232a36; border-radius: 4px;
-  font: 0.76rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 0.5rem; resize: vertical;
+  display: block; width: calc(100% - 26px); margin: 0 13px 12px; height: 9.5rem;
+  background: var(--washi); color: var(--sumi); border: 1px solid var(--hair2); border-radius: 2px;
+  font: 10.5px/1.5 var(--mono); padding: 8px; resize: vertical;
 }
-details.report-drawer summary { cursor: pointer; color: #808a99; font-size: 0.8rem; margin-top: 0.7rem; }
-.report-drawer pre { background: #0b0e14; padding: 0.6rem; border-radius: 6px; overflow-x: auto;
-  font-size: 0.78rem; white-space: pre-wrap; word-break: break-word; }
-details.raw-fallback summary { cursor: pointer; color: #808a99; font-size: 0.8rem; margin-top: 0.7rem; }
-.raw-fallback pre { background: #0b0e14; padding: 0.6rem; border-radius: 6px; overflow-x: auto; font-size: 0.76rem; }
-.hb { font-size: 0.85rem; margin: 0.5rem 0; }
-.hb .light { margin-right: 0.35rem; }
-.empty { padding: 3rem; text-align: center; color: #808a99; }
-footer { text-align: center; color: #4a5364; font-size: 0.75rem; padding: 1.5rem; }
-.tags { margin: 0.2rem 0; }
+details.report-drawer summary, details.raw-fallback summary {
+  cursor: pointer; color: var(--nibi); font-family: var(--mono); font-size: 10px;
+  letter-spacing: .14em; text-transform: uppercase; margin-top: 14px;
+}
+.report-drawer pre, .raw-fallback pre {
+  background: var(--washi-shade); border: 1px solid var(--hair); margin-top: 8px;
+  padding: 12px 14px; border-radius: 3px; overflow-x: auto;
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word;
+}
+.hb { font-family: var(--mono); font-size: 11px; margin: 10px 0; color: var(--sumi); }
+.empty { padding: 4rem 2rem; text-align: center; color: var(--nibi); font-family: var(--mono); font-size: 12px; letter-spacing: .1em; }
+footer {
+  padding: 18px clamp(20px, 4vw, 44px) 26px; border-top: 1px solid var(--hair);
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .14em; color: var(--nibi);
+  text-transform: uppercase; line-height: 2;
+}
+
+/* ---------- console controls (Task 4) — rounds switch + schedule picker ----------
+   Hidden by default (see data-console-controls in dashboard/generate.py); unhidden only
+   by the page's own hydration script once fetch('api/state') succeeds. Tokens reused
+   verbatim from :root above -- no new hex/rgba literals introduced by this block.
+   All rules in this section are unconditional (apply at every width); the mobile
+   @media (max-width: 767px) block at the very end of this stylesheet -- the file's one
+   existing mobile breakpoint, kept as the single last-word block by convention so its
+   overrides reliably win on source order at equal specificity -- is where the two
+   width-specific overrides for this section live (.con-sched's tighter max-width and
+   html.console-active .loop-row's tighter track cap). Declaring either override here
+   instead, ahead of that block, would make it dead code: identical specificity, later
+   unconditional rule wins the cascade regardless of a match media query elsewhere. */
+
+/* The `hidden` ATTRIBUTE only hides via a USER-AGENT stylesheet rule (`[hidden] {
+   display: none }`), and every author-origin declaration outranks the UA origin. So
+   `.con-cell { display: inline-flex }` and `.sp-form { display: flex }` below silently
+   defeat the `hidden` attribute on their own elements: a dashboard opened as a plain
+   file would show live-looking toggles and schedule chips it can never actuate. This
+   rule restores the attribute's meaning at author origin, and `!important` makes it
+   order- and specificity-proof for any future `display` rule added to this block.
+   Removing `hidden` (what the hydration script does on fetch success) still unhides,
+   because the rule keys on the attribute, not on a class. */
+[hidden] { display: none !important; }
+.con-cell { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.con-sw { background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; border-radius: 9px; }
+.con-sw:focus-visible { outline: 1px solid var(--shu); outline-offset: 3px; }
+.con-sw[disabled] { opacity: .35; cursor: default; }
+.con-track {
+  display: block; position: relative; width: 34px; height: 17px; border-radius: 9px;
+  border: 1px solid var(--hair2); background: var(--washi);
+  transition: background .8s cubic-bezier(0.16,1,0.3,1), border-color .8s cubic-bezier(0.16,1,0.3,1);
+}
+.con-knob {
+  position: absolute; top: 2px; left: 18px; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--koke);
+  transition: left .8s cubic-bezier(0.16,1,0.3,1), background .8s cubic-bezier(0.16,1,0.3,1);
+}
+.con-sw[aria-checked="false"] .con-knob { left: 2px; background: var(--nibi); }
+.con-sched {
+  font-family: var(--mono); font-size: 11px; background: none; cursor: pointer;
+  border: 1px solid var(--hair2); border-radius: 3px; padding: 3px 8px; color: inherit;
+  max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.con-sched:hover { border-color: var(--shu); }
+.sched-panel {
+  position: absolute; z-index: 9; background: var(--washi);
+  border: 1px solid var(--hair2); border-radius: 4px; padding: 12px;
+  box-shadow: 0 10px 30px -12px rgba(0,0,0,.4);
+}
+.sched-panel button {
+  font-family: var(--mono); font-size: 11px; background: none;
+  border: 1px solid var(--hair2); border-radius: 3px; padding: 4px 9px; cursor: pointer; margin: 2px;
+}
+.sched-panel button:hover { border-color: var(--shu); color: var(--shu); }
+.sp-form { margin-top: 8px; display: flex; gap: 6px; align-items: center; }
+.sp-err { font-family: var(--mono); font-size: 11px; color: var(--shu); margin-top: 6px; }
+
+/* generate.py's first motion-sensitive CSS (Task 4) -- no prior prefers-reduced-motion
+   block existed to extend, so this is that block, going forward. */
+@media (prefers-reduced-motion: reduce) {
+  .con-track, .con-knob { transition: none; }
+}
+
+/* Each .loop-row is its own independent grid (no shared parent grid across rows), so every
+   row must keep IDENTICAL grid-template-columns to stay column-aligned -- a content-sized
+   track (auto/fit-content) would size differently per row depending on that row's own
+   schedule-string length, breaking alignment. A definite (non-fr) max like minmax(30px,
+   214px) also does NOT behave like a plain 30px column when idle: CSS Grid grows
+   non-flexible tracks up to their fixed max using free space BEFORE flexible (fr) tracks
+   get a share, so widening the base `.loop-row` rule's third track directly (the first
+   attempt at this fix) would have widened every row's sw-cell column even with controls
+   hidden -- confirmed live by measuring swCellWidth == 214px in a hidden-controls render,
+   a real regression against "keep the collapsed state visually unchanged". So the base
+   `.loop-row` rule (near the top of this stylesheet) is untouched (bare 30px, byte-identical
+   to pre-Task-4), and the wider column applies ONLY once the hydration script (in
+   _CONSOLE_CONTROLS_HTML below) confirms api/state is live and stamps `console-active` on
+   <html> in the same success branch that unhides the controls -- so the widen and the
+   reveal always happen together, and a plain-file/no-console load sees neither. Widths
+   below are measured, not guessed (see Task 4 fix report): a worst-realistic-case schedule
+   chip ("weekly:mon:08:00" / "monthly:01:09:00", the longest §5.1 grammar strings) renders
+   con-cell at ~166px; 24px sw + 8px gap + 166px leaves headroom under 214px desktop /
+   clears 160px mobile (the mobile block's tighter .con-sched max-width keeps the chip
+   itself from ever exceeding the mobile budget). */
+html.console-active .loop-row { grid-template-columns: 44px 1.1fr 1.5fr 190px minmax(30px, 214px); }
+
+@media (max-width: 767px) {
+  .head-stats { margin-left: 0; width: 100%; }
+  .loop-row { grid-template-columns: 44px minmax(0, 1fr) 30px; gap: 10px 12px; min-width: 0; padding: 14px; }
+  .loop-row > .stamp-cell { grid-column: 1; grid-row: 1; }
+  .loop-row > .loop-name { grid-column: 2; grid-row: 1; }
+  .loop-row > .sw-cell { grid-column: 3; grid-row: 1; }
+  .loop-row > .toko { grid-column: 1 / -1; grid-row: 2; }
+  .loop-row > .run-meta { grid-column: 1 / -1; grid-row: 3; align-items: flex-start; text-align: left; }
+  .loop-name { overflow-wrap: anywhere; }
+  .garden { overflow-x: visible; }
+  /* tighter cap than desktop's 130px, so a long schedule spec ellipsizes instead of
+     pushing the row past the 390px viewport. This block is the last word in the
+     stylesheet (by convention -- see the note above .con-cell) so it reliably wins
+     over the unconditional .con-sched rule at equal specificity. */
+  .con-sched { max-width: 84px; }
+  html.console-active .loop-row { grid-template-columns: 44px minmax(0, 1fr) minmax(30px, 160px); }
+}
+/* tags + provenance + fleet recent-events strip (Amendment 2 — 2026-07-30) */
+.tags { margin: 4px 0; display: flex; flex-wrap: wrap; gap: 4px 6px; }
 .tag {
-  display: inline-block; font-size: 0.68rem; font-weight: 600; padding: 0.05rem 0.5rem;
-  border-radius: 999px; background: #1a2029; border: 1px solid #2c3444; color: #9fb0c3;
-  margin-right: 0.3rem;
+  display: inline-flex; align-items: center; font-family: var(--mono); font-size: 9px;
+  letter-spacing: .1em; text-transform: uppercase; padding: 2px 7px; border-radius: 2px;
+  border: 1px solid var(--hair2); color: var(--ai); background: rgba(46,74,91,.06);
 }
-.provenance { font-size: 0.78rem; margin: 0.3rem 0 0.6rem; }
+.provenance { font-family: var(--mono); font-size: 10px; margin: 2px 0 4px; letter-spacing: .04em; }
 #recent-events {
-  padding: 0.7rem 1.4rem; background: #0e1218; border-bottom: 1px solid #1a2029;
+  padding: 14px clamp(20px, 4vw, 44px); border-bottom: 1px solid var(--hair2);
+  background: rgba(255,255,255,.15);
 }
 #recent-events h3 {
-  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: #808a99;
-  margin-bottom: 0.5rem; font-weight: 700;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .28em;
+  text-transform: uppercase; color: var(--nibi); font-weight: 400; margin-bottom: 10px;
 }
-.events-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
-.events-table th { text-align: left; color: #808a99; font-weight: 600; padding: 0.2rem 0.6rem; }
-.events-table td { padding: 0.2rem 0.6rem; border-bottom: 1px solid #171c25; }
-.filter-bar { margin-bottom: 0.8rem; font-size: 0.82rem; color: #808a99; }
+.events-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 10.5px; }
+.events-table th {
+  text-align: left; color: var(--nibi); font-weight: 400; text-transform: uppercase;
+  font-size: 9px; letter-spacing: .16em; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair2);
+}
+.events-table td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair); }
+.filter-bar { margin-bottom: 14px; font-family: var(--mono); font-size: 11px; color: var(--nibi); letter-spacing: .04em; }
 .filter-bar select {
-  background: #171c25; color: #d7dce3; border: 1px solid #232a36; border-radius: 4px;
-  padding: 0.25rem 0.5rem; font: inherit; margin-left: 0.4rem;
+  font-family: var(--mono); font-size: 11px; background: var(--washi); color: var(--sumi);
+  border: 1px solid var(--hair2); border-radius: 3px; padding: 3px 8px; margin-left: 8px;
 }
 """
 
@@ -820,6 +1231,51 @@ def _light_html(color, marker=None, extra_badges=()):
     for b in extra_badges:
         out += f'<span class="badge {e(b.lower())}">{e(b)}</span>'
     return out
+
+
+# Status stamps (hanko) — the garden's rendering of the same §4.3 precedence result that
+# _light_html renders as a dot. Purely presentational: color in, kanji out.
+_STAMP_KANJI = {"green": "済", "amber": "注", "red": "警", "grey": "未"}
+
+
+def _stamp_html(color, marker=None, extra_badges=()):
+    kanji = _STAMP_KANJI.get(color, "未")
+    out = (
+        f'<span class="stamp-cell"><span class="stamp {color}" title="{e(color)}">'
+        f"{kanji}</span>"
+    )
+    if marker == "harness-problem":
+        out += '<span class="badge harness">harness</span>'
+    for b in extra_badges:
+        out += f'<span class="badge {e(b.lower())}">{e(b)}</span>'
+    return out + "</span>"
+
+
+def _schedule_loaded(root, name):
+    """Display-only install-state check (§10 amendment 2026-07-30): the launchd plist file
+    written by `loopctl install` exists. File presence only — never shells out to launchctl,
+    so the generator stays hermetic and subprocess-free."""
+    return os.path.isfile(os.path.join(root, "launchd", f"com.loops.{name}.plist"))
+
+
+# Marubatsu marks for the tokonoma — severity/status rendered as 〇 △ ×, never emoji.
+_MARK_BY_STATUS = {
+    "ok": ("〇", "mk-ok"),
+    "warn": ("△", "mk-part"),
+    "alert": ("×", "mk-fail"),
+}
+_MARK_BY_SEVERITY = {
+    "info": ("〇", "mk-ok"),
+    "warn": ("△", "mk-part"),
+    "alert": ("×", "mk-fail"),
+}
+
+
+def _toko_line(mark, mark_cls, text_html):
+    return (
+        f'<div class="obj"><i class="mk {mark_cls}">{mark}</i>'
+        f'<span class="oc">{text_html}</span></div>'
+    )
 
 
 def _render_panel_number(panel, metric_row, now, conn=None, loop_name=None):
@@ -974,7 +1430,7 @@ def _render_raw_fallback(run_metrics, declared_keys, report_href):
     body = "\n".join(lines)
     link = f' — <a href="{e(report_href)}">full report</a>' if report_href else ""
     return (
-        '<details class="raw-fallback" open><summary>Other metrics'
+        '<details class="raw-fallback"><summary>Other metrics'
         f"{link}</summary><pre>{body}</pre></details>"
     )
 
@@ -1048,9 +1504,14 @@ def _render_findings(conn, loop_name, latest_json, now, root):
         else:
             cmd = f'<code class="cmd">loopctl reopen {e(loop_name)} {e(fid)}{e(root_flag)}</code>'
         detail_html = f"<div>{e(detail)}</div>" if detail else ""
+        # pancaked — the same finding across N rounds is one stack, one decision
+        pchip = ""
+        if (f.get("times_seen") or 0) >= 2:
+            pchip = f'<span class="pchip"><i>巡</i> ×{int(f["times_seen"])}</span>'
         out.append(
-            f'<div class="{cls}"><span class="sev {e(severity)}">{e(severity)}</span>'
-            f'<span class="fid">{e(fid)}</span> — {e(title)}'
+            f'<div class="{cls}" data-sev="{e(severity)}">'
+            f'<span class="sev {e(severity)}">{e(severity)}</span>'
+            f'<span class="fid">{e(fid)}</span> — {e(title)} {pchip}'
             f'<span class="recurrence">{e(recurrence)}</span>{detail_html}{cmd}'
             f"{handoff_html}</div>"
         )
@@ -1086,9 +1547,35 @@ def _render_recent_runs(runs, now):
     )
 
 
+def _render_console_controls(loop):
+    """Hidden-by-default control cell (rounds toggle + schedule-edit button) for one loop
+    row. Pure inert markup: the page's own hydration script (see _wrap_html) is what
+    removes `hidden` — and only once `fetch('api/state')` succeeds, i.e. only when the
+    page is served by `loopctl serve` (Task 3's bin/console.py). Opened as a plain file,
+    the fetch fails and this stays hidden forever — same as before Task 4."""
+    name = loop["name"]
+    disabled_attr = (
+        ""
+        if loop["installed"]
+        else ' disabled title="install from CLI: loopctl install"'
+    )
+    checked = "true" if (loop["installed"] and loop["enabled"]) else "false"
+    return (
+        f'<span class="con-cell" data-console-controls hidden data-loop="{e(name)}" '
+        f'data-installed="{"1" if loop["installed"] else ""}" '
+        f'data-enabled="{"1" if loop["enabled"] else ""}" '
+        f'data-schedule="{e(loop["schedule"] or "")}">'
+        f'<button class="con-sw" type="button" role="switch" aria-checked="{checked}" '
+        f'aria-label="toggle rounds for {e(name)}"{disabled_attr}>'
+        '<span class="con-track"><span class="con-knob"></span></span></button>'
+        f'<button class="con-sched" type="button" data-sched-edit '
+        f'aria-label="edit schedule for {e(name)}">'
+        f"{e(loop['schedule'] or 'manual')}</button>"
+        "</span>"
+    )
+
+
 def _render_loop_row(loop, now):
-    color = loop["light_color"]
-    marker = loop["light_marker"]
     badges = []
     if loop["stale"]:
         badges.append("stale")
@@ -1098,39 +1585,67 @@ def _render_loop_row(loop, now):
         badges.append("overdue")
     if loop["died"]:
         badges.append("died")
-    light = _light_html(color, marker, badges)
+    stamp = _stamp_html(loop["light_color"], loop["light_marker"], badges)
+
     latest = loop["latest_run"]
     if latest:
-        last_run = f'{e(format_relative(latest["started_at"], now))} <span class="muted">({e(latest["started_at"])})</span>'
-        headline = e(latest.get("headline") or "")
-        if not headline and latest["runner_status"] in FAILURE_STATUSES:
-            # failed runs have no headline — surface the why instead of a blank cell
-            why = latest.get("error_detail") or latest["runner_status"]
-            headline = f'<span class="fail-detail">{e(why)}</span>'
+        started = latest["started_at"] or ""
+        abs_short = started[5:16].replace("T", " ") if len(started) >= 16 else started
+        last_run = f"last 巡 {e(format_relative(started, now))} · {e(abs_short)}"
     else:
-        last_run = '<span class="muted">never run</span>'
-        headline = '<span class="muted">no data</span>'
-    next_run = loop["next_run_text"]
+        last_run = "last 巡 never"
+
     spend_tok, spend_cost = loop["spend_7d"]
-    spend_html = fmt_num(spend_tok) + " tok"
+    spend_text = f"7d {fmt_num(spend_tok)} tok"
     if spend_cost:
-        spend_html += f" (${spend_cost:.2f})"
-    report_link = ""
+        spend_text += f" (${spend_cost:.2f})"
+
+    if loop["schedule"] == "manual":
+        sw = '<span class="sw manual" title="manual — run via loopctl">手</span>'
+        next_html = '<span class="rm-next off">manual</span>'
+    elif loop["installed"] and loop["enabled"]:
+        sw = '<span class="sw on" title="schedule loaded (launchd)">巡</span>'
+        next_html = f'<span class="rm-next">next 巡 {e(loop["next_run_text"])}</span>'
+    elif loop["installed"]:
+        sw = (
+            '<span class="sw off paused" '
+            'title="rounds paused — resume from console or loopctl resume">休</span>'
+        )
+        next_html = '<span class="rm-next off">paused</span>'
+    else:
+        sw = '<span class="sw off" title="no schedule loaded — supervised runs only">休</span>'
+        next_html = '<span class="rm-next off">no schedule loaded</span>'
+
+    page = loop.get("page") or {}
+    links = []
+    if page.get("href"):
+        badge = (
+            ' <span class="badge page-stale">stale</span>' if page.get("stale") else ""
+        )
+        links.append(f'<a href="{e(page["href"])}">page</a>{badge}')
     if loop["report_href"]:
-        report_link = f'<a href="{e(loop["report_href"])}">latest</a>'
+        label = "md" if page.get("href") else "latest"
+        links.append(f'<a href="{e(loop["report_href"])}">{label}</a>')
+    report_link = " · ".join(links)
+
+    toko = "".join(loop["toko_lines"]) or _toko_line(
+        "未", "", '<span class="muted">never run</span>'
+    )
+    controls = _render_console_controls(loop)
     tags_html = _render_tag_chips(loop["tags"])
     data_tags = _data_tags_attr(loop["tags"])
     return (
-        f"<tr{data_tags}>"
-        f"<td>{light}</td>"
-        f'<td class="loop-name"><a href="#loop-{e(loop["name"])}">{e(loop["name"])}</a>'
-        f'<div class="muted">{e(loop["description"])}</div>{tags_html}</td>'
-        f"<td>{headline}</td>"
-        f"<td>{last_run}</td>"
-        f'<td>{e(loop["schedule"])}<div class="muted">{e(next_run)}</div></td>'
-        f"<td>{spend_html}</td>"
-        f"<td>{report_link}</td>"
-        "</tr>"
+        f'<div class="loop-row"{data_tags}>'
+        f"{stamp}"
+        f'<div class="loop-name"><a href="#loop-{e(loop["name"])}">{e(loop["name"])}</a>'
+        f"{tags_html}"
+        f"<small>{e(loop['schedule'])} · {e(loop['description'])}</small></div>"
+        f'<div class="toko"><div class="toko-scroll">{toko}</div>'
+        '<span class="toko-tag">latest</span></div>'
+        f'<div class="run-meta"><span class="rm-when">{last_run}</span>'
+        f'<span class="rm-cost">{e(spend_text)}</span>{next_html}{report_link}</div>'
+        f'<div class="sw-cell">{sw}{controls}</div>'
+        "</div>"
     )
 
 
@@ -1186,8 +1701,6 @@ def _render_report_drawer(latest_json, report_href, clamp_bytes=8192):
 
 
 def _render_loop_section(loop, conn, now):
-    color = loop["light_color"]
-    marker = loop["light_marker"]
     badges = []
     if loop["stale"]:
         badges.append("stale")
@@ -1197,7 +1710,7 @@ def _render_loop_section(loop, conn, now):
         badges.append("overdue")
     if loop["died"]:
         badges.append("died")
-    light = _light_html(color, marker, badges)
+    stamp = _stamp_html(loop["light_color"], loop["light_marker"], badges)
 
     latest = loop["latest_run"]
     run_metrics = _run_metrics(conn, latest["run_id"]) if latest else []
@@ -1235,7 +1748,8 @@ def _render_loop_section(loop, conn, now):
 
     return (
         f'<section class="loop" id="loop-{e(loop["name"])}"{data_tags}>'
-        f'<h2>{light}{e(loop["name"])} <span class="muted">{e(loop["description"])}</span></h2>'
+        f'<h2>{stamp}<span class="lname">{e(loop["name"])}</span> '
+        f'<span class="muted">{e(loop["description"])}</span></h2>'
         f"{tags_html}"
         f"{provenance_html}"
         f"{hb_html}"
@@ -1254,9 +1768,14 @@ def _render_loop_section(loop, conn, now):
 # --------------------------------------------------------------------------------------------
 
 
-def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
+def _resolve_loop(
+    root, name, conn, loopconf_parse, schedule_parse, now, envelope_mod=None
+):
     conf_path = os.path.join(root, "loops.d", name, "loop.conf")
-    conf, errors = loopconf_parse(conf_path)
+    try:
+        conf, errors = loopconf_parse(conf_path)
+    except Exception as exc:  # noqa: BLE001 — §10: bad config must degrade, never crash
+        conf, errors = {}, [f"loop.conf parse failed: {exc}"]
 
     dashboard_json_path = os.path.join(root, "loops.d", name, "dashboard.json")
     dashboard_json = _read_json(dashboard_json_path)
@@ -1267,6 +1786,7 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
     report_href = None
     if os.path.isfile(os.path.join(root, "reports", name, "latest.md")):
         report_href = f"../reports/{name}/latest.md"
+    page = _page_state(root, name, conn, envelope_mod)
 
     latest_run = _latest_run(conn, name)
     recent_runs = _recent_runs(conn, name)
@@ -1290,11 +1810,13 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
             latest_run.get("finished_at"), latest_run["started_at"], timeout_s, now
         )
 
+    # §10 amendment 2026-07-30: staleness only applies when the schedule is actually
+    # loaded (launchd plist present). A supervised-only loop is 休 — "no schedule
+    # loaded" — not overdue; flagging the whole fleet stale made the badge meaningless.
+    installed = _schedule_loaded(root, name)
     stale = False
-    if latest_run is not None and not died:
+    if installed and latest_run is not None and not died:
         stale = is_stale(latest_run["started_at"], expected_interval_s, now)
-    elif latest_run is None:
-        stale = False  # no run history yet — nothing to compare against
 
     if died:
         light_color, light_marker = "red", "harness-problem"
@@ -1332,6 +1854,44 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
 
     needs_attention = (light_color in ("amber", "red")) or stale or died
 
+    # Tokonoma (床の間) — the row's output alcove: latest headline (or failure detail)
+    # plus standing findings, each with a marubatsu mark. Derived only from sqlite +
+    # latest.json fields the page already renders elsewhere; nothing model-authored is
+    # computed here.
+    toko_lines = []
+    open_findings_count = 0
+    if latest_run is not None:
+        if latest_run["runner_status"] in FAILURE_STATUSES:
+            why = latest_run.get("error_detail") or latest_run["runner_status"]
+            toko_lines.append(
+                _toko_line("×", "mk-fail", f'<span class="fail-detail">{e(why)}</span>')
+            )
+        elif latest_run.get("headline"):
+            mark, mark_cls = _MARK_BY_STATUS.get(
+                latest_run.get("effective_status") or "", ("△", "mk-part")
+            )
+            toko_lines.append(_toko_line(mark, mark_cls, e(latest_run["headline"])))
+    shown = 0
+    for f in _open_findings(conn, name):
+        disp = _current_disposition(conn, name, f["finding_id"])
+        action = disp["action"] if disp else None
+        snooze_until = disp.get("snooze_until") if disp else None
+        if is_suppressed(action, snooze_until, now):
+            continue
+        open_findings_count += 1
+        if shown < 4:
+            mark, mark_cls = _MARK_BY_SEVERITY.get(f["severity"], ("△", "mk-part"))
+            toko_lines.append(_toko_line(mark, mark_cls, e(f["title"])))
+            shown += 1
+    if open_findings_count > shown:
+        toko_lines.append(
+            _toko_line(
+                "△",
+                "mk-part",
+                f'<span class="muted">+{open_findings_count - shown} more standing</span>',
+            )
+        )
+
     return {
         "name": name,
         "root": root,
@@ -1342,6 +1902,7 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
         "dashboard_json": dashboard_json,
         "latest_json": latest_json,
         "report_href": report_href,
+        "page": page,
         "latest_run": latest_run,
         "recent_runs": recent_runs,
         "heartbeat": heartbeat,
@@ -1351,33 +1912,86 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
         "overdue": overdue,
         "running": running,
         "stale": stale,
+        "installed": installed,
+        "enabled": str(conf.get("enabled", "true")).lower() != "false",
         "light_color": light_color,
         "light_marker": light_marker,
         "spend_7d": spend_7d,
         "next_run_text": next_run_text,
         "needs_attention": needs_attention,
+        "toko_lines": toko_lines,
+        "open_findings_count": open_findings_count,
     }
 
 
-def generate(
-    root=None, out_file=None, loopconf_parse=None, schedule_parse=None, now=None
+def _resolve_dashboard_loops(
+    root,
+    conn,
+    loopconf_parse,
+    schedule_parse,
+    now,
+    envelope_mod,
+    include_report_only=False,
 ):
-    """Generates dashboard/loops.html. Writes via tmp-file + os.rename (atomic)."""
+    names = _discover_loops(root)
+    loops = [
+        _resolve_loop(
+            root, name, conn, loopconf_parse, schedule_parse, now, envelope_mod
+        )
+        for name in names
+    ]
+    if not include_report_only:
+        return loops
+    loop_by_name = {loop["name"]: loop for loop in loops}
+    for name in _discover_report_page_names(root):
+        if name not in loop_by_name:
+            loop_by_name[name] = _resolve_loop(
+                root, name, conn, loopconf_parse, schedule_parse, now, envelope_mod
+            )
+    return [loop_by_name[name] for name in sorted(loop_by_name)]
+
+
+def generate(
+    root=None,
+    out_file=None,
+    loopconf_parse=None,
+    schedule_parse=None,
+    now=None,
+    reports_out_file=None,
+    return_html=False,
+):
+    """Generates dashboard/loops.html and dashboard/reports.html via atomic renames."""
     root = root or os.environ.get("LOOPS_ROOT") or os.getcwd()
     root = os.path.abspath(root)
     out_file = out_file or os.path.join(root, "dashboard", "loops.html")
+    reports_out_file = reports_out_file or os.path.join(
+        root, "dashboard", "reports.html"
+    )
     now = now or datetime.now(timezone.utc)
 
     _loopconf_parse = loopconf_parse or _default_loopconf_parse(root)
     _schedule_parse = schedule_parse or _default_schedule_parse(root)
+    envelope_mod = _default_page_envelope(root)
 
     conn = _open_db(root)
     try:
-        names = _discover_loops(root)
-        loops = [
-            _resolve_loop(root, name, conn, _loopconf_parse, _schedule_parse, now)
-            for name in names
-        ]
+        # Resolve once (§10 perf: this path runs after every loop firing). include_report_only
+        # returns the superset -- loop.d entries plus report-only names -- so filtering it down
+        # to the loop.d names gives the exact same `loops` list _resolve_dashboard_loops(root,
+        # ..., include_report_only=False) would have produced, without a second sqlite/fs pass
+        # per loop. _discover_loops() returns names already sorted alphabetically, matching the
+        # sort order report_loops is built in, so the filter preserves ordering byte-for-byte.
+        report_loops = _resolve_dashboard_loops(
+            root,
+            conn,
+            _loopconf_parse,
+            _schedule_parse,
+            now,
+            envelope_mod,
+            include_report_only=True,
+        )
+        discovered_names = set(_discover_loops(root))
+        loops = [loop for loop in report_loops if loop["name"] in discovered_names]
 
         counts = {"green": 0, "amber": 0, "red": 0, "grey": 0}
         for loop in loops:
@@ -1400,28 +2014,76 @@ def generate(
             conn,
             events,
         )
+        try:
+            reports_html = _render_reports_page(report_loops, now)
+        except Exception:  # noqa: BLE001 — §10: a broken reports view must not take down loops.html
+            reports_html = _reports_document(
+                '<div class="empty">Reports view failed to render.</div>', now
+            )
     finally:
         if conn is not None:
             conn.close()
 
     _atomic_write(out_file, html)
-    return out_file
+    _atomic_write(reports_out_file, reports_html)
+    return html if return_html else out_file
+
+
+def generate_reports(
+    root=None,
+    reports_out_file=None,
+    loopconf_parse=None,
+    schedule_parse=None,
+    now=None,
+    return_html=False,
+):
+    """Generates dashboard/reports.html. Thin wrapper used by tests."""
+    root = root or os.environ.get("LOOPS_ROOT") or os.getcwd()
+    root = os.path.abspath(root)
+    reports_out_file = reports_out_file or os.path.join(
+        root, "dashboard", "reports.html"
+    )
+    now = now or datetime.now(timezone.utc)
+
+    _loopconf_parse = loopconf_parse or _default_loopconf_parse(root)
+    _schedule_parse = schedule_parse or _default_schedule_parse(root)
+    envelope_mod = _default_page_envelope(root)
+
+    conn = _open_db(root)
+    try:
+        loops = _resolve_dashboard_loops(
+            root,
+            conn,
+            _loopconf_parse,
+            _schedule_parse,
+            now,
+            envelope_mod,
+            include_report_only=True,
+        )
+        html = _render_reports_page(loops, now)
+    finally:
+        if conn is not None:
+            conn.close()
+
+    _atomic_write(reports_out_file, html)
+    return html if return_html else reports_out_file
 
 
 def _render_page(
     loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn, events
 ):
     top_chips = "".join(
-        f'<span class="chip"><span class="dot" style="background:'
-        f'{_color_hex(c)}"></span>{c} {n}</span>'
+        f'<span class="chip"><span class="jp">{_STAMP_KANJI[c]}</span> <b>{n}</b></span>'
         for c, n in counts.items()
-        if n
+        if n and c in _STAMP_KANJI
     )
     na_chip = (
         f'<span class="chip needs-attention">needs attention {needs_attention_count}</span>'
         if needs_attention_count
         else '<span class="chip">needs attention 0</span>'
     )
+    standing_total = sum(loop["open_findings_count"] for loop in loops)
+    standing_chip = f'<span class="chip">standing <b>{standing_total}</b></span>'
     spend_today_html = fmt_num(spend_today[0]) + " tok"
     if spend_today[1]:
         spend_today_html += f" (${spend_today[1]:.2f})"
@@ -1430,13 +2092,15 @@ def _render_page(
         spend_7d_html += f" (${spend_7d_fleet[1]:.2f})"
 
     top = (
-        '<div class="topstrip"><h1>loops</h1>'
-        f"{top_chips}{na_chip}"
-        f'<span class="chip">spend today {e(spend_today_html)}</span>'
-        f'<span class="chip">spend 7d {e(spend_7d_html)}</span>'
-        '<span class="spacer"></span>'
-        f'<span class="muted">regenerated {e(now.strftime("%Y-%m-%dT%H:%M:%SZ"))}</span>'
-        "</div>"
+        '<div class="topstrip"><span class="seal-mini">巡</span>'
+        "<h1>roops<small>the garden · 庭</small></h1>"
+        '<div class="head-stats">'
+        f"{top_chips}{na_chip}{standing_chip}"
+        f'<span class="chip">spend today <b>{e(spend_today_html)}</b></span>'
+        f'<span class="chip">spend 7d <b>{e(spend_7d_html)}</b></span>'
+        f'<span class="chip muted">regenerated {e(now.strftime("%Y-%m-%dT%H:%M:%SZ"))}</span>'
+        '<span class="chip"><a href="reports.html">reports</a></span>'
+        "</div></div>"
     )
 
     events_html = _render_events_strip(events, now)
@@ -1461,35 +2125,235 @@ def _render_page(
         )
 
     global_rows = "".join(_render_loop_row(loop, now) for loop in loops)
-    global_table = (
-        '<table class="loops"><thead><tr><th></th><th>Loop</th><th>Headline</th>'
-        "<th>Last run</th><th>Schedule / next</th><th>Spend (7d)</th><th>Report</th>"
-        f"</tr></thead><tbody>{global_rows}</tbody></table>"
+    garden = (
+        '<div class="zone"><div class="kicker"><b>庭</b> the garden — all loops'
+        '<span class="note">床の間 = each loop hangs its own output · '
+        "休 = paused or no schedule loaded</span></div>"
+        f'<div class="garden">{global_rows}</div></div>'
     )
 
     sections = "".join(_render_loop_section(loop, conn, now) for loop in loops)
 
-    body = f"{events_html}<main>{filter_html}{global_table}{sections}</main>"
+    body = f"{events_html}<main>{filter_html}{garden}{sections}</main>"
     return _wrap_html(top, body)
 
 
-def _color_hex(name):
-    return {
-        "green": "#37d67a",
-        "amber": "#f2b23c",
-        "red": "#ff5c5c",
-        "grey": "#4a5364",
-    }.get(name, "#4a5364")
+def _safe_format_relative(ts, now):
+    try:
+        return format_relative(ts, now)
+    except (AttributeError, TypeError, ValueError):
+        return "unknown"
+
+
+def _render_reports_page(loops, now):
+    entries = []
+    for loop in loops:
+        page = loop.get("page") or {}
+        if not (page.get("enabled") or page.get("href") or page.get("dated")):
+            continue
+        name = loop["name"]
+        meta = page.get("meta")
+        historical = (
+            ' <span class="badge historical">historical</span>'
+            if page.get("historical")
+            else ""
+        )
+        if page.get("href") and meta:
+            totals = meta.get("totals")
+            if not isinstance(totals, dict):
+                totals = {}
+            chips = "".join(
+                f'<span class="chip">{e(str(k))} <b>{e(str(v))}</b></span>'
+                for k, v in totals.items()
+            )
+            stale = (
+                ' <span class="badge page-stale">stale</span>'
+                if page.get("stale")
+                else ""
+            )
+            generated_at = meta.get("generated_at") or ""
+            page_class = meta.get("page_class") or ""
+            head = (
+                f'<a href="{e(page["href"])}">{e(meta.get("title") or name)}</a>'
+                f"{stale}{historical} "
+                f'<span class="muted">{e(page_class)} · '
+                f"{e(_safe_format_relative(generated_at, now))}"
+                f" ({e(generated_at)})</span>"
+            )
+        elif page.get("href"):
+            head = (
+                f'<a href="{e(page["href"])}">{e(name)}</a> '
+                f'<span class="badge no-meta">no meta</span>{historical}'
+            )
+            chips = ""
+        elif page.get("dated") and page.get("historical"):
+            head = f'{e(name)} <span class="badge historical">historical</span>'
+            chips = ""
+        else:
+            head = (
+                f'{e(name)} <span class="badge no-page">'
+                "no page yet — last render failed or has not run</span>"
+            )
+            chips = ""
+        dated = page.get("dated") or []
+        shown = dated[:30]
+        more = (
+            f' <span class="muted">+{len(dated) - 30} older</span>'
+            if len(dated) > 30
+            else ""
+        )
+        history = (
+            " ".join(f'<a href="../reports/{e(name)}/{e(d)}">{e(d)}</a>' for d in shown)
+            + more
+        )
+        entries.append(
+            f'<section class="report-entry"><h2>{head}</h2>'
+            f'<div class="chips">{chips}</div>'
+            f'<div class="history">{history}</div></section>'
+        )
+    body = "".join(entries) or '<div class="empty">No page-enabled loops yet.</div>'
+    return _reports_document(body, now)
+
+
+def _reports_document(body, now):
+    regenerated = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    top = (
+        '<div class="topstrip"><span class="seal-mini">頁</span>'
+        "<h1>reports<small>the garden · 庭</small></h1>"
+        '<div class="head-stats">'
+        f'<span class="chip muted">regenerated {e(regenerated)}</span>'
+        '<span class="chip"><a href="loops.html">loops</a></span>'
+        "</div></div>"
+    )
+    intro = (
+        '<div class="zone"><div class="kicker"><b>頁</b> report pages'
+        '<span class="note">latest envelopes · dated history from filenames</span>'
+        "</div></div>"
+    )
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        "<title>reports — 庭 the garden</title>"
+        f"<style>{CSS}</style></head><body>"
+        f'<div class="sheet">{top}<main>{intro}'
+        f'<div class="reports-list">{body}</div></main>'
+        "<footer>loops harness — static sheet · report/propose-only · "
+        "page metadata is read only from envelopes</footer></div>"
+        "</body></html>"
+    )
+
+
+# Shared schedule-picker panel + hydration script (Task 4). Static (no interpolation) --
+# one instance per page, placed as a sibling of .sheet (not nested inside it) so the
+# panel's position:absolute math (rect + window.scrollX/scrollY, both document-relative)
+# isn't thrown off by .sheet's own `position: relative`. Everything here is inert until
+# fetch('api/state') succeeds; opened as a plain file it never runs past the .catch().
+_CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
+  <div class="sp-presets">
+    <button data-spec="interval:5m">5m</button><button data-spec="interval:15m">15m</button>
+    <button data-spec="interval:30m">30m</button><button data-spec="interval:1h">hourly</button>
+    <button data-kind="daily">daily</button><button data-kind="weekly">weekly</button>
+    <button data-kind="monthly">monthly</button>
+  </div>
+  <div class="sp-form" hidden>
+    <select class="sp-dow" hidden><option>mon</option><option>tue</option><option>wed</option>
+      <option>thu</option><option>fri</option><option>sat</option><option>sun</option></select>
+    <input class="sp-dom" type="number" min="1" max="28" value="1" hidden>
+    <input class="sp-time" type="time" value="09:00">
+    <button class="sp-apply" type="button">apply</button>
+  </div>
+  <div class="sp-err" role="alert"></div>
+</div>
+<script>
+(function(){
+  'use strict';
+  fetch('api/state').then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(){
+    document.querySelectorAll('[data-console-controls]').forEach(function(c){ c.hidden=false; });
+    document.documentElement.classList.add('console-active');
+  }).catch(function(){ /* static file mode -- controls stay hidden */ });
+  // The .catch normalizes ANY transport-level failure (console stopped mid-session, a
+  // response that isn't JSON) into the same {ok:false, j:{error}} shape a 4xx/5xx takes,
+  // so every caller's existing else-branch runs: the rounds switch gets re-enabled and
+  // the message surfaces. Without it a rejected promise skipped those branches and left
+  // the switch disabled forever, with nothing shown.
+  function post(path, body){
+    return fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+      .catch(function(err){ return {ok:false, j:{error:'console unreachable: ' + err}}; });
+  }
+  document.addEventListener('click', function(ev){
+    var sw = ev.target.closest('.con-sw');
+    if (sw && !sw.disabled){
+      var cell = sw.closest('[data-console-controls]');
+      var on = sw.getAttribute('aria-checked') !== 'true';
+      sw.disabled = true;
+      post('api/loops/' + cell.getAttribute('data-loop') + '/rounds', {on:on}).then(function(res){
+        if (res.ok) location.reload(); else { sw.disabled=false; alert(res.j.error); }
+      });
+      return;
+    }
+    var ed = ev.target.closest('[data-sched-edit]');
+    var panel = document.querySelector('[data-sched-panel]');
+    if (ed){
+      var cell2 = ed.closest('[data-console-controls]');
+      panel.dataset.loop = cell2.getAttribute('data-loop');
+      panel.dataset.cur = cell2.getAttribute('data-schedule');
+      var rect = ed.getBoundingClientRect();
+      panel.style.top = (rect.bottom + window.scrollY + 6) + 'px';
+      panel.style.left = Math.max(8, rect.left + window.scrollX - 120) + 'px';
+      panel.querySelector('.sp-form').hidden = true;
+      panel.querySelector('.sp-err').textContent = '';
+      panel.hidden = false;
+      return;
+    }
+    if (panel && !panel.hidden && !ev.target.closest('[data-sched-panel]')) panel.hidden = true;
+  });
+  var panel = document.querySelector('[data-sched-panel]');
+  function apply(spec){
+    post('api/loops/' + panel.dataset.loop + '/schedule', {spec:spec}).then(function(res){
+      if (res.ok) location.reload(); else panel.querySelector('.sp-err').textContent = res.j.error;
+    });
+  }
+  panel.addEventListener('click', function(ev){
+    var b = ev.target.closest('button'); if (!b) return;
+    if (b.dataset.spec) { apply(b.dataset.spec); return; }
+    if (b.dataset.kind) {
+      panel.dataset.kind = b.dataset.kind;
+      panel.querySelector('.sp-form').hidden = false;
+      panel.querySelector('.sp-dow').hidden = b.dataset.kind !== 'weekly';
+      panel.querySelector('.sp-dom').hidden = b.dataset.kind !== 'monthly';
+      var cur = panel.dataset.cur || '';
+      var mTime = cur.match(/(\d{2}:\d{2})$/); if (mTime) panel.querySelector('.sp-time').value = mTime[1];
+      return;
+    }
+    if (b.classList.contains('sp-apply')) {
+      var t = panel.querySelector('.sp-time').value || '09:00';
+      var k = panel.dataset.kind;
+      // Each kind is applied only when it was explicitly chosen. The bare `else` this
+      // replaces would have sent a MONTHLY spec for any unset/unknown kind; that path is
+      // now unreachable anyway (the [hidden] CSS rule keeps .sp-form, and so this apply
+      // button, undisplayed until a kind button sets panel.dataset.kind), but panel.dataset
+      // .kind is never cleared between loops, so the guard stays explicit.
+      if (k === 'daily') apply('daily:' + t);
+      else if (k === 'weekly') apply('weekly:' + panel.querySelector('.sp-dow').value + ':' + t);
+      else if (k === 'monthly') apply('monthly:' + String(panel.querySelector('.sp-dom').value).padStart(2, '0') + ':' + t);
+    }
+  });
+})();
+</script>
+"""
 
 
 def _wrap_html(top, body):
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        "<title>loops dashboard</title>"
+        "<title>roops — 庭 the garden</title>"
         f"<style>{CSS}</style></head><body>"
-        f"{top}{body}"
-        "<footer>loops harness — static dashboard, report/propose-only</footer>"
+        f'<div class="sheet">{top}{body}'
+        "<footer>loops harness — static sheet · report/propose-only · "
+        "findings are actions in waiting</footer></div>"
+        f"{_CONSOLE_CONTROLS_HTML}"
         f"<script>{DASHBOARD_JS}</script>"
         "</body></html>"
     )
@@ -1532,8 +2396,13 @@ def main(argv=None):
         default=None,
         help="output HTML path (default: <root>/dashboard/loops.html)",
     )
+    parser.add_argument(
+        "--reports-out",
+        default=None,
+        help="reports HTML path (default: <root>/dashboard/reports.html)",
+    )
     args = parser.parse_args(argv)
-    out = generate(root=args.root, out_file=args.out)
+    out = generate(root=args.root, out_file=args.out, reports_out_file=args.reports_out)
     print(out)
     return 0
 

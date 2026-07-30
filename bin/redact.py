@@ -8,6 +8,7 @@ Usable two ways:
 Regex-replace secrets with `«redacted:<kind>»`, case-insensitive. Best-effort
 defence in depth — never the primary control (permission axes are).
 """
+
 import re
 import sys
 
@@ -29,11 +30,25 @@ _PRIVATE_KEY_RE = re.compile(
 # REST OF THE LINE (not just the first token: multi-token values like
 # `Authorization: Bearer eyJ...` must not leak past the key name). Applied
 # last so it doesn't fight with the token patterns above. `.` does not match
-# `\n` (no DOTALL), so this naturally stops at end-of-line.
-_KV_RE = re.compile(
-    r"(api[_-]?key|secret|password|token|authorization)(\s*[:=]\s*)(.+)",
-    re.IGNORECASE,
-)
+# `\n` (no DOTALL), so this naturally stops at end-of-line. Hyphenated
+# compounds and letter-adjacent tails like `authtoken:` do not trip this generic
+# defense-in-depth rule; underscore compounds like `GITHUB_TOKEN=value` still do.
+# Specific high-value token patterns above still fire regardless and are the
+# primary controls. The owner explicitly RATIFIED this lookbehind tradeoff on
+# 2026-07-30 — do not re-litigate it.
+#
+# The KV_* pieces are exported so no consumer forks the keyword set or the
+# boundary: loops.d/kagi-ban/render_page.py neutralizes finding prose that WOULD
+# trip this rule and has to match it exactly (over-matching damages the page,
+# under-matching fails the §4.4 promotion gate). Members are regex fragments,
+# not plain literals.
+KV_KEYWORDS = ("api[_-]?key", "secret", "password", "token", "authorization")
+KV_KEYWORD_ALTERNATION = "|".join(KV_KEYWORDS)
+KV_KEY_BOUNDARY = r"(?<![A-Za-z0-9-])"
+KV_KEY_PATTERN = rf"{KV_KEY_BOUNDARY}({KV_KEYWORD_ALTERNATION})"
+KV_SEPARATOR = r"(\s*[:=]\s*)"
+
+_KV_RE = re.compile(rf"{KV_KEY_PATTERN}{KV_SEPARATOR}(.+)", re.IGNORECASE)
 
 
 def _kv_repl(m: "re.Match[str]") -> str:

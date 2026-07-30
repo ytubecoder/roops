@@ -1,12 +1,15 @@
 {
   "panels": [
     {
-      "title": "Open google actions",
+      "title": "Open x actions",
       "metric": "actions.open",
       "type": "number",
       "unit": "actions",
       "direction": "higher_is_worse",
-      "thresholds": {"warn": 1, "alert": 5},
+      "thresholds": {
+        "warn": 1,
+        "alert": 5
+      },
       "missing": "gap"
     },
     {
@@ -30,7 +33,10 @@
       "type": "number",
       "unit": "endpoints",
       "direction": "higher_is_worse",
-      "thresholds": {"warn": 1, "alert": 2},
+      "thresholds": {
+        "warn": 1,
+        "alert": 2
+      },
       "missing": "gap"
     }
   ]

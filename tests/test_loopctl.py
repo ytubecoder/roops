@@ -414,7 +414,7 @@ class TestNew(LoopsRootTestCase):
         self.assertIn("DISMISSED", text)
         self.assertIn("SNOOZED", text)
 
-    def test_scaffold_spec_has_11_sections_in_order(self):
+    def test_scaffold_spec_has_12_sections_in_order(self):
         run_cli(["new", "hello-loop", "--root", self.root])
         text = _read(os.path.join(self.fixture.loop_dir("hello-loop"), "SPEC.md"))
         headers = [
@@ -429,10 +429,11 @@ class TestNew(LoopsRootTestCase):
             "9. Tier-1 semantics",
             "10. Tier-2 metrics",
             "11. Engine/model",
+            "12. Page output",
         ]
         positions = [text.index(h) for h in headers]
         self.assertEqual(positions, sorted(positions))
-        self.assertEqual(text.count("[FILL:"), 11)
+        self.assertEqual(text.count("[FILL:"), 12)
 
 
 # ---------------------------------------------------------------------------
@@ -686,6 +687,31 @@ class TestValidateDangerousCombos(LoopsRootTestCase):
         self.assertEqual(r.returncode, 1)
         errors = json.loads(r.stdout)["bad6c"]["errors"]
         self.assertTrue(any("schedule" in e for e in errors), errors)
+
+    def test_validate_fails_on_non_executable_render_sh(self):
+        # Amendment 2: present-but-not-executable render.sh is always a mistake.
+        loop_dir = self.fixture.minimal_valid_loop("pageloop")
+        self.fixture.write_spec("pageloop", "filled\n" * 11)
+        render = os.path.join(loop_dir, "render.sh")
+        with open(render, "w") as f:
+            f.write("#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(render, 0o644)  # present, NOT executable
+        r = self._validate("pageloop")
+        self.assertEqual(r.returncode, 1)
+        errors = json.loads(r.stdout)["pageloop"]["errors"]
+        self.assertIn("render.sh present but not executable", errors)
+
+    def test_validate_passes_with_executable_render_sh(self):
+        loop_dir = self.fixture.minimal_valid_loop("pageloop2")
+        self.fixture.write_spec("pageloop2", "filled\n" * 11)
+        render = os.path.join(loop_dir, "render.sh")
+        with open(render, "w") as f:
+            f.write("#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(render, 0o755)
+        r = self._validate("pageloop2")
+        self.assertEqual(r.returncode, 0)
+        errors = json.loads(r.stdout)["pageloop2"]["errors"]
+        self.assertEqual(errors, [])
 
 
 # ---------------------------------------------------------------------------
@@ -3246,6 +3272,107 @@ class TestImportApply(LoopsRootTestCase):
             )
             events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
             self.assertEqual(events, [], msg=f"bad={bad!r}")
+
+
+# ---------------------------------------------------------------------------
+# loopctl set-schedule — validate-before-write; conf rewrite; plist re-render
+# when present; bootout/bootstrap on reschedule of an enabled+installed loop;
+# NEVER kickstart (rescheduling must not fire a run); manual removes the
+# plist after bootout.
+# ---------------------------------------------------------------------------
+
+
+class TestSetSchedule(LoopsRootTestCase):
+    def _write_loop(self, name, schedule, enabled=None):
+        lines = [
+            f"name={name}",
+            'description="d"',
+            "type=agent",
+            "engine=codex",
+            f"schedule={schedule}",
+        ]
+        if enabled is not None:
+            lines.append(f"enabled={enabled}")
+        self.fixture.write_conf(name, lines)
+
+    def _conf_path(self, name):
+        return os.path.join(self.fixture.loop_dir(name), "loop.conf")
+
+    def _plist_path(self, name):
+        return os.path.join(self.root, "launchd", f"com.loops.{name}.plist")
+
+    def _write_plist(self, name):
+        os.makedirs(os.path.join(self.root, "launchd"), exist_ok=True)
+        with open(self._plist_path(name), "wb") as f:
+            f.write(b"<plist/>")
+
+    def _set_schedule(self, name, spec):
+        return run_cli(
+            ["set-schedule", name, spec, "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+
+    def test_rejects_bad_grammar(self):
+        self._write_loop("alpha", "daily:09:00")
+        r = self._set_schedule("alpha", "interval:nonsense")
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertIn("invalid", r.stderr.lower())
+        conf = _read(self._conf_path("alpha"))
+        self.assertIn("schedule=daily:09:00", conf)  # untouched
+
+    def test_unknown_loop_fails(self):
+        r = self._set_schedule("ghost", "daily:09:00")
+        self.assertEqual(r.returncode, 1)
+
+    def test_rewrites_conf_no_plist_no_launchctl(self):
+        self._write_loop("alpha", "daily:09:00")
+        r = self._set_schedule("alpha", "interval:15m")
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("schedule=interval:15m", _read(self._conf_path("alpha")))
+        self.assertEqual(
+            self.fixture.launchctl_calls(), []
+        )  # no plist -> nothing to reload
+
+    def test_plist_present_disabled_rerenders_without_bootstrap(self):
+        self._write_loop("alpha", "daily:09:00", enabled="false")
+        self._write_plist("alpha")
+        r = self._set_schedule("alpha", "interval:2h")
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        with open(self._plist_path("alpha"), "rb") as f:
+            self.assertIn(b"StartInterval", f.read())
+        joined = " ".join(self.fixture.launchctl_calls())
+        self.assertNotIn("bootstrap", joined)
+        self.assertNotIn("kickstart", joined)
+
+    def test_plist_present_enabled_bootout_bootstrap_no_kickstart(self):
+        self._write_loop("alpha", "daily:09:00", enabled="true")
+        self._write_plist("alpha")
+        r = self._set_schedule("alpha", "weekly:mon:08:00")
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        joined = " ".join(self.fixture.launchctl_calls())
+        self.assertIn("bootout", joined)
+        self.assertIn("bootstrap", joined)
+        self.assertNotIn("kickstart", joined)
+
+    def test_manual_removes_plist_after_bootout(self):
+        self._write_loop("alpha", "daily:09:00", enabled="true")
+        self._write_plist("alpha")
+        r = self._set_schedule("alpha", "manual")
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertFalse(os.path.isfile(self._plist_path("alpha")))
+        self.assertIn("bootout", " ".join(self.fixture.launchctl_calls()))
+
+    def test_regen_failure_warns_but_exits_zero(self):
+        self._write_loop("alpha", "daily:09:00")
+        # The regen writes root/dashboard/loops.html; a FILE named `dashboard`
+        # makes its makedirs raise — a hermetic dashboard-generation failure.
+        with open(os.path.join(self.root, "dashboard"), "w") as f:
+            f.write("in the way")
+        r = self._set_schedule("alpha", "interval:15m")
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("warning: dashboard regen failed", r.stderr)
+        self.assertIn("schedule alpha: daily:09:00 -> interval:15m", r.stdout)
+        self.assertIn("schedule=interval:15m", _read(self._conf_path("alpha")))
 
 
 if __name__ == "__main__":

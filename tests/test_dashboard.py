@@ -11,11 +11,18 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from dashboard import generate
+
+# Importable both under `unittest discover -s tests` (tests/ on sys.path) and as
+# `python3 -m unittest tests.test_dashboard` (repo root on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from html_selfcontained import assert_self_contained
 
 # --- §3 schema, copied verbatim from docs/INTERFACES.md -------------------------------------
 
@@ -139,6 +146,7 @@ class FixtureRoot:
         schedule="interval:15m",
         dashboard_json=None,
         timeout_s=900,
+        enabled=None,
     ):
         d = os.path.join(self.root, "loops.d", name)
         os.makedirs(d, exist_ok=True)
@@ -147,6 +155,8 @@ class FixtureRoot:
                 f"name={name}\ndescription={description}\ntype={type_}\n"
                 f"engine={engine}\nschedule={schedule}\ntimeout_s={timeout_s}\n"
             )
+            if enabled is not None:
+                f.write(f"enabled={'true' if enabled else 'false'}\n")
         if dashboard_json is not None:
             with open(os.path.join(d, "dashboard.json"), "w") as f:
                 json.dump(dashboard_json, f)
@@ -207,6 +217,14 @@ class FixtureRoot:
             json.dump(contract, f)
         with open(os.path.join(d, "latest.md"), "w") as f:
             f.write("# report\n")
+
+    def install(self, name):
+        """§10 amendment 2026-07-30: staleness only applies to installed loops; the
+        dashboard's install-state check is launchd plist file presence."""
+        d = os.path.join(self.root, "launchd")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"com.loops.{name}.plist"), "w") as f:
+            f.write("<plist/>\n")
 
 
 def fake_loopconf_parse(conf_overrides=None):
@@ -530,8 +548,52 @@ class GenerateIntegrationTests(unittest.TestCase):
         with open(out) as f:
             html = f.read()
         self.assertIn("</html>", html.lower())
-        leftover_tmp = [p for p in glob.glob(os.path.join(out_dir, "*")) if p != out]
+        reports_out = os.path.join(out_dir, "reports.html")
+        leftover_tmp = [
+            p
+            for p in glob.glob(os.path.join(out_dir, "*"))
+            if p not in (out, reports_out)
+        ]
         self.assertEqual(leftover_tmp, [], f"leftover tmp files: {leftover_tmp}")
+
+    def test_reports_render_failure_does_not_prevent_loops_html(self):
+        """§10 degrade-never-crash: a fault in the reports-screen render must not stop
+        loops.html from being written (task 2's isolation guarantee)."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("hello-loop")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "hello-loop",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "all clear",
+        )
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        reports_out = os.path.join(self.fx.root, "dashboard", "reports.html")
+        with patch.object(
+            generate, "_render_reports_page", side_effect=Exception("boom")
+        ):
+            generate.generate(
+                root=self.fx.root,
+                out_file=out,
+                reports_out_file=reports_out,
+                loopconf_parse=fake_loopconf_parse(),
+                schedule_parse=fake_schedule_parse(),
+                now=NOW,
+            )
+        self.assertTrue(os.path.exists(out))
+        with open(out) as f:
+            html = f.read()
+        self.assertIn("hello-loop", html)
+        self.assertIn("all clear", html)
+        self.assertNotIn("Traceback", html)
+        # the reports screen degrades to a safe page rather than taking generate() down with it
+        self.assertTrue(os.path.exists(reports_out))
 
     def test_precedence_in_full_pipeline_completed_alert_renders_red(self):
         conn = self.fx.init_db()
@@ -564,6 +626,7 @@ class GenerateIntegrationTests(unittest.TestCase):
     def test_stale_loop_flagged_and_counts_toward_needs_attention(self):
         conn = self.fx.init_db()
         self.fx.add_loop("rare", schedule="interval:1m")
+        self.fx.install("rare")  # staleness only applies to installed loops (§10)
         self.fx.add_run(
             conn,
             "r1",
@@ -599,6 +662,100 @@ class GenerateIntegrationTests(unittest.TestCase):
         self.assertIn('<span class="badge stale">stale</span>', html)
         # and it must actually count toward the needs-attention chip
         self.assertIn("needs attention 1", html)
+
+    def test_uninstalled_loop_never_flagged_stale(self):
+        """§10 amendment 2026-07-30: an overdue loop with no launchd plist is 休
+        ("no schedule loaded"), not stale — supervised-only fleets must not render
+        wall-to-wall stale badges."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("rare", schedule="interval:1m")  # no .install()
+        self.fx.add_run(
+            conn,
+            "r1",
+            "rare",
+            iso(NOW - timedelta(hours=5)),
+            iso(NOW - timedelta(hours=5)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(
+                {
+                    "interval:1m": {
+                        "kind": "interval",
+                        "launchd": {"StartInterval": 60},
+                        "expected_interval_s": 60,
+                    }
+                }
+            ),
+            now=NOW,
+        )
+        with open(out) as f:
+            html = f.read()
+        self.assertNotIn('<span class="badge stale">stale</span>', html)
+        self.assertIn("no schedule loaded", html)
+        self.assertIn("needs attention 0", html)
+
+    def test_sw_on_when_plist_and_enabled(self):
+        """plist present + enabled (default) -> 巡 loaded, the normal on state."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("alpha")
+        self.fx.install("alpha")
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            html = f.read()
+        self.assertIn('class="sw on"', html)
+
+    def test_sw_paused_when_plist_and_disabled(self):
+        """plist present + enabled=false -> 休 paused, not the misleading 巡 loaded."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("alpha", enabled=False)
+        self.fx.install("alpha")
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            html = f.read()
+        self.assertIn('class="sw off paused"', html)
+        self.assertIn("rounds paused", html)
+
+    def test_sw_off_when_no_plist(self):
+        """No plist at all -> today's 休 ("no schedule loaded"), unchanged."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("alpha")  # no .install()
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            html = f.read()
+        self.assertIn("no schedule loaded", html)
 
     def test_manual_loop_never_flagged_stale(self):
         conn = self.fx.init_db()
@@ -1121,8 +1278,83 @@ class GenerateIntegrationTests(unittest.TestCase):
         )
         with open(out) as f:
             html = f.read()
-        for token in ("http://", "https://", "//cdn", 'src="http'):
+        assert_self_contained(self, html, "dashboard/loops.html")
+        # Belt and braces on the shapes that motivate the rule. These are asset
+        # references, not the bare scheme: a URL sitting in escaped finding text
+        # is inert and is asserted separately below.
+        for token in ('src="http', "src='http", '@import "http', "//cdn."):
             self.assertNotIn(token, html)
+
+    def test_reports_screen_is_also_self_contained(self):
+        """The reports screen is a second served output with its own <head>, so
+        it needs its own assertion — a webfont added only to _reports_document
+        would otherwise ship unnoticed (found by mutation, 2026-07-30)."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("simple")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "simple",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        reports_out = os.path.join(self.fx.root, "dashboard", "reports.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            reports_out_file=reports_out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(reports_out) as f:
+            reports_html = f.read()
+        assert_self_contained(self, reports_html, "dashboard/reports.html")
+
+    def test_urls_in_run_text_do_not_make_the_page_fetch_anything(self):
+        """Real loops report URLs — a probe saying `http://127.0.0.1:9/dead`
+        refused a connection puts the scheme straight into the page. That text is
+        escaped and fetches nothing, so self-containment must judge *references*,
+        not the substring `http://`. This is the case a raw substring ban gets
+        wrong: it fails on honest report text while missing `src="//cdn/x.js"`."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("prober")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "prober",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "alert",
+            "alert",
+            "probe failed: http://127.0.0.1:9/dead refused the connection",
+            error_detail=(
+                "curl_exit 7 for http://127.0.0.1:9/dead; "
+                "see https://example.invalid/runbook and //cdn.example/x.js"
+            ),
+        )
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            html = f.read()
+        # The text really did land on the page ...
+        self.assertIn("127.0.0.1:9/dead", html)
+        # ... and the page still fetches nothing on load.
+        assert_self_contained(self, html, "dashboard/loops.html with URL text")
 
 
 class FailureSurfacingTests(unittest.TestCase):
@@ -1603,7 +1835,7 @@ class TagsProvenanceEventsTests(unittest.TestCase):
         root = self._root_with_loop("untagged")
         html = self._generate(root)
         self.assertNotIn('class="tag"', html)
-        self.assertIn('<tr data-tags="">', html)
+        self.assertIn('<div class="loop-row" data-tags="">', html)
         self.assertIn('id="loop-untagged" data-tags=""', html)
 
     def test_tag_filter_hides_untagged_loops_structural_precondition(self):
@@ -1616,8 +1848,8 @@ class TagsProvenanceEventsTests(unittest.TestCase):
         root = self._root_with_loop("tagged", tags=["project:x"])
         self.fx.add_loop("untagged")
         html = self._generate(root)
-        self.assertIn('<tr data-tags="project:x">', html)
-        self.assertIn('<tr data-tags="">', html)
+        self.assertIn('<div class="loop-row" data-tags="project:x">', html)
+        self.assertIn('<div class="loop-row" data-tags="">', html)
         self.assertIn('id="loop-tagged" data-tags="project:x"', html)
         self.assertIn('id="loop-untagged" data-tags=""', html)
         # the JS must match tags exactly against the split list, not treat a missing
@@ -1827,6 +2059,317 @@ class RunTrichotomyTests(unittest.TestCase):
         html = self._generate(root)
         self.assertIn('<span class="badge died">died</span>', html)
         self.assertIn("needs attention 1", html)
+
+
+def _fixture_page(loop, run_id, title="Fixture page"):
+    import json as _json
+
+    meta = {
+        "loop": loop,
+        "run_id": run_id,
+        "generated_at": "2026-07-30T00:00:01Z",
+        "title": title,
+        "page_class": "snapshot",
+        "totals": {"findings": 5},
+    }
+    env = _json.dumps({"meta": meta, "data": {}}).replace("</", "<\\/")
+    return (
+        "<!DOCTYPE html><html><body>"
+        f'<script type="application/json" id="report-data">{env}</script>'
+        "</body></html>"
+    )
+
+
+class ReportPagesDashboardTests(unittest.TestCase):
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+        self._install_page_envelope()
+        self.conn = self.fx.init_db()
+
+    def _install_page_envelope(self):
+        src = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin"
+        )
+        dst = os.path.join(self.fx.root, "bin")
+        os.makedirs(dst, exist_ok=True)
+        for name in ("page_envelope.py", "redact.py"):
+            shutil.copyfile(os.path.join(src, name), os.path.join(dst, name))
+
+    def _promoted_run(self, name, run_id, started):
+        self.fx.add_run(
+            self.conn,
+            run_id,
+            name,
+            started,
+            finished_at=started,
+            runner_status="completed",
+            loop_status="ok",
+            effective_status="ok",
+            headline="h",
+        )
+        self.conn.execute(
+            "UPDATE runs SET contract_path=? WHERE run_id=?",
+            (f"state/runs/{run_id}/contract.json", run_id),
+        )
+        self.conn.commit()
+
+    def _write_page(self, name, content):
+        d = os.path.join(self.fx.root, "reports", name)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "latest.html"), "w") as f:
+            f.write(content)
+
+    def _enable_page(self, name):
+        d = os.path.join(self.fx.root, "loops.d", name)
+        os.makedirs(d, exist_ok=True)
+        render = os.path.join(d, "render.sh")
+        with open(render, "w") as f:
+            f.write("#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(render, 0o755)
+
+    def test_row_links_page_when_fresh(self):
+        self.fx.add_loop("pgl")
+        self._enable_page("pgl")
+        self._promoted_run("pgl", "20260730T000000Z-pgl-abc123", iso(NOW))
+        self.fx.write_latest_json("pgl", {"findings": [], "report_markdown": ""})
+        self._write_page("pgl", _fixture_page("pgl", "20260730T000000Z-pgl-abc123"))
+        html = generate.generate(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("../reports/pgl/latest.html", html)
+        self.assertNotIn("page-stale", html)
+
+    def test_row_page_gets_stale_badge_on_run_id_mismatch(self):
+        self.fx.add_loop("pgl")
+        self._enable_page("pgl")
+        self._promoted_run("pgl", "20260730T000000Z-pgl-abc123", iso(NOW))
+        self.fx.write_latest_json("pgl", {"findings": [], "report_markdown": ""})
+        self._write_page("pgl", _fixture_page("pgl", "OLD-RUN-ID"))
+        html = generate.generate(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("page-stale", html)
+
+    def test_reports_page_lists_entry_with_chips_and_history(self):
+        self.fx.add_loop("pgl")
+        self._promoted_run("pgl", "20260730T000000Z-pgl-abc123", iso(NOW))
+        self._write_page("pgl", _fixture_page("pgl", "20260730T000000Z-pgl-abc123"))
+        d = os.path.join(self.fx.root, "reports", "pgl")
+        for stamp in ("2026-07-28-0100", "2026-07-29-0100"):
+            with open(os.path.join(d, f"{stamp}.html"), "w") as f:
+                f.write("x")
+        reports_html = generate.generate_reports(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("Fixture page", reports_html)
+        self.assertIn('<span class="chip">findings', reports_html)
+        self.assertIn("2026-07-29-0100.html", reports_html)
+
+    def test_reports_page_marks_page_enabled_loop_with_no_page(self):
+        d = self.fx.add_loop("bare")
+        render = os.path.join(d, "render.sh")
+        with open(render, "w") as f:
+            f.write("#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(render, 0o755)
+        reports_html = generate.generate_reports(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("no page yet", reports_html)
+
+    def test_reports_page_no_meta_fallback(self):
+        self.fx.add_loop("bad")
+        self._write_page("bad", "<html><body>not a real page</body></html>")
+        reports_html = generate.generate_reports(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("no meta", reports_html)
+
+    def test_reports_page_historical_badge_for_disabled_loop_with_dated_pages(self):
+        # No render.sh -> not page-enabled; dated snapshots exist but there's no current
+        # latest.html. This exercises the `page.get("dated") and page.get("historical")`
+        # branch in _render_reports_page.
+        self.fx.add_loop("histo")
+        d = os.path.join(self.fx.root, "reports", "histo")
+        os.makedirs(d, exist_ok=True)
+        for stamp in ("2026-07-28-0100", "2026-07-29-0100"):
+            with open(os.path.join(d, f"{stamp}.html"), "w") as f:
+                f.write("x")
+        reports_html = generate.generate_reports(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn('<span class="badge historical">historical</span>', reports_html)
+        self.assertIn("2026-07-29-0100.html", reports_html)
+
+    def test_report_only_loop_not_in_loopsd_appears_on_reports_page(self):
+        # "ghost" has no loops.d entry at all -- discovered only via reports/, exercising the
+        # report-only merge branch in _resolve_dashboard_loops(include_report_only=True).
+        self._write_page(
+            "ghost", _fixture_page("ghost", "20260730T000000Z-ghost-abc123")
+        )
+        reports_html = generate.generate_reports(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("Fixture page", reports_html)
+        self.assertIn("../reports/ghost/latest.html", reports_html)
+
+    def test_generate_writes_both_files_atomically(self):
+        self.fx.add_loop("pgl")
+        generate.generate(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+        )
+        self.assertTrue(
+            os.path.isfile(os.path.join(self.fx.root, "dashboard", "loops.html"))
+        )
+        self.assertTrue(
+            os.path.isfile(os.path.join(self.fx.root, "dashboard", "reports.html"))
+        )
+        with open(os.path.join(self.fx.root, "dashboard", "loops.html")) as f:
+            loops_html = f.read()
+        self.assertIn('<a href="reports.html">reports</a>', loops_html)
+
+
+class ConsoleControlsTests(unittest.TestCase):
+    """Task 4: dashboard console controls (rounds switch + schedule picker) — hidden by
+    default, unhidden only by the page's own hydration JS when api/state is reachable
+    (i.e. only when served by `loopctl serve`, Task 3's bin/console.py). These tests only
+    exercise the static markup/JS generate.py emits, not the live API (Task 3 owns that)."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+
+    def render_with(
+        self, name="alpha", plist=False, schedule="interval:15m", enabled=None
+    ):
+        conn = self.fx.init_db()
+        self.fx.add_loop(name, schedule=schedule, enabled=enabled)
+        self.fx.add_run(
+            conn,
+            "r1",
+            name,
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
+        conn.close()
+        if plist:
+            self.fx.install(name)
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            return f.read()
+
+    def render_default(self):
+        return self.render_with()
+
+    def test_console_controls_hidden_by_default(self):
+        html = self.render_default()
+        self.assertIn(
+            "data-console-controls hidden", html
+        )  # wrapper attr on each row's control cell
+        self.assertIn("fetch('api/state'", html)  # relative URL, single quotes
+        self.assertIn("data-sched-edit", html)
+
+    def test_no_network_still_clean(self):
+        # test_no_network_no_external_assets covers the plain render; this repeats
+        # the check against a controls-bearing render, since the console JS is the
+        # most likely place for someone to reach for a remote helper.
+        html = self.render_with(name="alpha", plist=True)
+        assert_self_contained(self, html, "dashboard with console controls")
+
+    def test_rounds_toggle_carries_loop_name(self):
+        html = self.render_with(name="alpha", plist=True)
+        self.assertIn('data-loop="alpha"', html)
+
+    def test_desktop_control_track_widens_only_when_console_active(self):
+        # Reviewer fix: the base `.loop-row` rule must stay pinned at a bare 30px third
+        # track -- pixel-identical to the pre-console page -- because CSS Grid grows a
+        # *definite* minmax(..., <px>) max using free space before flexible (fr) tracks,
+        # regardless of that row's own content; widening the base rule directly (the
+        # first attempt at this fix) was verified live (Playwright) to silently expand
+        # every row's sw-cell to 214px even with controls hidden -- a real regression
+        # against "keep the collapsed state visually unchanged". The wider track for the
+        # unhidden state must instead live in a rule gated on a `console-active` class
+        # that the hydration script only adds in the same fetch('api/state') success
+        # branch that unhides the controls, so the widen and the reveal always happen
+        # together and a plain-file/no-console load sees neither.
+        html = self.render_default()
+        self.assertIn("grid-template-columns: 44px 1.1fr 1.5fr 190px 30px;", html)
+        self.assertIn("html.console-active .loop-row", html)
+        self.assertIn("minmax(30px, 214px)", html)
+        self.assertIn("document.documentElement.classList.add('console-active')", html)
+
+    def test_hidden_attribute_is_enforced_at_author_origin(self):
+        # `hidden` alone is only a USER-AGENT stylesheet rule, and ANY author-origin
+        # `display` declaration outranks the UA origin -- so `.con-cell { display:
+        # inline-flex }` and `.sp-form { display: flex }` silently un-hid the very
+        # elements marked `hidden`, showing dead toggles and an overflowing schedule
+        # chip on a plain file-opened page. The author-origin `[hidden]` rule below is
+        # what actually hides them; `!important` keeps it order- and specificity-proof
+        # against any `display` rule added to that block later.
+        html = self.render_with(name="alpha", plist=True)
+        self.assertIn("[hidden] { display: none !important; }", html)
+        self.assertIn("data-console-controls hidden", html)
+        # and the rule must precede nothing in particular -- !important decides -- but it
+        # MUST be in the same stylesheet as the display rules it neutralizes:
+        css = html.split("<style>", 1)[1].split("</style>", 1)[0]
+        self.assertIn("[hidden] { display: none !important; }", css)
+        self.assertIn(".con-cell { display: inline-flex", css)
+        self.assertIn(".sp-form { margin-top: 8px; display: flex", css)
+
+    def test_post_failure_reenables_the_switch(self):
+        # a dead/stopped console must not leave a permanently disabled control: the
+        # transport-level rejection is normalized into the same {ok:false} shape a 4xx
+        # takes, so the existing else-branch (sw.disabled=false + alert) runs.
+        html = self.render_default()
+        self.assertIn(".catch(function(err){ return {ok:false,", html)
+        self.assertIn("sw.disabled=false", html)
+
+    def test_monthly_is_applied_only_when_explicitly_chosen(self):
+        # the bare `else` this replaces would send a MONTHLY spec for an unset kind
+        html = self.render_default()
+        self.assertIn("else if (k === 'monthly') apply('monthly:'", html)
 
 
 if __name__ == "__main__":

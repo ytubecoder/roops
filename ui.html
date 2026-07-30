@@ -331,16 +331,6 @@
   }
 
   /* ---------- arrangement (findings) ---------- */
-  .arrangement { display: grid; grid-template-columns: 150px 1fr; gap: clamp(20px, 3.5vw, 44px); align-items: start; }
-  .vase-svg { width: 100%; max-width: 150px; height: auto; }
-  .vase-svg g { transform-box: fill-box; transform-origin: 50% 100%; transition: transform 1.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 1.4s; }
-  .vase-svg g.pruned { transform: scaleY(.05); opacity: .15; }
-  .ma-note {
-    font-family: var(--mono); font-size: 10.5px; letter-spacing: .2em; color: var(--koke);
-    text-transform: uppercase; margin-top: 14px; opacity: 0; transition: opacity 1.6s;
-  }
-  .ma-note.show { opacity: 1; }
-
   .finding {
     display: grid; grid-template-columns: 4px 1fr auto; gap: 18px; align-items: center;
     padding: 16px 4px 16px 0; border-bottom: 1px solid var(--hair);
@@ -567,7 +557,6 @@
     .lb-close { transition: none; }
     .impression { animation: none; opacity: .9; }
     .enso-close-fig path { animation: none; stroke-dashoffset: 0; }
-    .vase-svg g { transition: none; }
     .order-line { animation: none; }
     .trend .ink, .trend .bleed { animation: none; stroke-dashoffset: 0; }
     .trend .now { animation: none; opacity: 1; }
@@ -598,8 +587,6 @@
     .lb-art svg { width: 240px; height: 144px; }
     .lb-foot { flex-wrap: wrap; gap: 10px; }
 
-    .arrangement { grid-template-columns: 1fr; }
-    .vase-svg { max-width: 110px; }
     .finding { grid-template-columns: 4px 1fr; }
     .stamp-actions { grid-column: 2; justify-content: flex-start; margin-top: 8px; }
     .impression { right: 18px; }
@@ -872,15 +859,6 @@
     <div class="stamp-legend"><b>承</b> approve — becomes an order &nbsp;·&nbsp; 認 acknowledge · 休 snooze · 済 dismiss — these only quiet the garden</div>
     <div class="arrangement">
       <div>
-        <svg class="vase-svg" viewBox="0 0 150 170" aria-hidden="true">
-          <g id="stem-shin"><line x1="42" y1="160" x2="52" y2="18" stroke="#C73E2B" stroke-width="2.6"/><circle cx="52" cy="15" r="6" fill="#C73E2B"/></g>
-          <g id="stem-soe"><line x1="78" y1="160" x2="92" y2="66" stroke="#A87A2A" stroke-width="2.1"/><circle cx="92" cy="62" r="4.6" fill="#A87A2A"/></g>
-          <g id="stem-hikae"><line x1="108" y1="160" x2="117" y2="112" stroke="#6B7A5C" stroke-width="1.8"/><circle cx="117" cy="108" r="3.8" fill="#6B7A5C"/></g>
-          <line x1="18" y1="159" x2="136" y2="159" stroke="#1C1A17" stroke-opacity=".55" stroke-width="2.5"/>
-        </svg>
-        <div class="ma-note" id="ma-note">MA 間 — THE VASE IS EMPTY</div>
-      </div>
-      <div>
         <div class="finding f-shin" id="finding-shin">
           <span class="bar"></span>
           <div class="fx"><b>Canonical tags dropped from 12 templated pages</b><p>after friday deploy · re-crawl risk · fix is a template one-liner, proposed not applied</p><span class="tier">SHIN 真 · ALERT · F-231</span></div>
@@ -1136,7 +1114,6 @@
       imp.className = 'impression'; imp.textContent = k;
       imp.style.setProperty('--rot', (Math.random() * 14 - 8).toFixed(1) + 'deg');
       rowEl.appendChild(imp);
-      document.getElementById('stem-' + f).classList.add('pruned');
 
       /* a pancaked finding is one stack, one decision — the sheets merge and
          the seal reaches back across every appearance it covers */
@@ -1171,7 +1148,6 @@
         seoStamp.textContent = tallest === 'shin' ? '警' : '注';
       } else {
         seoStamp.className = 'stamp ok'; seoStamp.textContent = '済';
-        document.getElementById('ma-note').classList.add('show');
       }
     });
   });

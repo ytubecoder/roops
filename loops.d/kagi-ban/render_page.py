@@ -395,8 +395,8 @@ $groups
   <footer>
     data <span class="cmd">$scan_file</span> · produced by
     <span class="cmd">av scan --json</span> (exit 0 even with findings — alert on count)<br>
-    render <span class="cmd">render_report.py</span> · raw envelope embedded as
-    <span class="cmd">#scan-data</span> · remediation for this machine follows the
+    render <span class="cmd">render_page.py</span> · raw envelope embedded as
+    <span class="cmd">#report-data</span> · remediation for this machine follows the
     native headless plan, not <span class="cmd">av save</span>
   </footer>
 </div>

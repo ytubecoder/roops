@@ -127,8 +127,8 @@ footer .cmd{color:var(--sub)}
     <p class="meta">
       host <b>fixture</b><br>
       scanner <b>av 0.0-stub</b><br>
-      scanned <b>2026-07-30 07:52</b><br>
-      rendered <b>2026-07-30 07:54</b>
+      scanned <b>2026-07-30 08:46</b><br>
+      rendered <b>2026-07-30 08:48</b>
     </p>
   </header>
 
@@ -238,13 +238,13 @@ footer .cmd{color:var(--sub)}
   <footer>
     data <span class="cmd">fixture-scan.json</span> · produced by
     <span class="cmd">av scan --json</span> (exit 0 even with findings — alert on count)<br>
-    render <span class="cmd">render_report.py</span> · raw envelope embedded as
-    <span class="cmd">#scan-data</span> · remediation for this machine follows the
+    render <span class="cmd">render_page.py</span> · raw envelope embedded as
+    <span class="cmd">#report-data</span> · remediation for this machine follows the
     native headless plan, not <span class="cmd">av save</span>
   </footer>
 </div>
 <div id="tip" hidden></div>
-<script type="application/json" id="report-data">{"meta": {"loop": "kagi-ban", "run_id": "reference", "generated_at": "2026-07-29T23:54:58Z", "title": "Exposure audit \u2014 fixture", "page_class": "snapshot", "host": "fixture", "av_version": "0.0-stub", "scanned_at": "2026-07-30T07:52:51+08:00", "source_file": "fixture-scan.json", "totals": {"findings": 5, "sev_high": 3, "sev_medium": 2, "tools": 3, "paths": 5}}, "data": {"findings": [{"source": "github-cli", "severity": "high", "affected": [{"path": "/Users/taro/.config/gh/hosts.yml", "line": 3}], "explanation": "A plaintext OAuth token is stored in the GitHub CLI hosts file.", "solution": "Move the token into an encrypted store and remove the plaintext copy.", "docs_url": "https://example.invalid/docs/github-cli", "homepage": "https://cli.github.com"}, {"source": "github-cli", "severity": "high", "affected": [{"path": "/Users/taro/.config/gh/config.yml", "line": null}], "explanation": "The CLI config grants credential helpers broad scope.", "solution": "Restrict helper scope to the hosts that need it.", "docs_url": "https://example.invalid/docs/github-cli", "homepage": "https://cli.github.com"}, {"source": "ssh-keys", "severity": "high", "affected": [{"path": "/Users/taro/.ssh/id_ed25519", "line": null}], "explanation": "An SSH private key is stored without a passphrase.", "solution": "Re-key with a passphrase or move the key to a hardware token.", "docs_url": "https://example.invalid/docs/ssh", "homepage": "https://www.openssh.com"}, {"source": "path-hygiene", "severity": "medium", "affected": [{"path": "/opt/fixturebrew/bin", "line": null}], "explanation": "A group-writable directory appears early in PATH.", "solution": "Tighten the directory mode or move it later in PATH.", "docs_url": "https://example.invalid/docs/path", "homepage": "https://example.invalid"}, {"source": "path-hygiene", "severity": "medium", "affected": [{"path": "/Users/taro/bin", "line": null}], "explanation": "A user-writable directory shadows system binaries.", "solution": "Audit the directory contents and PATH ordering.", "docs_url": "https://example.invalid/docs/path", "homepage": "https://example.invalid"}]}}</script>
+<script type="application/json" id="report-data">{"meta": {"loop": "kagi-ban", "run_id": "reference", "generated_at": "2026-07-30T00:48:16Z", "title": "Exposure audit \u2014 fixture", "page_class": "snapshot", "host": "fixture", "av_version": "0.0-stub", "scanned_at": "2026-07-30T08:46:11+08:00", "source_file": "fixture-scan.json", "totals": {"findings": 5, "sev_high": 3, "sev_medium": 2, "tools": 3, "paths": 5}}, "data": {"findings": [{"source": "github-cli", "severity": "high", "affected": [{"path": "/Users/taro/.config/gh/hosts.yml", "line": 3}], "explanation": "A plaintext OAuth token is stored in the GitHub CLI hosts file.", "solution": "Move the token into an encrypted store and remove the plaintext copy.", "docs_url": "https://example.invalid/docs/github-cli", "homepage": "https://cli.github.com"}, {"source": "github-cli", "severity": "high", "affected": [{"path": "/Users/taro/.config/gh/config.yml", "line": null}], "explanation": "The CLI config grants credential helpers broad scope.", "solution": "Restrict helper scope to the hosts that need it.", "docs_url": "https://example.invalid/docs/github-cli", "homepage": "https://cli.github.com"}, {"source": "ssh-keys", "severity": "high", "affected": [{"path": "/Users/taro/.ssh/id_ed25519", "line": null}], "explanation": "An SSH private key is stored without a passphrase.", "solution": "Re-key with a passphrase or move the key to a hardware token.", "docs_url": "https://example.invalid/docs/ssh", "homepage": "https://www.openssh.com"}, {"source": "path-hygiene", "severity": "medium", "affected": [{"path": "/opt/fixturebrew/bin", "line": null}], "explanation": "A group-writable directory appears early in PATH.", "solution": "Tighten the directory mode or move it later in PATH.", "docs_url": "https://example.invalid/docs/path", "homepage": "https://example.invalid"}, {"source": "path-hygiene", "severity": "medium", "affected": [{"path": "/Users/taro/bin", "line": null}], "explanation": "A user-writable directory shadows system binaries.", "solution": "Audit the directory contents and PATH ordering.", "docs_url": "https://example.invalid/docs/path", "homepage": "https://example.invalid"}]}}</script>
 <script>
 (function(){
   var tip=document.getElementById('tip');

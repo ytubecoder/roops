@@ -29,9 +29,13 @@ _PRIVATE_KEY_RE = re.compile(
 # REST OF THE LINE (not just the first token: multi-token values like
 # `Authorization: Bearer eyJ...` must not leak past the key name). Applied
 # last so it doesn't fight with the token patterns above. `.` does not match
-# `\n` (no DOTALL), so this naturally stops at end-of-line.
+# `\n` (no DOTALL), so this naturally stops at end-of-line. Hyphenated
+# compounds and letter-adjacent tails like `authtoken:` do not trip this generic
+# defense-in-depth rule; underscore compounds like `GITHUB_TOKEN=value` still do.
+# Specific high-value token patterns above still fire regardless and are the
+# primary controls.
 _KV_RE = re.compile(
-    r"(api[_-]?key|secret|password|token|authorization)(\s*[:=]\s*)(.+)",
+    r"(?<![A-Za-z0-9-])(api[_-]?key|secret|password|token|authorization)(\s*[:=]\s*)(.+)",
     re.IGNORECASE,
 )
 

@@ -2,7 +2,9 @@
 
 **Status:** shipped 2026-07-30, live (`kagi-ban` installed `daily:07:40`; pages served over the
 tailnet vhost). As-built deltas + what the live gauntlet changed: `## Shipped (as built)` at the
-end of this file. Remaining decisions and follow-ups: `docs/REPORT_PAGES_FOLLOWUP_WARMSTART.md`.
+end of this file. The follow-up wave (decisions, backlog, leftovers) closed 2026-07-30 — nothing
+outstanding; live state and the settled/do-not-relitigate list:
+`docs/REPORT_PAGES_FOLLOWUP_WARMSTART.md`.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

@@ -1,5 +1,66 @@
 # Session Log
 
+## 2026-07-30 — Report-pages follow-up wave: KV single-sourcing, kit.css becomes the real kit, self-containment by reference
+
+### Summary
+- **`docs/REPORT_PAGES_FOLLOWUP_WARMSTART.md` cleared end to end**: the three decisions parked for
+  the owner, all eight backlog items, and both trailing leftovers. The doc now carries only live
+  state, the "16 not 20" PATH explanation, and the settled/do-not-relitigate list.
+- **A filed maintainability nit was a live bug.** The renderer's KV-neutralization regex used `\b`
+  where `bin/redact.py`'s `_KV_RE` uses `(?<![A-Za-z0-9-])`. `_` is a word character but is not in
+  `[A-Za-z0-9-]`, so `\b` missed `GITHUB_TOKEN=/path` — which redact.py *does* redact, meaning the
+  §4.4 promotion gate would have rejected the page the first time `av` reported an underscore-style
+  env var, visible only as a `stale` badge. The same `\b` over-matched `gh-cli-hosts-token:`,
+  damaging av's own finding prose. redact.py now exports `KV_KEYWORDS`/`KV_KEY_PATTERN`/
+  `KV_SEPARATOR`; the renderer composes from them and fails loudly if redact.py is unimportable.
+- **Other fixes:** `generate.py` resolved every loop twice per firing (now once, byte-identical
+  output); a fault in `_render_reports_page` skipped BOTH `_atomic_write` calls and took
+  `loops.html` down with it (now isolated); `finish_render_log`'s `2>/dev/null || true` left the
+  render log unredacted AND silent on failure; four test gaps; the `$LOOP_DATA_DIR` doc bug that
+  would kill any precheck under `set -u`; q12 heading normalization; doc cosmetics. Corrupted
+  finding row `av:gh-cli-hosts-token:«redacted:secret»` deleted from sqlite (backup taken first).
+
+### Lessons Learned
+- **Accepted: mutation-test every new guard before believing it.** Stripping `chmod 600` proved the
+  new loop-data permission test fails (`expected [600] got [644]`). More valuably, injecting a
+  webfont to prove the self-containment guard worked produced a GREEN suite — because the injection
+  landed in `_reports_document` and only `loops.html` was ever asserted. `dashboard/reports.html`,
+  a second served output with its own `<head>`, had no coverage at all. The mutation found a real
+  gap that reading the code did not.
+- **Accepted: assert the invariant, not a proxy for it.** "The page must not contain the substring
+  `http://`" was wrong in both directions — too strict (real finding text carries URLs; SVG
+  `xmlns` is an identifier, so the live dashboard already violated the stated rule while the
+  hermetic test passed) and too loose (`src="//cdn/x.js"` fetches and contains no `http://`).
+  Replaced by `tests/html_selfcontained.py`, which collects references the browser dereferences on
+  load. The scanner has its own tests: one that always returned `[]` would pass everything vacuously.
+- **Rejected: keeping kit.css as an inlined copy bound by a parity test.** Its stated justification
+  was byte-determinism, which does not survive scrutiny — kit.css is *source*, exactly like
+  `render_page.py`, not an input to a given scan. The copy-plus-tripwire left `$PAGEKIT` with no
+  reader and guaranteed page loop #2 would make a third copy. Now read at render time; output
+  byte-identical (39182 bytes) against the live page.
+- **Gotcha: the global turn-end ruff hook runs a broad ruleset this repo does not conform to**
+  (54 findings repo-wide, no config file anywhere). Editing any `.py` surfaces *pre-existing* debt
+  and blocks the turn, looking like the edit caused it. Diff against `git show HEAD:<file>` before
+  assuming an agent introduced it; fix only files edited this turn, never repo-wide.
+- **Gotcha: several agents commit and push to `main` in this same checkout.** 20 commits landed
+  mid-session, plus two owner README edits on GitHub. Rebase (never merge/force), and never trust a
+  recorded test count — it moved 668 → 742 → 754 → 1000 in a day. A sudden jump is usually another
+  agent's tests, not double-collection in your own imports.
+
+### Decisions
+- **kit.css missing = fail the render**, same call as the redact import: it is a committed file, so
+  its absence is a broken checkout, and failing names the path in `page-render.log` rather than
+  quietly promoting an unstyled page. Step 6.5 still cannot change `runner_status` or the exit code.
+- **Navigation `<a href>` is explicitly excluded from the self-containment check** — following a
+  link is user-initiated and fetches nothing on load. `data:` URIs are likewise fine. Without this,
+  the kagi-ban page's 16 legitimate av docs links would be unfixable false positives.
+- **`_KV_RE`'s lookbehind ratified by the owner** and recorded in-comment so it is not
+  re-litigated; the corrupted finding row deleted rather than dismissed, since it is an artifact of
+  a fixed bug and the real finding is tracked under its correct id.
+- Renderer failure modes now follow one rule: **a missing required repo file fails loudly**
+  (redact.py, kit.css), because a diagnosable line in `page-render.log` beats a page that looks
+  merely ugly or, worse, ungated.
+
 ## 2026-07-30 — B-09: set-schedule regen guard + §10 paused-staleness close + OpenSpec routing rule
 
 ### Summary

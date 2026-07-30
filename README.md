@@ -5,7 +5,7 @@
 
 ![Python 3](https://img.shields.io/badge/python-3-blue)
 ![Platform: macOS / launchd](https://img.shields.io/badge/platform-macOS%20%2F%20launchd-lightgrey)
-![Tests: 756 passing](https://img.shields.io/badge/tests-756%20passing-brightgreen)
+![Tests: 1000 passing](https://img.shields.io/badge/tests-1000%20passing-brightgreen)
 ![Works with Codex CLI](https://img.shields.io/badge/works%20with-Codex%20CLI-orange)
 ![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-blueviolet)
 
@@ -198,14 +198,14 @@ bin/loopctl              # the CLI you actually use
 engines/                 # codex · claude · fake
 loops.d/<name>/          # loop.conf · precheck.sh · prompt.md · dashboard.json · SPEC.md
                          #   + render.sh (executable = page-enabled)
-pagekit/                 # kit.css · envelope snippet · reference page for report pages
+pagekit/                 # kit.css (renderers read + inline it) · envelope snippet · reference page
 examples/                # hello-loop (daily agent) · hello-watchdog (15m interval)
 state/loops.sqlite       # runs · heartbeats · metrics · findings · dispositions (WAL)
 reports/<name>/          # per-run markdown + atomically-promoted latest.* (suppression-filtered)
 dashboard/loops.html     # static: fleet view + per-loop panels + findings
 dashboard/reports.html   # static: report pages per loop, totals chips
 site/                    # roops brand · explainer + UI-concept pages · design system
-tests/run-tests.sh       # 756 hermetic tests — no network, no real engines
+tests/run-tests.sh       # 1000 hermetic tests — no network, no real engines
 ```
 
 ## Docs

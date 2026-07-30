@@ -22,6 +22,9 @@ Priority: medium | Status: for-review
 ### B-09: set-schedule: best-effort dashboard regen (false 400 fix) + close §10 paused-staleness question
 Priority: medium | Status: for-review
 
+### B-10: Report-pages follow-up wave: KV single-sourcing, kit.css as the real kit, self-containment by reference
+Priority: medium | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1: reliable runs + manual run-everything trigger + clean schedules screen

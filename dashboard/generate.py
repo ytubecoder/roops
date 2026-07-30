@@ -896,6 +896,17 @@ footer {
    html.console-active .loop-row's tighter track cap). Declaring either override here
    instead, ahead of that block, would make it dead code: identical specificity, later
    unconditional rule wins the cascade regardless of a match media query elsewhere. */
+
+/* The `hidden` ATTRIBUTE only hides via a USER-AGENT stylesheet rule (`[hidden] {
+   display: none }`), and every author-origin declaration outranks the UA origin. So
+   `.con-cell { display: inline-flex }` and `.sp-form { display: flex }` below silently
+   defeat the `hidden` attribute on their own elements: a dashboard opened as a plain
+   file would show live-looking toggles and schedule chips it can never actuate. This
+   rule restores the attribute's meaning at author origin, and `!important` makes it
+   order- and specificity-proof for any future `display` rule added to this block.
+   Removing `hidden` (what the hydration script does on fetch success) still unhides,
+   because the rule keys on the attribute, not on a class. */
+[hidden] { display: none !important; }
 .con-cell { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .con-sw { background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; border-radius: 9px; }
 .con-sw:focus-visible { outline: 1px solid var(--shu); outline-offset: 3px; }
@@ -1931,9 +1942,15 @@ _CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
     document.querySelectorAll('[data-console-controls]').forEach(function(c){ c.hidden=false; });
     document.documentElement.classList.add('console-active');
   }).catch(function(){ /* static file mode -- controls stay hidden */ });
+  // The .catch normalizes ANY transport-level failure (console stopped mid-session, a
+  // response that isn't JSON) into the same {ok:false, j:{error}} shape a 4xx/5xx takes,
+  // so every caller's existing else-branch runs: the rounds switch gets re-enabled and
+  // the message surfaces. Without it a rejected promise skipped those branches and left
+  // the switch disabled forever, with nothing shown.
   function post(path, body){
     return fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
-      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); });
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+      .catch(function(err){ return {ok:false, j:{error:'console unreachable: ' + err}}; });
   }
   document.addEventListener('click', function(ev){
     var sw = ev.target.closest('.con-sw');
@@ -1983,9 +2000,14 @@ _CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
     if (b.classList.contains('sp-apply')) {
       var t = panel.querySelector('.sp-time').value || '09:00';
       var k = panel.dataset.kind;
+      // Each kind is applied only when it was explicitly chosen. The bare `else` this
+      // replaces would have sent a MONTHLY spec for any unset/unknown kind; that path is
+      // now unreachable anyway (the [hidden] CSS rule keeps .sp-form, and so this apply
+      // button, undisplayed until a kind button sets panel.dataset.kind), but panel.dataset
+      // .kind is never cleared between loops, so the guard stays explicit.
       if (k === 'daily') apply('daily:' + t);
       else if (k === 'weekly') apply('weekly:' + panel.querySelector('.sp-dow').value + ':' + t);
-      else apply('monthly:' + String(panel.querySelector('.sp-dom').value).padStart(2, '0') + ':' + t);
+      else if (k === 'monthly') apply('monthly:' + String(panel.querySelector('.sp-dom').value).padStart(2, '0') + ':' + t);
     }
   });
 })();

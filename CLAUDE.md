@@ -1,6 +1,6 @@
 # Roops — recurring automation harness (mechanical name: loops)
 
-Custom thin harness for scheduled agent "loops" (recurring maintenance/monitoring jobs across ~/projects). **Status: BUILT + live-verified 2026-07-22** (real launchd firing, codex AND claude, findings memory/dispositions, enforcement denial, full dashboard matrix; 681 hermetic tests via `bash tests/run-tests.sh` — 350 python + 331 shell, measured 2026-07-30).
+Custom thin harness for scheduled agent "loops" (recurring maintenance/monitoring jobs across ~/projects). **Status: BUILT + live-verified 2026-07-22** (real launchd firing, codex AND claude, findings memory/dispositions, enforcement denial, full dashboard matrix; 736 hermetic tests via `bash tests/run-tests.sh` — 405 python + 331 shell, measured 2026-07-30).
 
 **Fleet state (2026-07-30):** two loops installed to launchd — `loop-sensei` (the fleet examiner — diagnoses failed loops, proposes fixes as findings; `daily:20:00` local) and `kagi-ban` (CLI-secrets exposure audit, the first page-enabled loop; `daily:07:40`). Everything else is supervised-only. Install state is machine-local: `launchd/*.plist` is gitignored, so a fresh clone shows installed=False for everything until reinstalled.
 

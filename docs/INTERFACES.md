@@ -887,12 +887,18 @@ never this module. No daemon mode, no LaunchAgent in v1.
 | endpoint | effect |
 |---|---|
 | `GET /` `/loops.html` `/reports.html` | serve generated pages (loops.html regenerated if missing) |
+| `GET /reports/<loop>/<file>` | serve one file from `<root>/reports/` — the dashboard's own `../reports/<name>/latest.html` links. Path regex allows `[A-Za-z0-9_-]` / `[A-Za-z0-9_.-]` only (no `/`, no `%`), plus an `os.path.realpath` containment check under `<root>/reports`. No directory listing; non-file → 404. Content-Type: `.html`→`text/html`, `.json`→`application/json`, `.md`→`text/plain`, else `application/octet-stream`. |
 | `GET /api/state` | `{loops:[{name, schedule, enabled, plist_present, loaded}]}` |
 | `POST /api/loops/<name>/rounds {on}` | resume/pause (sets `enabled=` + bootstrap/bootout). `on` must be a real JSON boolean, else 400. 409 if no plist — install/uninstall stay CLI-only (supervised verification gate, §8.1). |
-| `POST /api/loops/<name>/schedule {spec}` | `set-schedule`: §5.1-validate, rewrite conf, re-render plist, bootout+bootstrap iff loaded. NEVER kickstart. 400 on bad grammar. |
+| `POST /api/loops/<name>/schedule {spec}` | `set-schedule`: §5.1-validate, rewrite conf, re-render plist, bootout+bootstrap iff loaded. NEVER kickstart. `spec` must be a JSON string, else 400; 400 on bad grammar. **`spec: "manual"` is refused 400 by the console** even though it is valid §5.1 grammar: `_apply_schedule` implements manual as an UNINSTALL (bootout + remove the plist), and install/uninstall stay CLI-only (§8.1). The refusal is console-layer only — `loopctl set-schedule <name> manual` is unchanged. |
 
-Every mutation regenerates the dashboard before responding. A malformed or non-object JSON
-body is 400 uniformly (never an unhandled exception). `<name>`/`spec` positionals reach
+Every mutation regenerates the dashboard before responding (best-effort: a regen failure
+warns on stderr, it never turns a successful mutation into a 500). A malformed or non-object
+JSON body is 400 uniformly, as is a `Content-Length` that is negative or non-numeric (never
+an unhandled exception — an exception out of the handler drops the connection with no HTTP
+response, and `read(-1)` would park the serving thread). With `--port 0` the listener binds
+first and the ACTUAL bound port is what §13.1's `Host` gate and the startup banner use.
+`<name>`/`spec` positionals reach
 `bin/loopctl` after a `--` separator, so a `spec` of `--help` is passed through as the literal
 positional value instead of being consumed by argparse as `-h/--help` — the latter would exit 0
 with no mutation and no error, a false "success" for a schedule that never took effect.
@@ -927,6 +933,10 @@ The generated dashboard's console controls (`data-console-controls`) render `hid
 unhide only once a **relative** `fetch('api/state')` succeeds; that same success branch stamps
 a `console-active` class on `<html>`, which widens the schedule/rounds column via CSS. Opened
 as a plain `file://` page (no console running), the fetch fails, the controls stay hidden, and
-the page is byte-identical in behavior to the pre-console dashboard. §10's hermeticity binds
+the page is byte-identical in behavior to the pre-console dashboard. The `hidden` attribute is
+only a USER-AGENT stylesheet rule, which any author-origin `display` declaration outranks, so
+the generated stylesheet MUST carry an author-origin `[hidden] { display: none !important; }`
+rule — without it `.con-cell`/`.sp-form`'s own `display` values un-hide the controls and the
+file-opened page shows toggles it cannot actuate. §10's hermeticity binds
 `dashboard/generate.py` only; the console itself is trusted harness code and is not subject to
 that rule.

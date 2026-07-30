@@ -1077,9 +1077,16 @@ def _default_root():
 
 
 def build_parser():
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--root", default=_default_root())
-    common.add_argument("--json", action="store_true")
+    # `common_base` is `common` minus `--from`. Only `serve` uses it: bin/console.py reads
+    # loops.d unconditionally (_loop_names/_state) and has no --from plumbing, so accepting
+    # the flag there would silently ignore it — a flag that lies. Dropping it is the smaller
+    # correct change; threading a source dir through the console would widen the console's
+    # surface for a directory (examples/) that is never installed or scheduled anyway.
+    common_base = argparse.ArgumentParser(add_help=False)
+    common_base.add_argument("--root", default=_default_root())
+    common_base.add_argument("--json", action="store_true")
+
+    common = argparse.ArgumentParser(add_help=False, parents=[common_base])
     common.add_argument("--from", dest="from_dir", default="loops.d", choices=["loops.d", "examples"])
 
     p = argparse.ArgumentParser(prog="loopctl")
@@ -1121,7 +1128,7 @@ def build_parser():
 
     sub.add_parser("dashboard", parents=[common])
 
-    serve_p = sub.add_parser("serve", parents=[common])
+    serve_p = sub.add_parser("serve", parents=[common_base])  # no --from: see above
     serve_p.add_argument("--port", type=int, default=8929)
 
     findings_p = sub.add_parser("findings", parents=[common])

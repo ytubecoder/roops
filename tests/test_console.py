@@ -206,6 +206,40 @@ class TestConsoleApi(ConsoleTestCase):
         )
         self.assertEqual(status, 400)
 
+    # -- final-review wave: `spec` must be a real JSON string (F6) --
+
+    def test_schedule_non_string_spec_400(self):
+        self.write_loop("alpha", schedule="daily:09:00")
+        status, payload, _ = call(
+            self.fixture, "POST", "/api/loops/alpha/schedule", {"spec": 7}
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("spec", json.loads(payload)["error"])
+        self.assertIn("schedule=daily:09:00", _read(self.conf_path("alpha")))
+
+    def test_schedule_missing_spec_400(self):
+        self.write_loop("alpha", schedule="daily:09:00")
+        status, _, _ = call(self.fixture, "POST", "/api/loops/alpha/schedule", {})
+        self.assertEqual(status, 400)
+        self.assertIn("schedule=daily:09:00", _read(self.conf_path("alpha")))
+
+    # -- final-review wave: spec="manual" is an UNINSTALL in _apply_schedule
+    # (bootout + remove the plist); install/uninstall stay CLI-only (§13, §8.1),
+    # so the console refuses it before loopctl is ever invoked (F5) --
+
+    def test_schedule_manual_refused_and_plist_survives(self):
+        self.write_loop("alpha", schedule="daily:09:00")
+        self.write_plist("alpha")
+        plist = os.path.join(self.root, "launchd", "com.loops.alpha.plist")
+        status, payload, _ = call(
+            self.fixture, "POST", "/api/loops/alpha/schedule", {"spec": "manual"}
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("loopctl uninstall alpha", json.loads(payload)["error"])
+        self.assertTrue(os.path.isfile(plist))  # NOT uninstalled
+        self.assertIn("schedule=daily:09:00", _read(self.conf_path("alpha")))
+        self.assertNotIn("bootout", " ".join(self.fixture.launchctl_calls()))
+
     def test_rounds_on_true_resumes(self):
         self.write_loop("alpha", schedule="daily:09:00", enabled="false")
         self.write_plist("alpha")
@@ -215,6 +249,114 @@ class TestConsoleApi(ConsoleTestCase):
         self.assertEqual(status, 200)
         self.assertIn("enabled=true", _read(self.conf_path("alpha")))
         self.assertIn("bootstrap", " ".join(self.fixture.launchctl_calls()))
+
+
+class TestReportRoute(ConsoleTestCase):
+    """GET /reports/<loop>/<file> — the dashboard's per-loop report links
+    (`../reports/<name>/latest.html`) 404'd under the console before this route
+    existed. Narrow by construction: a regex allowlist with no '/' and no '%',
+    plus a realpath containment check under <root>/reports."""
+
+    def write_report(self, loop, filename, body):
+        d = os.path.join(self.root, "reports", loop)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, filename), "w") as f:
+            f.write(body)
+
+    def test_report_html_is_served(self):
+        self.write_report("kagi-ban", "latest.html", "<h1>report</h1>")
+        status, payload, ctype = call(
+            self.fixture, "GET", "/reports/kagi-ban/latest.html"
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", ctype)
+        self.assertIn(b"<h1>report</h1>", payload)
+
+    def test_report_json_and_md_content_types(self):
+        self.write_report("kagi-ban", "latest.json", '{"a": 1}')
+        self.write_report("kagi-ban", "latest.md", "# hi")
+        _, _, ctype = call(self.fixture, "GET", "/reports/kagi-ban/latest.json")
+        self.assertEqual(ctype, "application/json")
+        _, _, ctype = call(self.fixture, "GET", "/reports/kagi-ban/latest.md")
+        self.assertIn("text/plain", ctype)
+
+    def test_unknown_extension_is_octet_stream(self):
+        self.write_report("kagi-ban", "shot.png", "notreallyapng")
+        status, _, ctype = call(self.fixture, "GET", "/reports/kagi-ban/shot.png")
+        self.assertEqual(status, 200)
+        self.assertEqual(ctype, "application/octet-stream")
+
+    def test_unknown_file_404s(self):
+        self.write_report("kagi-ban", "latest.html", "<h1>report</h1>")
+        status, _, _ = call(self.fixture, "GET", "/reports/kagi-ban/nope.html")
+        self.assertEqual(status, 404)
+        status, _, _ = call(self.fixture, "GET", "/reports/ghost/latest.html")
+        self.assertEqual(status, 404)
+
+    def test_traversal_is_refused(self):
+        # a real secret one directory above the reports root
+        with open(os.path.join(self.root, "secret.txt"), "w") as f:
+            f.write("TOPSECRET")
+        for path in (
+            "/reports/kagi-ban/../../secret.txt",  # literal ../
+            "/reports/../secret.txt",
+            "/reports/kagi-ban/..%2f..%2fsecret.txt",  # percent-encoded (never decoded)
+            "/reports/kagi-ban/..",  # bare .. -> resolves to the reports dir itself
+            "/reports/kagi-ban/",  # no directory listing
+            "/reports/kagi-ban",
+        ):
+            status, payload, _ = call(self.fixture, "GET", path)
+            self.assertEqual(status, 404, path)
+            self.assertNotIn(b"TOPSECRET", payload, path)
+
+    def test_symlink_out_of_the_tree_is_refused(self):
+        with open(os.path.join(self.root, "secret.txt"), "w") as f:
+            f.write("TOPSECRET")
+        d = os.path.join(self.root, "reports", "kagi-ban")
+        os.makedirs(d, exist_ok=True)
+        os.symlink(os.path.join(self.root, "secret.txt"), os.path.join(d, "leak.md"))
+        status, payload, _ = call(self.fixture, "GET", "/reports/kagi-ban/leak.md")
+        self.assertEqual(status, 404)
+        self.assertNotIn(b"TOPSECRET", payload)
+
+    def test_post_to_a_report_path_is_not_a_route(self):
+        self.write_report("kagi-ban", "latest.html", "<h1>report</h1>")
+        status, _, _ = call(self.fixture, "POST", "/reports/kagi-ban/latest.html", {})
+        self.assertEqual(status, 404)
+
+
+class TestParseContentLength(unittest.TestCase):
+    """console.parse_content_length() — the guard between a client-supplied
+    header and rfile.read(). Pure, like check_origin(): no port is bound."""
+
+    def test_missing_header_is_zero(self):
+        n, err = console.parse_content_length(None)
+        self.assertEqual((n, err), (0, None))
+        n, err = console.parse_content_length("")
+        self.assertEqual((n, err), (0, None))
+
+    def test_positive_value_passes_through(self):
+        n, err = console.parse_content_length("12")
+        self.assertEqual((n, err), (12, None))
+
+    def test_non_numeric_400(self):
+        n, err = console.parse_content_length("banana")
+        self.assertIsNone(n)
+        self.assertEqual(err[0], 400)
+        self.assertIn("Content-Length", json.loads(err[1])["error"])
+
+    def test_negative_400_not_an_exception(self):
+        # int("-5") succeeds, and rfile.read(-5) would raise ValueError straight out
+        # of the handler (connection dropped, no HTTP response at all)
+        n, err = console.parse_content_length("-5")
+        self.assertIsNone(n)
+        self.assertEqual(err[0], 400)
+
+    def test_minus_one_400_would_otherwise_read_to_eof(self):
+        # rfile.read(-1) parks the serving thread until the client closes
+        n, err = console.parse_content_length("-1")
+        self.assertIsNone(n)
+        self.assertEqual(err[0], 400)
 
 
 class TestCheckOrigin(unittest.TestCase):

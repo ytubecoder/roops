@@ -1755,6 +1755,37 @@ class ConsoleControlsTests(unittest.TestCase):
         self.assertIn("minmax(30px, 214px)", html)
         self.assertIn("document.documentElement.classList.add('console-active')", html)
 
+    def test_hidden_attribute_is_enforced_at_author_origin(self):
+        # `hidden` alone is only a USER-AGENT stylesheet rule, and ANY author-origin
+        # `display` declaration outranks the UA origin -- so `.con-cell { display:
+        # inline-flex }` and `.sp-form { display: flex }` silently un-hid the very
+        # elements marked `hidden`, showing dead toggles and an overflowing schedule
+        # chip on a plain file-opened page. The author-origin `[hidden]` rule below is
+        # what actually hides them; `!important` keeps it order- and specificity-proof
+        # against any `display` rule added to that block later.
+        html = self.render_with(name="alpha", plist=True)
+        self.assertIn("[hidden] { display: none !important; }", html)
+        self.assertIn("data-console-controls hidden", html)
+        # and the rule must precede nothing in particular -- !important decides -- but it
+        # MUST be in the same stylesheet as the display rules it neutralizes:
+        css = html.split("<style>", 1)[1].split("</style>", 1)[0]
+        self.assertIn("[hidden] { display: none !important; }", css)
+        self.assertIn(".con-cell { display: inline-flex", css)
+        self.assertIn(".sp-form { margin-top: 8px; display: flex", css)
+
+    def test_post_failure_reenables_the_switch(self):
+        # a dead/stopped console must not leave a permanently disabled control: the
+        # transport-level rejection is normalized into the same {ok:false} shape a 4xx
+        # takes, so the existing else-branch (sw.disabled=false + alert) runs.
+        html = self.render_default()
+        self.assertIn(".catch(function(err){ return {ok:false,", html)
+        self.assertIn("sw.disabled=false", html)
+
+    def test_monthly_is_applied_only_when_explicitly_chosen(self):
+        # the bare `else` this replaces would send a MONTHLY spec for an unset kind
+        html = self.render_default()
+        self.assertIn("else if (k === 'monthly') apply('monthly:'", html)
+
 
 if __name__ == "__main__":
     unittest.main()

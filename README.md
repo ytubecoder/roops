@@ -5,7 +5,7 @@
 
 ![Python 3](https://img.shields.io/badge/python-3-blue)
 ![Platform: macOS / launchd](https://img.shields.io/badge/platform-macOS%20%2F%20launchd-lightgrey)
-![Tests: 681 passing](https://img.shields.io/badge/tests-681%20passing-brightgreen)
+![Tests: 736 passing](https://img.shields.io/badge/tests-736%20passing-brightgreen)
 ![Works with Codex CLI](https://img.shields.io/badge/works%20with-Codex%20CLI-orange)
 ![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-blueviolet)
 
@@ -203,7 +203,7 @@ reports/<name>/          # per-run markdown + atomically-promoted latest.* (supp
 dashboard/loops.html     # static: fleet view + per-loop panels + findings
 dashboard/reports.html   # static: report pages per loop, totals chips
 site/                    # roops brand · explainer + UI-concept pages · design system
-tests/run-tests.sh       # 681 hermetic tests — no network, no real engines
+tests/run-tests.sh       # 736 hermetic tests — no network, no real engines
 ```
 
 ## Docs

@@ -32,6 +32,11 @@ all remain "loops". Do not rename mechanical internals from here.
   ambient cycles 3–6s. The ensō draw-on IS the spinner. Every animation needs a
   `prefers-reduced-motion` fallback; every layout must hold at 390px with zero horizontal
   overflow. All three pages have existing blocks for each — extend them, don't fork.
+  **Exception — control micro-interactions:** press and hover feedback on an interactive
+  control (button, switch, row) may run ≤.3s. A stamp that takes .8s to answer a press
+  reads as broken. Reveal, ambient, and state motion keeps the ≥.8s floor. The easing
+  curve is never optional: every transition uses `cubic-bezier(0.16,1,0.3,1)` at every
+  duration.
 - **Mock data is genericized on purpose** (tls-certs, dead-links, deps-drift…). NEVER put
   internal loop names (`ads-*`) or real business data on these public pages. Numbers must
   look organic, never round.

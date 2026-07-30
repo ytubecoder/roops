@@ -35,6 +35,18 @@ _LOOPCTL_BIN = os.path.join(_HERE, "loopctl")
 
 _ROUNDS_RE = re.compile(r"^/api/loops/([A-Za-z0-9_-]+)/rounds$")
 _SCHED_RE = re.compile(r"^/api/loops/([A-Za-z0-9_-]+)/schedule$")
+# Report pages: the dashboard links each page-enabled loop as ../reports/<name>/latest.html
+# (see dashboard/generate.py), which resolves to /reports/<name>/<file> when the page is
+# served from this root. The character classes are the whole allowlist — no '/', no '%',
+# so neither a literal `../` nor a percent-encoded `..%2f` can even match (the server never
+# percent-decodes self.path, so `%` arrives literal). A realpath containment check in the
+# handler is the second, independent gate; it also covers a symlink pointing out of the tree.
+_REPORT_RE = re.compile(r"^/reports/([A-Za-z0-9_-]+)/([A-Za-z0-9_.-]+)$")
+_REPORT_CTYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".json": "application/json",
+    ".md": "text/plain; charset=utf-8",
+}
 _PAGES = {
     "/": "loops.html",
     "/loops.html": "loops.html",
@@ -142,6 +154,37 @@ def _parse_json_object(body_bytes):
     return obj, None
 
 
+def parse_content_length(raw_len):
+    """Parses a raw `Content-Length` header value. Returns (n, None) or
+    (None, error_response). A MISSING header is 0 (no body), not an error.
+
+    A negative value must be rejected here and never reach `rfile.read()`:
+    `int("-5")` succeeds, and `read(-5)` raises ValueError out of the request
+    handler — over a real socket that just drops the connection with no HTTP
+    response at all — while `read(-1)` means "read to EOF" and parks the
+    serving thread until the client closes. Pure (a string in, a decision out)
+    so it is testable without binding a port, like check_origin()."""
+    try:
+        n = int(raw_len) if raw_len else 0
+    except (TypeError, ValueError):
+        return None, _json(400, {"error": "invalid Content-Length header"})
+    if n < 0:
+        return None, _json(400, {"error": "invalid Content-Length header"})
+    return n, None
+
+
+def _regen_dashboard(root):
+    """Post-mutation dashboard regeneration. Best-effort — the mutation itself
+    already succeeded, so a regen failure must not turn a 200 into a 500; it
+    warns on stderr in bin/loopctl cmd_disposition's exact wording instead, so
+    a silently stale dashboard is never the only symptom."""
+    r = _loopctl(root, ["dashboard"])
+    if r.returncode != 0:
+        sys.stderr.write(
+            f"warning: dashboard regen failed: {r.stderr.strip() or 'loopctl dashboard failed'}\n"
+        )
+
+
 def handle_request(root, method, path, body_bytes):
     path = path.split("?", 1)[0]
 
@@ -153,6 +196,22 @@ def handle_request(root, method, path, body_bytes):
             with open(fp, "rb") as f:
                 return 200, f.read(), "text/html; charset=utf-8"
         return _json(404, {"error": "not generated yet"})
+
+    m = _REPORT_RE.match(path) if method == "GET" else None
+    if m:
+        base = os.path.realpath(os.path.join(root, "reports"))
+        fp = os.path.realpath(os.path.join(base, m.group(1), m.group(2)))
+        # Containment, second gate: realpath resolves `..` segments AND symlinks, so this
+        # compares the FINAL target against the reports root. os.sep guards the prefix so
+        # a sibling like <root>/reports-old can never pass as <root>/reports. No directory
+        # listing is ever produced: a non-file (a directory, a dangling link) is a 404.
+        if not (fp == base or fp.startswith(base + os.sep)) or not os.path.isfile(fp):
+            return _json(404, {"error": "not found"})
+        ctype = _REPORT_CTYPES.get(
+            os.path.splitext(fp)[1].lower(), "application/octet-stream"
+        )
+        with open(fp, "rb") as f:
+            return 200, f.read(), ctype
 
     if method == "GET" and path == "/api/state":
         return _json(200, _state(root))
@@ -173,7 +232,7 @@ def handle_request(root, method, path, body_bytes):
         r = _loopctl(root, ["resume" if on else "pause", name])
         if r.returncode != 0:
             return _json(500, {"error": r.stderr.strip() or "loopctl failed"})
-        _loopctl(root, ["dashboard"])
+        _regen_dashboard(root)
         return _json(200, {"ok": True, "state": _state(root)})
 
     m = _SCHED_RE.match(path) if method == "POST" else None
@@ -184,7 +243,23 @@ def handle_request(root, method, path, body_bytes):
         body_obj, err = _parse_json_object(body_bytes)
         if err:
             return err
-        spec = str(body_obj.get("spec", ""))
+        spec = body_obj.get("spec")
+        if not isinstance(spec, str):  # same shape as `on`'s bool check above
+            return _json(400, {"error": 'body must be {"spec": "<schedule spec>"}'})
+        # `manual` is a valid §5.1 spec, but _apply_schedule implements it as an UNINSTALL
+        # (bootout + remove the plist). Install/uninstall stay CLI-only (§13, §8.1: the
+        # supervised-verification gate), so the console refuses it here — at the console
+        # layer only. `loopctl set-schedule <name> manual` keeps working unchanged.
+        if spec == "manual":
+            return _json(
+                400,
+                {
+                    "error": (
+                        "manual takes the loop off schedule — "
+                        f"use loopctl uninstall {name}"
+                    )
+                },
+            )
         r = _loopctl(root, ["set-schedule", name, spec])
         if r.returncode != 0:
             return _json(400, {"error": r.stderr.strip() or "invalid schedule"})
@@ -247,13 +322,16 @@ def serve(root, port):
                 port,
             )
             if not ok:
+                # The rejected request's body is never drained. Under HTTP/1.0 (this
+                # server's default) the connection closes after the response anyway;
+                # say so explicitly so a future keep-alive switch cannot make the
+                # undrained body get parsed as the NEXT request on this socket.
+                self.close_connection = True
                 self._respond(*_json(403, {"error": reason}))
                 return
-            raw_len = self.headers.get("Content-Length")
-            try:
-                n = int(raw_len) if raw_len else 0
-            except ValueError:
-                self._respond(*_json(400, {"error": "invalid Content-Length header"}))
+            n, err = parse_content_length(self.headers.get("Content-Length"))
+            if err:
+                self._respond(*err)
                 return
             body = self.rfile.read(n) if n else b""
             self._respond(*handle_request(root, self.command, self.path, body))
@@ -265,6 +343,13 @@ def serve(root, port):
             sys.stderr.write("console: " + fmt % args + "\n")
 
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    # Bind FIRST, then adopt the port the socket actually got. With `--port 0` the OS
+    # picks an ephemeral port, and that is the port the browser puts in `Host` — gating
+    # check_origin() on the REQUESTED port would 403 every single request with no hint
+    # as to why. Rebinding this name (a local of serve(), closed over by Handler._do,
+    # read at request time — never at class-definition time) is what makes the handler
+    # and the banner below agree with the socket.
+    port = httpd.server_address[1]
     print(f"roops console: 127.0.0.1:{port} (Ctrl-C to stop)")
     try:
         httpd.serve_forever()

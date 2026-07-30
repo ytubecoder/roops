@@ -213,7 +213,7 @@
   }
   .loop-row:hover { background: rgba(28,26,23,.035); }
   .stamp {
-    width: 30px; height: 30px; border-radius: 3px; font-size: 15px;
+    width: 30px; height: 30px; border-radius: 3px; font-size: 17px;
     display: flex; align-items: center; justify-content: center;
     font-family: var(--seal); transform: rotate(-2deg);
   }
@@ -276,7 +276,9 @@
     width: 34px; height: 34px; border-radius: 4px; border: 1.5px solid var(--shu);
     background: transparent; color: var(--shu); font-family: var(--seal); font-size: 17px;
     cursor: pointer; transform: rotate(-2deg);
-    transition: background .3s, color .3s, transform .15s;
+    transition: background .3s cubic-bezier(0.16, 1, 0.3, 1),
+                color .3s cubic-bezier(0.16, 1, 0.3, 1),
+                transform .15s cubic-bezier(0.16, 1, 0.3, 1);
   }
   .hanko-btn:hover { background: rgba(199,62,43,.08); }
   .hanko-btn:active { transform: rotate(-2deg) scale(.94); background: var(--shu); color: var(--washi); }

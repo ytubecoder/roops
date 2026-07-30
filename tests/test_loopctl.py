@@ -1607,6 +1607,18 @@ class TestSetSchedule(LoopsRootTestCase):
         self.assertFalse(os.path.isfile(self._plist_path("alpha")))
         self.assertIn("bootout", " ".join(self.fixture.launchctl_calls()))
 
+    def test_regen_failure_warns_but_exits_zero(self):
+        self._write_loop("alpha", "daily:09:00")
+        # The regen writes root/dashboard/loops.html; a FILE named `dashboard`
+        # makes its makedirs raise — a hermetic dashboard-generation failure.
+        with open(os.path.join(self.root, "dashboard"), "w") as f:
+            f.write("in the way")
+        r = self._set_schedule("alpha", "interval:15m")
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("warning: dashboard regen failed", r.stderr)
+        self.assertIn("schedule alpha: daily:09:00 -> interval:15m", r.stdout)
+        self.assertIn("schedule=interval:15m", _read(self._conf_path("alpha")))
+
 
 if __name__ == "__main__":
     unittest.main()

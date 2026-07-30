@@ -979,7 +979,10 @@ def cmd_set_schedule(args):
         return 1
 
     dash = _dashboard_module()
-    dash.generate(root=args.root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
+    try:
+        dash.generate(root=args.root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
+    except Exception as e:  # noqa: BLE001 — dashboard regen is best-effort; the schedule change itself succeeded
+        print(f"warning: dashboard regen failed: {e}", file=sys.stderr)
 
     print(f"schedule {args.name}: {old or '(unset)'} -> {new}")
     return 0

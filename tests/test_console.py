@@ -134,6 +134,19 @@ class TestConsoleApi(ConsoleTestCase):
             os.path.isfile(os.path.join(self.fixture.root, "dashboard", "loops.html"))
         )
 
+    def test_schedule_regen_failure_still_200(self):
+        self.write_loop("alpha", schedule="daily:09:00")
+        # A FILE at root/dashboard makes loopctl's regen fail; the schedule
+        # mutation itself succeeded, so the response must stay 200 (§13) —
+        # previously this surfaced as a false `400 invalid schedule`.
+        with open(os.path.join(self.root, "dashboard"), "w") as f:
+            f.write("in the way")
+        status, _payload, _ = call(
+            self.fixture, "POST", "/api/loops/alpha/schedule", {"spec": "interval:30m"}
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("schedule=interval:30m", _read(self.conf_path("alpha")))
+
     def test_unknown_loop_404_and_unknown_path_404(self):
         status, _, _ = call(
             self.fixture, "POST", "/api/loops/ghost/rounds", {"on": True}

@@ -649,7 +649,7 @@ loopctl status [<name>]                                              # last run,
 loopctl install <name>                                               # generate plist → bootstrap → kickstart-verify (§8.1)
 loopctl uninstall <name>                                             # bootout + remove plist
 loopctl pause <name> / resume <name>                                 # sets enabled= and bootout/bootstrap
-loopctl set-schedule <name> <spec>                                   # §5.1-validate; rewrite conf; re-render+reload plist iff installed; NEVER kickstart
+loopctl set-schedule <name> <spec>                                   # §5.1-validate; rewrite conf; re-render+reload plist iff installed; NEVER kickstart; best-effort dashboard regen
 loopctl dashboard                                                    # regenerate + print path
 loopctl serve [--port PORT]                                          # local console (§13), default port 8929
 loopctl findings <loop>                                              # open findings: id, severity, age, times_seen, disposition
@@ -902,13 +902,15 @@ the API's origin.** `sandbox allow-scripts` (never `allow-same-origin` — the t
 page drop its own sandbox) keeps the page's own inline script working while making every
 request it issues cross-origin, which then fails closed on the missing `OPTIONS` handler.
 
-Every mutation regenerates the dashboard before responding, but the two endpoints differ and
-the difference is visible to a client. `/rounds`: the console owns the regen, best-effort — a
-failure warns `warning: dashboard regen failed: …` on stderr and never changes the response.
-`/schedule`: `loopctl set-schedule` regenerates unguarded AFTER writing the conf and plist, so
-a regen exception exits non-zero and the console reports `400 invalid schedule` for a mutation
-that DID take effect. Pre-existing behavior, documented rather than changed; the conf is the
-source of truth, so re-reading `/api/state` after such a 400 shows the new schedule.
+Every mutation regenerates the dashboard before responding, and the regen is best-effort on
+both endpoints — the mutation already succeeded, so a regen failure must never change the
+response. `/rounds`: the console owns the regen and warns
+`warning: dashboard regen failed: …` on stderr. `/schedule`: `loopctl set-schedule` owns it,
+guarded the same way as the disposition verbs (warn on stderr, exit 0). **(Amended
+2026-07-30):** before this, the set-schedule regen ran unguarded, so a regen exception exited
+non-zero and the console reported a false `400 invalid schedule` for a schedule change that
+DID take effect. The conf is the source of truth either way: `/api/state` reflects the new
+schedule regardless of regen outcome.
 
 A malformed or non-object JSON body is 400 uniformly, as is a `Content-Length` that is negative
 or non-numeric, and a `spec` that is not a JSON string or contains a NUL byte (never an

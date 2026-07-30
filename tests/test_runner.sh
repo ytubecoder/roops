@@ -584,6 +584,90 @@ EOF
 }
 
 # ===========================================================================
+# start-of-run non-blocking dashboard regen (Amendment 2 -- 2026-07-30)
+# ===========================================================================
+
+test_start_regen_never_blocks_or_fails_when_dashboard_lock_held() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopdash agent >/dev/null
+
+  mkdir -p "$root/state/locks"
+  local fifo="$root/state/locks/.testhold-dash-$$"
+  rm -f "$fifo"
+  mkfifo "$fifo"
+  local outfile; outfile="$(mktemp "${TMPDIR:-/tmp}/loops-testlock-dash-out.XXXXXX")"
+  python3 "$root/bin/lock.py" acquire --name _dashboard --root "$root" < "$fifo" > "$outfile" 2>/dev/null &
+  local lockpid=$!
+  exec 9> "$fifo"
+  local waited=0
+  while [ ! -s "$outfile" ] && kill -0 "$lockpid" 2>/dev/null && [ "$waited" -lt 50 ]; do
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+
+  assert_file_missing "start-regen: no dashboard yet" "$root/dashboard/loops.html"
+
+  run_runner "$root" loopdash
+
+  exec 9>&-
+  wait "$lockpid" 2>/dev/null || true
+  rm -f "$fifo" "$outfile"
+
+  assert_eq "start-regen: exit code unaffected by held dashboard lock" "0" "$RUNNER_EXIT"
+  assert_eq "start-regen: run row completed despite held dashboard lock" "completed" "$(last_run_field "$root" loopdash runner_status)"
+  # both the new start-of-run check (must skip, lock held) and the existing
+  # end-of-run --wait-s 30 acquire (also can't get in while held throughout)
+  # degrade silently -- neither is allowed to write a partial file or fail the run.
+  assert_file_missing "start-regen: dashboard still not regenerated while lock was held throughout" "$root/dashboard/loops.html"
+
+  # once the lock is free, a later run's start-of-run regen fires immediately.
+  run_runner "$root" loopdash
+  assert_eq "start-regen: second run exit code" "0" "$RUNNER_EXIT"
+  assert_file_exists "start-regen: dashboard regenerated once the lock is free" "$root/dashboard/loops.html"
+  rm -rf "$root"
+}
+
+# test_start_regen_fires_before_engine_finishes — the discriminating case:
+# proves the regen actually happens at start-of-run (immediately after
+# db.py start-run, step 3), not only at end-of-run (step 7). A slow fake
+# engine (FAKE_SLEEP_S) gives a window to observe dashboard.html already
+# written WHILE the run is still in flight (kill -0 on the runner's pid
+# still succeeds) — end-of-run's regen alone could never produce that.
+test_start_regen_fires_before_engine_finishes() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopmid agent >/dev/null
+  export FAKE_SLEEP_S=3
+
+  local out err
+  out="$(mktemp "${TMPDIR:-/tmp}/loops-midrun-out.XXXXXX")"
+  err="$(mktemp "${TMPDIR:-/tmp}/loops-midrun-err.XXXXXX")"
+  LOOPS_ROOT="$root" "$RUNNER" loopmid --trigger manual > "$out" 2> "$err" &
+  local pid=$!
+
+  local waited=0 seen=0
+  while [ "$waited" -lt 50 ]; do
+    if [ -f "$root/dashboard/loops.html" ]; then seen=1; break; fi
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  local still_running=0
+  kill -0 "$pid" 2>/dev/null && still_running=1
+
+  wait "$pid" 2>/dev/null
+  local ec=$?
+  unset FAKE_SLEEP_S
+  rm -f "$out" "$err"
+
+  assert_eq "start-regen-mid: dashboard.html appeared before the engine finished" "1" "$seen"
+  assert_eq "start-regen-mid: run was still in-flight when it appeared" "1" "$still_running"
+  assert_eq "start-regen-mid: run exit code" "0" "$ec"
+  assert_eq "start-regen-mid: runner_status" "completed" "$(last_run_field "$root" loopmid runner_status)"
+  rm -rf "$root"
+}
+
+# ===========================================================================
 # main
 # ===========================================================================
 
@@ -634,6 +718,10 @@ test_dry_run
 
 echo "== bin/run-loop.sh: prompt composition =="
 test_prompt_composition
+
+echo "== bin/run-loop.sh: start-of-run non-blocking dashboard regen =="
+test_start_regen_never_blocks_or_fails_when_dashboard_lock_held
+test_start_regen_fires_before_engine_finishes
 
 echo
 echo "passed: $TR_PASSED, failed: $TR_FAILED"

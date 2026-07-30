@@ -157,6 +157,31 @@ def is_died(finished_at, started_at, timeout_s, now):
     return age_s > (timeout_s or 900) + 120
 
 
+def is_running(finished_at, started_at, timeout_s, now):
+    """(Amendment 2 -- 2026-07-30): finished_at IS NULL and age <= timeout_s -- still
+    inside its own budget, a live in-flight run rather than a failure."""
+    if finished_at:
+        return False
+    started = _parse_iso(started_at)
+    if started is None:
+        return False
+    age_s = (now - started).total_seconds()
+    return age_s <= (timeout_s or 900)
+
+
+def is_overdue(finished_at, started_at, timeout_s, now):
+    """(Amendment 2 -- 2026-07-30): finished_at IS NULL and age in (timeout_s,
+    timeout_s+120] -- past its own budget but not yet past the §4.6 died grace."""
+    if finished_at:
+        return False
+    started = _parse_iso(started_at)
+    if started is None:
+        return False
+    age_s = (now - started).total_seconds()
+    to = timeout_s or 900
+    return to < age_s <= to + 120
+
+
 def is_suppressed(action, snooze_until, now):
     """§4.5: current disposition is dismiss, or snooze with snooze_until > now."""
     if action == "dismiss":
@@ -571,6 +596,10 @@ table.loops tr:hover td { background: #12161f; }
 .badge.harness { background: #4a1010; color: #ff9d9d; border: 1px solid #7a3a3a; }
 .badge.stale { background: #4a3a10; color: #ffd68a; border: 1px solid #7a5a2a; }
 .badge.died { background: #4a1010; color: #ff9d9d; border: 1px solid #7a3a3a; }
+.badge.overdue { background: #4a3a10; color: #ffd68a; border: 1px solid #7a5a2a; }
+.badge.running { background: #10304a; color: #8ad4ff; border: 1px solid #2a5a7a;
+  animation: pulse-badge 1.6s ease-in-out infinite; }
+@keyframes pulse-badge { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 .loop-name { font-weight: 700; color: #f2f4f8; }
 .loop-name a { color: inherit; text-decoration: none; }
 .loop-name a:hover { text-decoration: underline; }
@@ -987,6 +1016,10 @@ def _render_loop_row(loop, now):
     badges = []
     if loop["stale"]:
         badges.append("stale")
+    if loop.get("running"):
+        badges.append("running")
+    if loop.get("overdue"):
+        badges.append("overdue")
     if loop["died"]:
         badges.append("died")
     light = _light_html(color, marker, badges)
@@ -1082,6 +1115,10 @@ def _render_loop_section(loop, conn, now):
     badges = []
     if loop["stale"]:
         badges.append("stale")
+    if loop.get("running"):
+        badges.append("running")
+    if loop.get("overdue"):
+        badges.append("overdue")
     if loop["died"]:
         badges.append("died")
     light = _light_html(color, marker, badges)
@@ -1168,6 +1205,8 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
         expected_interval_s = 0
 
     died = False
+    overdue = False
+    running = False
     if latest_run is not None:
         died = is_died(
             latest_run.get("finished_at"), latest_run["started_at"], timeout_s, now
@@ -1182,8 +1221,18 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
     if died:
         light_color, light_marker = "red", "harness-problem"
     elif latest_run is not None and latest_run.get("finished_at") is None:
-        # in-flight, not yet past the died threshold
-        light_color, light_marker = "grey", None
+        # (Amendment 2) in-flight, not yet past the died threshold -- split by age
+        # into running (still inside timeout_s) vs overdue (past it, amber attention).
+        fin, st = latest_run.get("finished_at"), latest_run["started_at"]
+        if is_overdue(fin, st, timeout_s, now):
+            overdue = True
+            light_color, light_marker = "amber", None
+        elif is_running(fin, st, timeout_s, now):
+            running = True
+            light_color, light_marker = "grey", None
+        else:
+            # started_at unparseable -- degrade to the pre-Amendment-2 default (§10)
+            light_color, light_marker = "grey", None
     elif latest_run is not None:
         light_color, light_marker = compute_light(
             latest_run["runner_status"], latest_run.get("effective_status")
@@ -1221,6 +1270,8 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
         "tags": tags,
         "provenance": provenance,
         "died": died,
+        "overdue": overdue,
+        "running": running,
         "stale": stale,
         "light_color": light_color,
         "light_marker": light_marker,

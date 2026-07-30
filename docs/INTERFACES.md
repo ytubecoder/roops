@@ -278,7 +278,11 @@ Default `--from loops.d`; `--trigger manual`.
    `runner_status=skipped-overlap`, `started_at=finished_at=now`, and exit **0** (an overlap is not
    an error — it must not make launchd think the job is broken).
 3. `run_id` = `<UTC>-<name>-<6 hex>`, e.g. `20260722T140311Z-hello-loop-a1b2c3`. `mkdir -p 0700
-   state/runs/<run_id>`. `db.py start-run`.
+   state/runs/<run_id>`. `db.py start-run`. **(Amendment 2 — 2026-07-30)** Immediately after
+   `start-run`, a best-effort "running now" dashboard regen: `bin/lock.py check --name
+   _dashboard` (exit 0 only when free) gates a `dashboard/generate.py` call, both `|| true`d —
+   a held lock silently skips the regen and nothing here may ever block or fail the run; the
+   step 7 end-of-run regen (`--wait-s 30`) is unchanged and remains the authoritative regen.
 4. **Precheck** (`precheck.sh`, if present and executable): run with the same process-group timeout
    discipline as the engine, capped at `min(timeout_s, 300)`. stdout captured to
    `state/runs/<id>/precheck.out` with a **64 KiB cap** (truncate + append a truncation marker);
@@ -784,9 +788,14 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
 - **Top strip:** fleet counts by status, `needs_attention` count, spend today / 7d, last regen time.
 - **Stale detection:** a loop overdue by > 1.5 × its `expected_interval_s` (§5.1) is flagged
   `stale` and counts toward `needs_attention`. `manual` loops are exempt.
-- **Died-run detection (§4.6):** a run row with `finished_at IS NULL` older than
-  `timeout_s + 120s` renders as `died` (red, harness-problem marker) and counts toward
-  `needs_attention`.
+- **Running/overdue/died trichotomy (§4.6, Amendment 2 — 2026-07-30):** for a run row with
+  `finished_at IS NULL`, age is measured against the loop's `timeout_s` (missing/unparseable
+  conf falls back to the `900` default, same as elsewhere): age ≤ `timeout_s` renders `running`
+  (a pulsing badge — live and in-flight, **not** a failure, does **not** count toward
+  `needs_attention`); age in `(timeout_s, timeout_s+120]` renders `overdue` (amber badge — still
+  running past its own timeout budget but not yet past the died grace, counts as amber
+  `needs_attention`); age `> timeout_s + 120` renders `died` (red, harness-problem marker, and
+  counts toward `needs_attention`) — this outer boundary is unchanged from the original rule.
 - **Status light** uses `effective_status` (§4.5) under the §4.3 precedence — never raw
   `loop_status`.
 - **Per-loop sections:** declared panels, trends (from the `metrics` table), a **findings list**

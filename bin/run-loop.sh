@@ -411,6 +411,10 @@ chmod 700 "$OUT_DIR"
 
 db_start_run
 
+# (Amendment 2) best-effort "running now" regen — NEVER blocks or fails the run
+"$PY" "$ROOT/bin/lock.py" check --name _dashboard >/dev/null 2>&1 && \
+  "$PY" "$ROOT/dashboard/generate.py" --root "$ROOT" >/dev/null 2>&1 || true
+
 # finish_run <runner_status> <loop_status> <effective_status> <attempts> \
 #            <status_reason> <headline> <report_path> <contract_path> \
 #            <exit_code> <error_detail>

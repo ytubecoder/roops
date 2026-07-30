@@ -358,6 +358,37 @@ class PureFunctionTests(unittest.TestCase):
         started = NOW - timedelta(seconds=5000)
         self.assertFalse(generate.is_died(iso(NOW), iso(started), 800, NOW))
 
+    # -- running/overdue trichotomy (Amendment 2 -- 2026-07-30) --------------------------
+
+    def test_overdue_true_between_timeout_and_grace(self):
+        started = NOW - timedelta(seconds=850)
+        # timeout_s=800 -> overdue window (800, 920]; 850 is inside it
+        self.assertTrue(generate.is_overdue(None, iso(started), 800, NOW))
+
+    def test_overdue_false_within_timeout(self):
+        started = NOW - timedelta(seconds=500)
+        self.assertFalse(generate.is_overdue(None, iso(started), 800, NOW))
+
+    def test_overdue_false_past_grace(self):
+        started = NOW - timedelta(seconds=1000)
+        self.assertFalse(generate.is_overdue(None, iso(started), 800, NOW))
+
+    def test_overdue_false_when_finished(self):
+        started = NOW - timedelta(seconds=850)
+        self.assertFalse(generate.is_overdue(iso(NOW), iso(started), 800, NOW))
+
+    def test_running_true_within_timeout(self):
+        started = NOW - timedelta(seconds=500)
+        self.assertTrue(generate.is_running(None, iso(started), 800, NOW))
+
+    def test_running_false_past_timeout(self):
+        started = NOW - timedelta(seconds=850)
+        self.assertFalse(generate.is_running(None, iso(started), 800, NOW))
+
+    def test_running_false_when_finished(self):
+        started = NOW - timedelta(seconds=500)
+        self.assertFalse(generate.is_running(iso(NOW), iso(started), 800, NOW))
+
     def test_disposition_text_dismissed(self):
         text = generate.disposition_text(
             "dismiss", "intentional", None, "2026-06-01T00:00:00Z"
@@ -1525,6 +1556,96 @@ class TagsProvenanceEventsTests(unittest.TestCase):
         self.assertIn("onchange=", html)
         self.assertIn("display", html)
         self.assertIn("none", html)
+
+
+class RunTrichotomyTests(unittest.TestCase):
+    """running / overdue / died trichotomy for an in-flight run (finished_at IS NULL),
+    per docs/INTERFACES.md §4.6 + §10 (Amendment 2 -- 2026-07-30): age <= timeout_s ->
+    running (live, not a failure, does not count toward needs_attention); age in
+    (timeout_s, timeout_s+120] -> overdue (amber, still running past timeout, amber
+    attention); age > timeout_s+120 -> died (existing rule, unchanged, red harness-
+    problem)."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+        self.fx.init_db().close()
+        self._run_counter = 0
+
+    def _root_with_loop(self, name, conf_extra=""):
+        self.fx.add_loop(name)
+        if conf_extra:
+            conf_path = os.path.join(self.fx.root, "loops.d", name, "loop.conf")
+            with open(conf_path, "a") as f:
+                f.write(conf_extra + "\n")
+        return self.fx.root
+
+    def _insert_unfinished_run(self, root, loop_name, started_secs_ago):
+        self._run_counter += 1
+        conn = sqlite3.connect(self.fx.db_path)
+        try:
+            self.fx.add_run(
+                conn,
+                f"r{self._run_counter}",
+                loop_name,
+                iso(NOW - timedelta(seconds=started_secs_ago)),
+                finished_at=None,
+                runner_status="started",
+            )
+        finally:
+            conn.close()
+
+    def _reset_runs(self, root):
+        conn = sqlite3.connect(self.fx.db_path)
+        try:
+            conn.execute("DELETE FROM runs")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _generate(self, root):
+        out = os.path.join(root, "dashboard", "loops.html")
+        generate.generate(
+            root=root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            return f.read()
+
+    def test_run_states_trichotomy(self):
+        root = self._root_with_loop("l1", conf_extra="timeout_s=60")
+        self._insert_unfinished_run(root, "l1", started_secs_ago=10)
+        self.assertIn("running", self._generate(root))
+        self._reset_runs(root)
+        self._insert_unfinished_run(root, "l1", started_secs_ago=90)
+        self.assertIn("overdue", self._generate(root))
+        self._reset_runs(root)
+        self._insert_unfinished_run(root, "l1", started_secs_ago=300)
+        self.assertIn("died", self._generate(root))
+
+    def test_running_badge_exact_markup_and_not_needs_attention(self):
+        root = self._root_with_loop("l2", conf_extra="timeout_s=60")
+        self._insert_unfinished_run(root, "l2", started_secs_ago=10)
+        html = self._generate(root)
+        self.assertIn('<span class="badge running">running</span>', html)
+        self.assertNotIn("needs attention 1", html)
+
+    def test_overdue_badge_exact_markup_and_counts_toward_needs_attention(self):
+        root = self._root_with_loop("l3", conf_extra="timeout_s=60")
+        self._insert_unfinished_run(root, "l3", started_secs_ago=90)
+        html = self._generate(root)
+        self.assertIn('<span class="badge overdue">overdue</span>', html)
+        self.assertIn("needs attention 1", html)
+
+    def test_died_still_counts_toward_needs_attention_and_red(self):
+        root = self._root_with_loop("l4", conf_extra="timeout_s=60")
+        self._insert_unfinished_run(root, "l4", started_secs_ago=300)
+        html = self._generate(root)
+        self.assertIn('<span class="badge died">died</span>', html)
+        self.assertIn("needs attention 1", html)
 
 
 if __name__ == "__main__":

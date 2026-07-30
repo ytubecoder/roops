@@ -1319,7 +1319,7 @@ def main(argv=None):
         return cmd_status(args)
 
     if extra:
-        parser.error("unrecognized arguments: %s" % " ".join(extra))
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
 
     args.root = os.path.abspath(args.root)
 

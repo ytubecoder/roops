@@ -657,6 +657,11 @@ loopctl ack <loop> <finding_id> [--note …]                           # Amendme
 loopctl dismiss <loop> <finding_id> --note …                         #   note REQUIRED (audit trail)
 loopctl snooze <loop> <finding_id> --until YYYY-MM-DD                #   --until REQUIRED
 loopctl reopen <loop> <finding_id>
+loopctl import <skill-path> --analyze [--json]                       # Amendment 2 — 2026-07-30:
+loopctl import <skill-path> --apply [--answers F] [--name N]         #   static gap analysis of an
+    [--overwrite]                                                    #   existing Agent Skill /
+                                                                      #   scaffold a loop from it —
+                                                                      #   see docs/SKILL_IMPORT.md
 ```
 Disposition verbs are thin wrappers over `db.py dispose` (+ dashboard regen so the change is
 visible immediately). The dashboard stays static (Change 4, Option A — settled with generalissimo
@@ -664,6 +669,21 @@ visible immediately). The dashboard stays static (Change 4, Option A — settled
 Global flags: `--root R` (default `$LOOPS_ROOT`), `--json` (machine-readable output where sensible),
 `--from loops.d|examples`, `--actor A` (default `$USER`, or `unknown` if unset — Amendment 2 —
 2026-07-30). Exit codes: `0` ok · `1` operation failed · `2` usage.
+
+**`loopctl import` (Amendment 2 — 2026-07-30):** wraps `bin/skill_import.py`'s `parse_skill()` /
+`analyze()` (and, once Task 12 lands, `apply()`) to convert an existing Agent Skill directory into a
+gap-analysis report or a scaffolded loop. `--analyze` is static and zero-token: it prints (or, with
+`--json`, emits verbatim) the `analyze()` dict — proposed name, type, engine, the permission-axes
+floor, detected flags, the eleven-question intake rubric (`q1_purpose`..`q11_budget`, each bucketed
+`answered`/`derived`/`missing`/`incompatible`), a precheck proposal whose every line is COMMENTED
+(never live code — `[read-only?]` is a heuristic hint requiring human review, not a guarantee), and
+the answers still needed to finish the intake. A blocked skill (credentials found, or an MCP
+dependency with no CLI equivalent in the same file) still analyzes successfully — `blocked` is a
+field in the output, never a CLI failure; only a missing/unparseable `SKILL.md`
+(`skill_import.SkillParseError`) exits 1. `--analyze` and `--apply` form a required mutually exclusive
+group (neither given, or both given, is a usage error — exit 2); `--apply` is accepted by the parser
+now but not yet implemented (Task 12) — it prints a placeholder message and exits 2. Full design,
+the rubric-id-to-`LOOP_AUTHORING.md`-§2 mapping, and the reshaping rules: `docs/SKILL_IMPORT.md`.
 
 **Lifecycle events (Amendment 2 — 2026-07-30):** `new`, `install`, `uninstall`, `pause`, and
 `resume` each append a `loop_events` row (via `db.py record-event`) on their success path, using

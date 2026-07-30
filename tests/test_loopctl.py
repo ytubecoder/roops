@@ -28,6 +28,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOOPCTL = REPO_ROOT / "bin" / "loopctl"
 DB_PY = REPO_ROOT / "bin" / "db.py"
+FIX = os.path.join(os.path.dirname(__file__), "fixtures", "skills")
 
 FAKE_LAUNCHCTL_SRC = """#!/usr/bin/env python3
 import os
@@ -1838,6 +1839,121 @@ class TestLifecycleEvents(LoopsRootTestCase):
         _restore_perms()
         events = _query_loop_events(self.root, "evt-bestfeffort")
         self.assertEqual(events, [])
+
+
+# ---------------------------------------------------------------------------
+# loopctl import --analyze (Task 10)
+# ---------------------------------------------------------------------------
+
+
+class TestImport(LoopsRootTestCase):
+    def test_import_analyze_json(self):
+        r = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--analyze",
+                "--json",
+                "--root",
+                self.root,
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["analyzer_version"], "1")
+        self.assertIn("answers_needed", out)
+
+    def test_import_analyze_missing_path_exits_1(self):
+        r = run_cli(["import", "/nonexistent", "--analyze", "--root", self.root])
+        self.assertEqual(r.returncode, 1)
+
+    def test_import_analyze_blocked_fixture_still_exits_0(self):
+        # A blocked skill (needs-creds: STRIPE_API_KEY) still analyzes fine —
+        # `blocked` is a field in the output, not a CLI failure.
+        r_json = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "needs-creds"),
+                "--analyze",
+                "--json",
+                "--root",
+                self.root,
+            ]
+        )
+        self.assertEqual(r_json.returncode, 0, msg=r_json.stdout + r_json.stderr)
+        out = json.loads(r_json.stdout)
+        self.assertTrue(out["blocked"])
+        self.assertTrue(
+            any(reason.startswith("[blocking]") for reason in out["blocked_reasons"])
+        )
+
+        r_human = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "needs-creds"),
+                "--analyze",
+                "--root",
+                self.root,
+            ]
+        )
+        self.assertEqual(r_human.returncode, 0, msg=r_human.stdout + r_human.stderr)
+        self.assertIn("blocked", r_human.stdout.lower())
+        self.assertTrue(
+            any("[blocking]" in line for line in r_human.stdout.splitlines())
+        )
+
+    def test_import_requires_analyze_or_apply(self):
+        r = run_cli(["import", os.path.join(FIX, "clean-check"), "--root", self.root])
+        self.assertEqual(r.returncode, 2)
+
+    def test_import_analyze_and_apply_mutually_exclusive(self):
+        r = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--analyze",
+                "--apply",
+                "--root",
+                self.root,
+            ]
+        )
+        self.assertEqual(r.returncode, 2)
+
+    def test_import_apply_not_implemented_yet(self):
+        r = run_cli(
+            ["import", os.path.join(FIX, "clean-check"), "--apply", "--root", self.root]
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("not implemented", (r.stdout + r.stderr).lower())
+
+    def test_import_analyze_human_form_shows_header_rubric_and_safety_framing(self):
+        r = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--analyze",
+                "--root",
+                self.root,
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        out = r.stdout
+        # header: proposed name / type / engine / blocked
+        self.assertIn("repo-hygiene-check", out)
+        self.assertIn("agent", out)
+        self.assertIn("blocked", out.lower())
+        # rubric table
+        self.assertIn("q1_purpose", out)
+        self.assertIn("q8_finding_identity", out)
+        # flags line
+        self.assertIn("mutation", out.lower())
+        # precheck proposal, with the safety framing the controller required:
+        # commented lines + an explicit human-review caveat + the heuristic caveat.
+        self.assertIn("# [read-only?]", out)
+        self.assertIn("COMMENTED", out.upper())
+        self.assertIn("heuristic", out.lower())
+        # answers needed, numbered
+        self.assertIn("q4_cadence", out)
 
 
 if __name__ == "__main__":

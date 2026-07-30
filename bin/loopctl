@@ -59,6 +59,9 @@ def _load_module_from_path(path, modname):
 
 loopconf = _load_module_from_path(os.path.join(_HERE, "loopconf.py"), "_loopctl_loopconf")
 schedule = _load_module_from_path(os.path.join(_HERE, "schedule.py"), "_loopctl_schedule")
+skill_import = _load_module_from_path(
+    os.path.join(_HERE, "skill_import.py"), "_loopctl_skill_import"
+)
 
 _DB_BIN = os.path.join(_HERE, "db.py")
 _DASHBOARD_GENERATE = os.path.join(_REPO_ROOT, "dashboard", "generate.py")
@@ -1039,6 +1042,86 @@ def cmd_disposition(args, action):
     return 0
 
 
+def _print_import_analysis(skill_path, analysis):
+    """Human-readable form of an `analyze()` dict — header, rubric table,
+    flags line, precheck proposal (with the safety framing the controller
+    required: commented lines are NOT live, and "[read-only?]" is a
+    heuristic hint, not a guarantee), and a numbered answers-needed list.
+    `--json` bypasses this entirely and prints the dict verbatim."""
+    print(f"skill: {skill_path}")
+    print(f"proposed name : {analysis.get('proposed_name')}")
+    print(f"type          : {analysis.get('type')}")
+    print(f"engine        : {analysis.get('engine')}")
+    print(f"blocked       : {analysis.get('blocked')}")
+    for reason in analysis.get("blocked_reasons") or []:
+        print(f"  - {reason}")
+    print()
+
+    print("Rubric:")
+    rubric = analysis.get("rubric", {}) or {}
+    rows = [
+        {
+            "question": qid,
+            "bucket": (rubric.get(qid) or {}).get("bucket", "—"),
+            "value": (rubric.get(qid) or {}).get("value", "—"),
+        }
+        for qid in skill_import.RUBRIC_IDS
+    ]
+    _print_table(rows, ["question", "bucket", "value"])
+    print()
+
+    flags = analysis.get("flags", {}) or {}
+    print("Flags: " + ", ".join(f"{k}={v}" for k, v in flags.items()))
+    print()
+
+    print(
+        "Precheck proposal — COMMENTED PROPOSALS requiring human review before "
+        'uncommenting any line into precheck.sh; "[read-only?]" is a heuristic '
+        "hint, not a guarantee:"
+    )
+    precheck = analysis.get("precheck_proposal") or []
+    if precheck:
+        for line in precheck:
+            print(f"  {line}")
+    else:
+        print("  (none proposed)")
+    print()
+
+    answers_needed = analysis.get("answers_needed") or []
+    print(f"Answers needed ({len(answers_needed)}):")
+    if not answers_needed:
+        print("  (none)")
+    for i, a in enumerate(answers_needed, start=1):
+        print(f"  {i}. [{a.get('question_id')}] suggested_answerer={a.get('suggested_answerer')}")
+        print(f"     {a.get('prompt')}")
+        options = a.get("options") or []
+        if options:
+            opt_text = "; ".join(
+                f"{o.get('id')} ({o.get('label')})" for o in options
+            )
+            print(f"     options: {opt_text}")
+
+
+def cmd_import(args):
+    if args.apply:
+        print("--apply: not implemented yet (Task 12)", file=sys.stderr)
+        return 2
+
+    try:
+        skill = skill_import.parse_skill(args.skill_path)
+    except skill_import.SkillParseError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    analysis = skill_import.analyze(skill)
+
+    if args.json:
+        print(json.dumps(analysis))
+    else:
+        _print_import_analysis(args.skill_path, analysis)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # argparse wiring
 # ---------------------------------------------------------------------------
@@ -1093,6 +1176,15 @@ def build_parser():
     findings_p = sub.add_parser("findings", parents=[common])
     findings_p.add_argument("loop")
 
+    import_p = sub.add_parser("import", parents=[common])
+    import_p.add_argument("skill_path")
+    import_group = import_p.add_mutually_exclusive_group(required=True)
+    import_group.add_argument("--analyze", action="store_true")
+    import_group.add_argument("--apply", action="store_true")
+    import_p.add_argument("--answers", default=None)
+    import_p.add_argument("--name", default=None)
+    import_p.add_argument("--overwrite", action="store_true")
+
     for verb in ("ack", "dismiss", "snooze", "reopen"):
         vp = sub.add_parser(verb, parents=[common])
         vp.add_argument("loop")
@@ -1126,6 +1218,7 @@ def main(argv=None):
         "resume": cmd_resume,
         "dashboard": cmd_dashboard,
         "findings": cmd_findings,
+        "import": cmd_import,
         "ack": lambda a: cmd_disposition(a, "ack"),
         "dismiss": lambda a: cmd_disposition(a, "dismiss"),
         "snooze": lambda a: cmd_disposition(a, "snooze"),

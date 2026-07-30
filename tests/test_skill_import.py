@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import sys
@@ -671,6 +672,94 @@ class TestApply(unittest.TestCase):
         self.addCleanup(setattr, skill_import, "_SPEC_MD_TEMPLATE", original_template)
         with self.assertRaises(RuntimeError):
             skill_import._render_spec_md("x", {}, {})
+
+    # --- round-2 review: model / schedule shape, non-dict answers ----------
+
+    def test_model_with_internal_whitespace_refused(self):
+        # loop.conf writes model= BARE (unquoted) — a value containing a
+        # space truncates at the space (loopconf's "bare value must not
+        # contain spaces" error) or, with an embedded newline, injects a
+        # bogus extra KEY=value line. Refuse loudly instead.
+        skill, analysis = self._skill_and_analysis()
+        for bad in ("gpt 4 turbo", "a\nb", "  ", ""):
+            answers = self._answers(analysis, model=bad)
+            dest = self._tmpdir()
+            loop_dir = os.path.join(dest, "x")
+            with self.assertRaises(skill_import.SkillApplyError, msg=f"bad={bad!r}"):
+                skill_import.apply(skill, analysis, answers, loop_dir)
+            self.assertFalse(os.path.exists(loop_dir), msg=f"bad={bad!r}")
+
+    def test_model_single_token_accepted(self):
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(analysis, model="gpt-4-turbo")
+        loop_dir = os.path.join(self._tmpdir(), "repo-hygiene-check")
+        skill_import.apply(skill, analysis, answers, loop_dir)
+        conf = _read(os.path.join(loop_dir, "loop.conf"))
+        self.assertIn("model=gpt-4-turbo", conf)
+
+    def test_free_text_cadence_not_matching_schedule_grammar_refused(self):
+        # Identical shape to the model bug: free-text cadence like "daily at
+        # 07:30" would otherwise pass straight through to loop.conf's
+        # schedule= and only fail later, opaquely, inside loopconf.parse().
+        skill, analysis = self._skill_and_analysis()
+        for bad in ("daily at 07:30", "every day at 7:30am", "weekdays"):
+            answers = self._answers(analysis, answers={"q4_cadence": bad})
+            dest = self._tmpdir()
+            loop_dir = os.path.join(dest, "x")
+            with self.assertRaises(skill_import.SkillApplyError, msg=f"bad={bad!r}"):
+                skill_import.apply(skill, analysis, answers, loop_dir)
+            self.assertFalse(os.path.exists(loop_dir), msg=f"bad={bad!r}")
+
+    def test_valid_cadence_grammar_accepted(self):
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(analysis, answers={"q4_cadence": "weekly:mon:08:00"})
+        loop_dir = os.path.join(self._tmpdir(), "repo-hygiene-check")
+        skill_import.apply(skill, analysis, answers, loop_dir)
+        conf = _read(os.path.join(loop_dir, "loop.conf"))
+        self.assertIn("schedule=weekly:mon:08:00", conf)
+
+    def test_non_dict_top_level_answers_refused(self):
+        skill, analysis = self._skill_and_analysis()
+        for bad in (["x"], "hello", 42, []):
+            dest = self._tmpdir()
+            loop_dir = os.path.join(dest, "x")
+            with self.assertRaises(skill_import.SkillApplyError, msg=f"bad={bad!r}"):
+                skill_import.apply(skill, analysis, bad, loop_dir)
+            self.assertFalse(os.path.exists(loop_dir), msg=f"bad={bad!r}")
+
+    def test_none_top_level_answers_still_falls_back_to_empty_dict(self):
+        # None is the documented "no answers given" convenience default —
+        # NOT a malformed shape. It must still refuse (blocked-without-
+        # acknowledgement, for a fixture that's actually blocked) rather
+        # than crash, proving `None` reaches the ordinary refusal path
+        # instead of the new type-guard.
+        skill, analysis = self._skill_and_analysis("needs-creds")
+        with self.assertRaises(skill_import.SkillApplyError):
+            skill_import.apply(skill, analysis, None, os.path.join(self._tmpdir(), "x"))
+
+    def test_backslash_refusal_names_description_not_a_rubric_id(self):
+        # Round-2 review: the field named in the refusal message must be
+        # accurate regardless of whether the value came from an explicit
+        # q1_purpose answer or the skill's own frontmatter description
+        # (rubric "answered" bucket) — it must never claim "q1_purpose" when
+        # the value in question is actually the frontmatter-derived one.
+        skill, analysis = self._skill_and_analysis()
+        # clean-check's frontmatter description doesn't end in a backslash,
+        # so mutate the rubric directly to simulate a frontmatter-derived
+        # value that does, WITHOUT going through an explicit q1_purpose
+        # answer — proving the message names the field, not the source.
+        rubric = json.loads(json.dumps(analysis["rubric"]))
+        rubric["q1_purpose"] = {"bucket": "answered", "value": "ends with backslash\\"}
+        analysis = dict(analysis)
+        analysis["rubric"] = rubric
+        answers = self._answers(analysis)
+        dest = self._tmpdir()
+        try:
+            skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
+            self.fail("expected SkillApplyError")
+        except skill_import.SkillApplyError as e:
+            self.assertIn("description", str(e))
+            self.assertNotIn("q1_purpose", str(e))
 
 
 if __name__ == "__main__":

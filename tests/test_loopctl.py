@@ -2704,6 +2704,88 @@ class TestImportApply(LoopsRootTestCase):
         self.assertFalse(
             os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
         )
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events, [])
+
+    # --- round-2 review: model / schedule shape, non-dict answers ----------
+
+    def test_apply_model_with_internal_whitespace_refused(self):
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        answers["model"] = "gpt 4 turbo"  # loop.conf writes model= bare, unquoted
+        self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
+        )
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events, [])
+
+    def test_apply_free_text_cadence_refused(self):
+        # Same "silently unparseable loop.conf" shape as the model bug: a
+        # free-text q4_cadence answer must be refused, not written through
+        # to schedule= and left for loopctl validate to discover indirectly.
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        answers["answers"]["q4_cadence"] = "daily at 07:30"
+        self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
+        )
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events, [])
+
+    def test_apply_non_dict_top_level_answers_refused(self):
+        # A bare JSON list/string/number as answers.json's whole top-level
+        # value must refuse cleanly (exit 1), the same as every other
+        # malformed-input path — not traceback, and not leave a directory
+        # behind for a corrected retry to spuriously collide with.
+        root = self._scaffold_root()
+        for bad in (["x"], "hello", 42):
+            answers_path = os.path.join(root, "answers.json")
+            with open(answers_path, "w") as f:
+                json.dump(bad, f)
+
+            r = self._loopctl(
+                root,
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--apply",
+                "--answers",
+                answers_path,
+                "--actor",
+                "claude/t",
+            )
+            self.assertEqual(r.returncode, 1, msg=f"bad={bad!r}: {r.stdout + r.stderr}")
+            self.assertFalse(
+                os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check")),
+                msg=f"bad={bad!r}",
+            )
+            events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+            self.assertEqual(events, [], msg=f"bad={bad!r}")
 
 
 if __name__ == "__main__":

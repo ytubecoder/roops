@@ -17,9 +17,29 @@ malicious or oversized skill directory can't blow up the importer.
 """
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_schedule_module():
+    """Dynamically load bin/schedule.py — the single schedule-grammar parser
+    (bin/loopconf.py's own `_load_schedule_module()` does the exact same
+    thing for the exact same reason: `schedule.py` is a frozen sibling
+    module, not a package, so a plain `import schedule` would depend on
+    ambient `sys.path` state this module shouldn't have to assume)."""
+    spec = importlib.util.spec_from_file_location(
+        "_skill_import_schedule", os.path.join(_HERE, "schedule.py")
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_schedule = _load_schedule_module()
 
 ANALYZER_VERSION = "1"
 
@@ -1362,6 +1382,17 @@ _APPLY_TAG_RE = re.compile(r"^[a-z][a-z0-9:_-]{1,40}$")
 _TIMEOUT_S_MIN, _TIMEOUT_S_MAX = 30, 7200
 _RETRY_TRANSIENT_MIN, _RETRY_TRANSIENT_MAX = 0, 3
 
+# loop.conf's KEY=value grammar (bin/loopconf.py's _parse_value, see
+# _quote_conf_value below) treats a BARE (unquoted) value as everything up to
+# the first whitespace — model= is written bare (never quoted), so a `model`
+# containing whitespace silently truncates or, worse, spills the remainder
+# onto what loopconf.parse() then reads as trailing garbage
+# ("bare value must not contain spaces"). A literal newline is even worse: it
+# injects a bogus extra KEY=value-shaped line. Round-2 review: refuse loudly
+# rather than truncate/quote — a model id with whitespace in it is a mistake,
+# not a value worth preserving.
+_MODEL_SHAPE_RE = re.compile(r"\S+")
+
 
 def _quote_conf_value(text: str, field_name: str = "value") -> str:
     """loop.conf's KEY=value grammar (§5.0) is strictly line-based — flatten
@@ -1386,7 +1417,7 @@ def _quote_conf_value(text: str, field_name: str = "value") -> str:
     flat = " ".join((text or "").split())
     if flat.endswith("\\"):
         raise SkillApplyError(
-            f"cannot scaffold: the {field_name} answer ends with a literal "
+            f"cannot scaffold: the {field_name} value ends with a literal "
             "backslash, which loop.conf's KEY=value grammar cannot represent "
             "— edit the answer so it does not end in '\\'"
         )
@@ -1441,9 +1472,13 @@ def _validate_structured_answers(answers: dict) -> None:
         )
 
     model = answers.get("model")
-    if model is not None and (not isinstance(model, str) or not model.strip()):
+    if model is not None and (
+        not isinstance(model, str) or not _MODEL_SHAPE_RE.fullmatch(model)
+    ):
         raise SkillApplyError(
-            f"invalid answers.json: 'model' must be a non-empty string, got {model!r}"
+            "invalid answers.json: 'model' must be a single whitespace-free "
+            f"token (no spaces, tabs, or newlines) — loop.conf writes it as a "
+            f"bare, unquoted value — got {model!r}"
         )
 
     timeout_s = answers.get("timeout_s")
@@ -1503,6 +1538,23 @@ def _render_loop_conf(
         schedule_value = "manual"
     else:
         schedule_value = _resolved(rubric, answers, "q4_cadence") or "manual"
+        # Round-2 review: the same "silently unparseable loop.conf" shape as
+        # the model bug above — free-text cadence like "daily at 07:30"
+        # would otherwise pass straight through to loop.conf's `schedule=`
+        # and only fail later, opaquely, inside `loopconf.parse()`. Validate
+        # against the REAL schedule grammar (bin/schedule.py — the single
+        # parser also used by loopconf.py/loopctl/dashboard) rather than
+        # reinventing a regex, and refuse loudly, naming the accepted forms.
+        try:
+            _schedule.parse(schedule_value)
+        except ValueError as e:
+            raise SkillApplyError(
+                "invalid q4_cadence answer: not a valid schedule spec — "
+                f"got {schedule_value!r} ({e}). Accepted forms: manual | "
+                "interval:<N>m | interval:<N>h | daily:HH:MM | "
+                "times:HH:MM[,HH:MM...] | weekly:<day>:HH:MM | "
+                "monthly:<DD>:HH:MM (docs/LOOP_AUTHORING.md §5)"
+            ) from e
 
     header_comment = (
         "# Scaffolded by `loopctl import --apply` "
@@ -1516,7 +1568,7 @@ def _render_loop_conf(
         "# the report-only floor and were never raised by import — raise them",
         "# deliberately if this loop genuinely needs more (docs/LOOP_AUTHORING.md §4).",
         f"name={name}",
-        f"description={_quote_conf_value(description, 'q1_purpose')}",
+        f"description={_quote_conf_value(description, 'description')}",
         f"type={loop_type}",
         f"engine={engine}",
     ]
@@ -1625,6 +1677,16 @@ def apply(skill: dict, analysis: dict, answers: dict, dest_dir: str) -> list:
     concept of its own and writing into an already-scaffolded `dest_dir`
     (same five filenames every time) is otherwise harmless idempotent
     overwrite."""
+    # Round-2 review: a non-dict, non-None top-level answers.json value
+    # (a bare JSON list/string/number — `["x"]`, `"hello"`, `42`) must refuse
+    # cleanly here rather than traceback out of the first `.get()` call
+    # below. `None` still falls through to `{}` — that's the documented "no
+    # answers given" convenience default, not a malformed-shape error.
+    if answers is not None and not isinstance(answers, dict):
+        raise SkillApplyError(
+            "invalid answers.json: the top-level value must be a JSON "
+            f"object, got {type(answers).__name__}"
+        )
     answers = answers or {}
 
     if answers.get("analyzer_version") != analysis.get("analyzer_version"):

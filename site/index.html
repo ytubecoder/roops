@@ -206,10 +206,10 @@
   .mock-chrome .t { color: var(--sumi); }
   .mock-chrome .t .jp { color: var(--shu); margin-right: 8px; }
   .loop-row {
-    display: grid; grid-template-columns: 44px 1.4fr 1fr 130px 90px; gap: 18px;
+    display: grid; grid-template-columns: 44px 1.4fr 1fr 130px 64px; gap: 18px;
     align-items: center; padding: 15px 22px; min-width: 640px;
     border-bottom: 1px solid rgba(28,26,23,.1);
-    transition: background .25s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background .25s cubic-bezier(0.16, 1, 0.3, 1), opacity .8s cubic-bezier(0.16, 1, 0.3, 1);
   }
   .loop-row:hover { background: rgba(28,26,23,.035); }
   .stamp {
@@ -228,16 +228,63 @@
   .rake-spark circle.run-warn { fill: var(--ochre); }
   .rake-spark circle.run-alert { fill: var(--shu); }
   .last-run { font-family: var(--mono); font-size: 11.5px; color: var(--nibi); text-align: right; }
-  .sev { font-family: var(--mono); font-size: 10px; letter-spacing: .2em; text-align: right; color: var(--nibi); }
+
+  /* ---------- the off switch — 巡 rounds on / 休 rest (lifted from ui.html) ---------- */
+  .sw-cell { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+  .rsw { background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; border-radius: 9px; }
+  .rsw:focus-visible { outline: 1px solid var(--shu); outline-offset: 3px; }
+  .sw-track {
+    display: block; position: relative; width: 36px; height: 18px; border-radius: 9px;
+    border: 1px solid rgba(28,26,23,.25); background: var(--washi);
+    transition: background .8s cubic-bezier(0.16, 1, 0.3, 1),
+                border-color .8s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .rsw:hover .sw-track { border-color: var(--nibi); }
+  .sw-knob {
+    position: absolute; top: 2px; left: 20px; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--koke);
+    transition: left .8s cubic-bezier(0.16, 1, 0.3, 1), background .8s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .rsw[aria-checked="false"] .sw-track { background: var(--washi-shade); }
+  .rsw[aria-checked="false"] .sw-knob { left: 2px; background: var(--nibi); }
+  .sw-lab { font-family: var(--serif); font-size: 12px; line-height: 1; color: var(--nibi); width: 13px; flex: none; }
+
+  /* a loop at rest — 休止 */
+  .loop-row.is-off { opacity: .5; }
+  .loop-row.is-off:hover { opacity: .84; background: rgba(28,26,23,.02); }
+  .loop-row.is-off .stamp { background: none; border: 1.5px solid var(--nibi); color: var(--nibi); }
 
   .findings-note {
     display: grid; grid-template-columns: auto 1fr; gap: 24px; align-items: start;
     padding: 26px 22px; background: var(--washi-shade); min-width: 640px;
   }
   .stems { height: 96px; }
+  .stems g { transition: opacity .8s cubic-bezier(0.16, 1, 0.3, 1); }
   .findings-note .fx b { font-weight: 500; display: block; margin-bottom: 6px; font-size: 15px; }
-  .findings-note .fx p { font-size: 13.5px; color: #55503F; max-width: 62ch; }
   .findings-note .fx .lv { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; margin-top: 10px; display: block; color: var(--ai); }
+
+  /* ---------- the arrangement — findings rows with hanko buttons ---------- */
+  .arr-row {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 10px 18px; padding: 11px 0; border-bottom: 1px solid rgba(28,26,23,.12);
+  }
+  .arr-row:last-of-type { border-bottom: none; }
+  .arr-t { font-family: var(--mono); font-size: 12.5px; color: #55503F; max-width: 52ch; transition: opacity .8s cubic-bezier(0.16, 1, 0.3, 1); }
+  .arr-btns { display: flex; gap: 8px; flex: none; align-items: center; }
+  .arr-row.stamped .arr-t { opacity: .45; }
+  .hanko-btn {
+    width: 34px; height: 34px; border-radius: 4px; border: 1.5px solid var(--shu);
+    background: transparent; color: var(--shu); font-family: var(--seal); font-size: 17px;
+    cursor: pointer; transform: rotate(-2deg);
+    transition: background .3s, color .3s, transform .15s;
+  }
+  .hanko-btn:hover { background: rgba(199,62,43,.08); }
+  .hanko-btn:active { transform: rotate(-2deg) scale(.94); background: var(--shu); color: var(--washi); }
+  .hanko-btn:disabled { opacity: .25; cursor: default; }
+  .stamp-mark {
+    font-family: var(--seal); font-size: 18px; color: var(--shu);
+    transform: rotate(-4deg); display: inline-block; margin-left: 8px;
+  }
 
   /* ---------- footer ---------- */
   footer {
@@ -255,6 +302,7 @@
   @media (prefers-reduced-motion: reduce) {
     .reveal { opacity: 1; transform: none; transition: none; }
     .enso-path { animation: none; stroke-dashoffset: 0; }
+    .loop-row, .sw-track, .sw-knob, .hanko-btn, .arr-t, .stems g { transition: none; }
   }
 
   /* ---------- mobile collapse ---------- */
@@ -429,54 +477,68 @@
 
       <div class="loop-row">
         <div class="stamp ok">済</div>
-        <div class="loop-name">tls-certs<small>daily 06:00</small></div>
+        <div class="loop-name">tls-certs<small>daily 06:00</small><small>MA 間</small></div>
         <svg class="rake-spark" viewBox="0 0 180 22"><line x1="0" y1="11" x2="180" y2="11"/><circle cx="18" cy="11" r="3" class="run-ok"/><circle cx="45" cy="11" r="3" class="run-ok"/><circle cx="72" cy="11" r="3" class="run-warn"/><circle cx="99" cy="11" r="3" class="run-ok"/><circle cx="126" cy="11" r="3" class="run-ok"/><circle cx="153" cy="11" r="3" class="run-ok"/><circle cx="176" cy="11" r="3" class="run-ok"/></svg>
         <div class="last-run">last 巡 06:00 · 2m11s</div>
-        <div class="sev">MA 間</div>
+        <div class="sw-cell">
+          <button class="rsw" type="button" role="switch" aria-checked="true" aria-label="toggle rounds for tls-certs"><span class="sw-track"><span class="sw-knob"></span></span></button>
+          <span class="sw-lab" aria-hidden="true">巡</span>
+        </div>
       </div>
 
       <div class="loop-row">
         <div class="stamp warn">注</div>
-        <div class="loop-name">dead-links<small>daily 06:10</small></div>
+        <div class="loop-name">dead-links<small>daily 06:10</small><small>SOE 副</small></div>
         <svg class="rake-spark" viewBox="0 0 180 22"><line x1="0" y1="11" x2="180" y2="11"/><circle cx="18" cy="11" r="3" class="run-ok"/><circle cx="45" cy="11" r="3" class="run-ok"/><circle cx="72" cy="11" r="3" class="run-ok"/><circle cx="99" cy="11" r="3" class="run-warn"/><circle cx="126" cy="11" r="3" class="run-warn"/><circle cx="153" cy="11" r="3" class="run-warn"/><circle cx="176" cy="11" r="3" class="run-warn"/></svg>
         <div class="last-run">last 巡 06:10 · 3m02s</div>
-        <div class="sev">SOE 副</div>
+        <div class="sw-cell">
+          <button class="rsw" type="button" role="switch" aria-checked="true" aria-label="toggle rounds for dead-links"><span class="sw-track"><span class="sw-knob"></span></span></button>
+          <span class="sw-lab" aria-hidden="true">巡</span>
+        </div>
       </div>
 
       <div class="loop-row">
-        <div class="stamp alert">警</div>
-        <div class="loop-name">deps-drift<small>daily 06:20</small></div>
+        <div class="stamp alert" id="dd-stamp">警</div>
+        <div class="loop-name">deps-drift<small>daily 06:20</small><small>SHIN 真</small></div>
         <svg class="rake-spark" viewBox="0 0 180 22"><line x1="0" y1="11" x2="180" y2="11"/><circle cx="18" cy="11" r="3" class="run-ok"/><circle cx="45" cy="11" r="3" class="run-ok"/><circle cx="72" cy="11" r="3" class="run-ok"/><circle cx="99" cy="11" r="3" class="run-ok"/><circle cx="126" cy="11" r="3" class="run-ok"/><circle cx="153" cy="11" r="3" class="run-alert"/><circle cx="176" cy="11" r="3" class="run-alert"/></svg>
         <div class="last-run">last 巡 06:20 · 1m44s</div>
-        <div class="sev">SHIN 真</div>
+        <div class="sw-cell">
+          <button class="rsw" type="button" role="switch" aria-checked="true" aria-label="toggle rounds for deps-drift"><span class="sw-track"><span class="sw-knob"></span></span></button>
+          <span class="sw-lab" aria-hidden="true">巡</span>
+        </div>
       </div>
 
       <div class="loop-row">
         <div class="stamp ok">済</div>
-        <div class="loop-name">backups-verify<small>weekly mon</small></div>
+        <div class="loop-name">backups-verify<small>weekly mon</small><small>MA 間</small></div>
         <svg class="rake-spark" viewBox="0 0 180 22"><line x1="0" y1="11" x2="180" y2="11"/><circle cx="40" cy="11" r="3" class="run-ok"/><circle cx="110" cy="11" r="3" class="run-ok"/><circle cx="176" cy="11" r="3" class="run-ok"/></svg>
         <div class="last-run">last 巡 mon 07:00</div>
-        <div class="sev">MA 間</div>
+        <div class="sw-cell">
+          <button class="rsw" type="button" role="switch" aria-checked="true" aria-label="toggle rounds for backups-verify"><span class="sw-track"><span class="sw-knob"></span></span></button>
+          <span class="sw-lab" aria-hidden="true">巡</span>
+        </div>
       </div>
 
-      <div class="findings-note">
+      <div class="findings-note" id="arr">
         <svg class="stems" viewBox="0 0 90 96" aria-hidden="true">
-          <line x1="20" y1="96" x2="26" y2="10" stroke="#C73E2B" stroke-width="2.5"/>
-          <circle cx="26" cy="8" r="5" fill="#C73E2B"/>
-          <line x1="45" y1="96" x2="54" y2="38" stroke="#A87A2A" stroke-width="2"/>
-          <circle cx="54" cy="35" r="4" fill="#A87A2A"/>
-          <line x1="68" y1="96" x2="74" y2="66" stroke="#6B7A5C" stroke-width="1.8"/>
-          <circle cx="74" cy="63" r="3.5" fill="#6B7A5C"/>
+          <g data-stem="shin"><line x1="20" y1="96" x2="26" y2="10" stroke="#C73E2B" stroke-width="2.5"/><circle cx="26" cy="8" r="5" fill="#C73E2B"/></g>
+          <g data-stem="soe"><line x1="45" y1="96" x2="54" y2="38" stroke="#A87A2A" stroke-width="2"/><circle cx="54" cy="35" r="4" fill="#A87A2A"/></g>
+          <g data-stem="hikae"><line x1="68" y1="96" x2="74" y2="66" stroke="#6B7A5C" stroke-width="1.8"/><circle cx="74" cy="63" r="3.5" fill="#6B7A5C"/></g>
           <line x1="6" y1="95" x2="86" y2="95" stroke="#1C1A17" stroke-opacity=".5" stroke-width="2"/>
         </svg>
         <div class="fx">
           <b>The arrangement — findings for deps-drift, 巡 of 06:20</b>
-          <p>SHIN 真 — critical CVE in a pinned transitive dependency · SOE 副 — 2 lockfile drifts aging past 48h · HIKAE 控 — license audit clean, 18 of 43 packages pinned. Stamp to prune: <span style="font-family:var(--mono); font-size:12px">roops stamp deps-drift F-114 --note "upgrade scheduled friday"</span></p>
-          <span class="lv">EFFECTIVE STATUS = THE TALLEST STEM IN THE VASE</span>
+          <div class="arr-row" data-f="shin"><span class="arr-t">SHIN 真 — critical CVE in a pinned transitive dependency</span>
+            <span class="arr-btns"><button class="hanko-btn" data-k="承" title="approve — becomes an order">承</button><button class="hanko-btn" data-k="認" title="acknowledge">認</button><button class="hanko-btn" data-k="休" title="snooze">休</button><button class="hanko-btn" data-k="済" title="settle">済</button></span></div>
+          <div class="arr-row" data-f="soe"><span class="arr-t">SOE 副 — 2 lockfile drifts aging past 48h</span>
+            <span class="arr-btns"><button class="hanko-btn" data-k="承" title="approve — becomes an order">承</button><button class="hanko-btn" data-k="認" title="acknowledge">認</button><button class="hanko-btn" data-k="休" title="snooze">休</button><button class="hanko-btn" data-k="済" title="settle">済</button></span></div>
+          <div class="arr-row" data-f="hikae"><span class="arr-t">HIKAE 控 — license audit clean, 18 of 43 packages pinned</span>
+            <span class="arr-btns"><button class="hanko-btn" data-k="承" title="approve — becomes an order">承</button><button class="hanko-btn" data-k="認" title="acknowledge">認</button><button class="hanko-btn" data-k="休" title="snooze">休</button><button class="hanko-btn" data-k="済" title="settle">済</button></span></div>
+          <span class="lv">EFFECTIVE STATUS = THE TALLEST STEM IN THE VASE — STAMP TO PRUNE</span>
         </div>
       </div>
     </div>
-    <p class="quiet reveal" style="margin-top:28px">This is a still. The full interface concept — running rounds, the live engawa view, stamping — is a page of its own: <a href="./ui.html">enter the garden</a>.</p>
+    <p class="quiet reveal" style="margin-top:28px">This is a working excerpt — toggles and stamps are simulated. The full interface concept — running rounds, the live engawa view, the ledger — is a page of its own: <a href="./ui.html">enter the garden</a>.</p>
   </section>
 
   <footer>
@@ -493,6 +555,48 @@
     for (const e of entries) if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
   }, { threshold: 0.12 });
   document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+  // rounds switch — settle a row into 休止 rest and back (simulation)
+  document.querySelectorAll('.rsw').forEach(function (sw) {
+    sw.addEventListener('click', function () {
+      var on = sw.getAttribute('aria-checked') === 'true';
+      sw.setAttribute('aria-checked', on ? 'false' : 'true');
+      var row = sw.closest('.loop-row');
+      row.classList.toggle('is-off', on);
+      var lab = sw.parentElement.querySelector('.sw-lab');
+      if (lab) lab.textContent = on ? '休' : '巡';
+    });
+  });
+  // hanko stamping — prune a stem, recompute the tallest (simulation)
+  var sevRank = { shin: 3, soe: 2, hikae: 1 };
+  function tallest() {
+    var t = 0;
+    document.querySelectorAll('.arr-row:not(.stamped)').forEach(function (r) {
+      t = Math.max(t, sevRank[r.getAttribute('data-f')] || 0);
+    });
+    return t;
+  }
+  document.querySelectorAll('.arr-row .hanko-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var row = btn.closest('.arr-row');
+      if (row.classList.contains('stamped')) return;
+      row.classList.add('stamped');
+      row.querySelectorAll('.hanko-btn').forEach(function (b) { b.disabled = true; });
+      var mark = document.createElement('span');
+      mark.className = 'stamp-mark';
+      mark.textContent = btn.getAttribute('data-k');
+      row.querySelector('.arr-btns').appendChild(mark);
+      var stemEl = document.querySelector('.stems [data-stem="' + row.getAttribute('data-f') + '"]');
+      if (stemEl) stemEl.style.opacity = '.18';
+      var dd = document.getElementById('dd-stamp');   // deps-drift row's status stamp
+      var t = tallest();
+      if (dd) {
+        if (t === 3) { dd.className = 'stamp alert'; dd.textContent = '警'; }
+        else if (t === 2) { dd.className = 'stamp warn'; dd.textContent = '注'; }
+        else { dd.className = 'stamp ok'; dd.textContent = '済'; }
+      }
+    });
+  });
 </script>
 </body>
 </html>

@@ -162,6 +162,7 @@ Some loops capture more structured world state than a fleet row and a markdown r
 ./bin/loopctl uninstall <name>  # remove from launchd
 ./bin/loopctl pause <name>      # stop firing, keep the definition
 ./bin/loopctl resume <name>
+./bin/loopctl import <skill>    # convert an Agent Skill into a loop (--analyze / --apply)
 ./bin/loopctl dashboard         # regenerate dashboard/loops.html
 ./bin/roopctl <anything>        # alias — the rebrand's only mechanical concession
 ```
@@ -195,6 +196,7 @@ Prompts are engine-neutral by design, so a loop isn't married to the model that 
 ```
 bin/run-loop.sh          # the runner: lock → precheck → inject → engine → validate → promote
 bin/loopctl              # the CLI you actually use
+bin/skill_import.py      # static skill parser + analyzer + apply() behind `loopctl import`
 engines/                 # codex · claude · fake
 loops.d/<name>/          # loop.conf · precheck.sh · prompt.md · dashboard.json · SPEC.md
                          #   + render.sh (executable = page-enabled)
@@ -204,6 +206,7 @@ state/loops.sqlite       # runs · heartbeats · metrics · findings · disposit
 reports/<name>/          # per-run markdown + atomically-promoted latest.* (suppression-filtered)
 dashboard/loops.html     # static: fleet view + per-loop panels + findings
 dashboard/reports.html   # static: report pages per loop, totals chips
+skills/loops/            # distributable Agent Skill — the front door agents install
 site/                    # roops brand · explainer + UI-concept pages · design system
 tests/run-tests.sh       # 1000 hermetic tests — no network, no real engines
 ```
@@ -213,6 +216,7 @@ tests/run-tests.sh       # 1000 hermetic tests — no network, no real engines
 | File | Purpose |
 |---|---|
 | [`docs/LOOP_AUTHORING.md`](docs/LOOP_AUTHORING.md) | **Start here to build a loop** — twelve-question intake interview, contract, worked example |
+| [`docs/SKILL_IMPORT.md`](docs/SKILL_IMPORT.md) | **Convert an existing Agent Skill into a loop** — rubric, buckets, reshaping rules, the trust section, answers.json |
 | [`docs/REPORT_PAGES.md`](docs/REPORT_PAGES.md) | Build a report page — when to add one, render.sh contract, the publication gate |
 | [`docs/INTERFACES.md`](docs/INTERFACES.md) | Frozen mechanical contract every component implements |
 | [`docs/HARNESS_PLAN.md`](docs/HARNESS_PLAN.md) | Finalized harness design (plan-checked 3× with codex) |

@@ -2,9 +2,6 @@
 
 ## WIP
 
-### B-11: Dashboard: mockup-parity right-side controls (rounds switch + hanko finding buttons)
-Priority: medium | Status: in-progress
-
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)
@@ -26,6 +23,12 @@ Priority: medium | Status: for-review
 Priority: medium | Status: for-review
 
 ### B-10: Report-pages follow-up wave: KV single-sourcing, kit.css as the real kit, self-containment by reference
+Priority: medium | Status: for-review
+
+### B-11: Dashboard: mockup-parity right-side controls (rounds switch + hanko finding buttons)
+Priority: medium | Status: for-review
+
+### B-12: Skill import (loopctl import) + agent surface: tags, provenance, AXI CLI, loops skill
 Priority: medium | Status: for-review
 
 ## Backlog

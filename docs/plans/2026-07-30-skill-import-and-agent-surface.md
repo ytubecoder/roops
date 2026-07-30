@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** shipped 2026-07-31 — merged to `main` (`f4fc522`), 1000 hermetic tests green. As-built notes: §Shipped at the end of this doc.
+
 **Goal:** Implement `docs/SKILL_IMPORT_AND_AGENT_SURFACE_PLAN.md` — tags/provenance foundation, live-run visibility, per-finding paste blocks, `loopctl import` (analyze/apply), AXI CLI polish, and the distributable `loops` skill.
 
 **Architecture:** Additive amendment to a frozen contract: new `loop.conf` key (`tags`), new sqlite table (`loop_events`), new stdlib-Python module (`bin/skill_import.py`) wired into `bin/loopctl`, and dashboard/generate.py rendering additions. Import is static (zero model invocations); all gates (validate → run → install) unchanged, plus one new mechanical install precondition.
@@ -821,3 +823,60 @@ CLEAN_ANSWERS = {
 - **Spec coverage:** design §3.1→Task 1/4/5; §3.2→Task 2/3; §3.3→Task 6; §3.4→Task 5/7; §4.1→Task 8/9/10; §4.3→Task 11; §4.2→Task 12; §2.2 precondition→Task 13; §4.2 success criterion→Task 14; §5.1→Task 15/16; §5.2→Task 17; §8 phases→plan order. Design §7 (futures) intentionally has no tasks.
 - **Placeholders:** Task 12 Step 1 sketches four tests by name with one-line specs — the implementer writes them out in the shown style; all other code blocks are complete. Integration line numbers are anchors as of 2026-07-30 (`bin/loopctl` @ HEAD 9286ea6) — re-grep if drifted.
 - **Type consistency:** `parse_skill`/`analyze`/`apply` signatures consistent across Tasks 8/9/10/12; event enum consistent across Tasks 2/3/12; rubric ids `q1_purpose`…`q11_budget` consistent across Tasks 9/11/12.
+
+
+---
+
+## 19. Shipped (as built)
+
+**Merged to `main` 2026-07-31** as `f4fc522` (branch `worktree-skill-import-agent-surface`, 38 commits).
+Suite on merged `main`: **1000 hermetic tests** — 633 python + 367 shell (adapters 158 · examples 35 ·
+runner 135 · runner_pages 23 · skill_import_e2e 16).
+
+### Shipped as planned
+All 18 tasks, in plan order. Every task passed a task-scoped spec+quality review; the whole branch then
+passed a final review, a fix wave, and a scoped re-review.
+
+### Deltas from the plan
+- **Tasks 15 + 16 were executed as one dispatch** — both were AXI polish on the same `bin/loopctl`
+  functions; splitting them would have bought a merge conflict, not isolation.
+- **Task 17 (`skills/loops/SKILL.md`) was farmed to an external agent** (peon/grok) in its own worktree
+  and merged after foreman review — it is a new file plus one README paragraph, the only genuinely
+  parallelizable task in the plan. Consequence: it was written before Tasks 13/15/16 landed and
+  documented *intended* surface; Task 18's closeout verified every claim against shipped code.
+- **The `--apply` answers contract changed during review.** The plan's free-text `q11_budget` was being
+  regex-scraped into `loop.conf` (shipping `model=override` from "no model override needed", and
+  `timeout_s=30` from "timeout 30 minutes" — 60× wrong, both passing `validate`). Replaced by optional
+  structured top-level keys `tags` / `model` / `timeout_s` / `retry_transient`, validated against
+  `loopconf`'s own ranges and refused loudly; q11 prose is now SPEC-only and sets no config.
+- **The "derived default" answers fallback in the plan does not exist and was not built** — no
+  `answers_needed`-eligible rubric item carries a computed default. Omitted ids stay `[FILL:]` and
+  `validate` catches them. Controller ruling: explicit answers beat rubric values; rubric fills only
+  ids absent from answers.
+- **`needs_attention` is computed by importing `dashboard/generate.py`'s own `compute_light`/
+  `is_died`/`is_stale`/`is_overdue`**, not reimplemented — ruling made after the two surfaces were
+  found to disagree. The status display-row fallback is for headline TEXT only, never health accounting.
+
+### Deferred (not built, recorded deliberately)
+- `bin/skill_import.py` is 1757 lines (parser + analyzer + apply + four scaffold templates). A split
+  needs its own plan.
+- `db.py query_last_runs` has no tie-break, so on a same-second tie between two terminal runs
+  `loopctl status --json` can show one run in the per-loop row while its own fleet line counts the
+  other. One line: `ORDER BY started_at DESC, rowid DESC`.
+- Suite hermeticity gap: something in `run-tests.sh` opens the real `~/projects/loops` sqlite
+  (read-only — `-shm` mtime advances). Bisected to *not* be `test_loopctl.py`; culprit unfound.
+- Residual `[read-only?]` classifier escapes (`curl --output`/`-T`/`--upload-file`/`-d @file`,
+  clustered short opts, `find -execdir`/`-okdir`/`-fprintf`, process substitution). Enumeration is
+  unbounded — the answer is the advisory framing in `docs/SKILL_IMPORT.md` §6, not another regex round.
+
+### Merge reconciliation (roops rebrand)
+`main` took the roops rebrand after this branch was cut and restructured the exact `bin/loopctl`
+parser region the branch rewrote — putting real defaults back on every subparser, which is the shape
+that caused the Critical. The merge kept this branch's two-flavor parser and adapted `main`'s new
+verbs into it (`set-schedule`/`dashboard` → `common_sub`; `serve` → a new no-`--from` flavor), and
+added a guard `main` did not need (pre-verb `--from` with `serve` now exits 2 instead of being
+silently swallowed). `main`'s new SPEC §12 ("Page output") was carried into the shared template with
+the exactly-eleven-sections guard relaxed to at-least-eleven; extra sections render as `none` so
+imports still scaffold validate-clean. The dashboard took `main`'s visual system with this branch's
+semantics re-integrated into it. Verified post-merge: every one of `main`'s 457 test functions
+survives alongside the branch's 214, and the Critical probe passes on the merged binary.

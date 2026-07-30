@@ -1,5 +1,74 @@
 # Session Log
 
+## 2026-07-31 — Skill import + agent surface: 18-task feature, shipped and merged through the roops rebrand
+
+### Summary
+- **`loopctl import <skill-path> --analyze/--apply`** — turns an existing Agent Skill into a loop via a
+  purely static (no model, no network, zero-token) gap analysis against the eleven-question rubric.
+  `--analyze` returns `answers_needed` with per-item `suggested_answerer` (agent vs user); `--apply`
+  scaffolds a validate-clean loop and records provenance. Never installs. Backed by new
+  `bin/skill_import.py`; recipe in `docs/SKILL_IMPORT.md`; front door for agents in `skills/loops/SKILL.md`.
+- **Agent surface** — `tags=` in loop.conf, a `loop_events` audit table with `--actor`, dashboard tag
+  chips/provenance/recent-events strip, running/overdue badges, per-finding paste-into-your-agent
+  blocks, an install run-first precondition, and AXI CLI polish (fleet aggregate line, status blanking
+  fix, definitive empty states, content-first bare invocation).
+- Executed as 18 tasks via subagent-driven development (fresh implementer per task + spec/quality review
+  + fix rounds), then a final whole-branch review, one fix wave, and a scoped re-review. Merged to `main`
+  as `f4fc522`. 1000 hermetic tests green (633 python + 367 shell).
+
+### Lessons Learned
+- **Accepted: reviewers that RUN the binary, not just read the diff.** The two most valuable findings of
+  the run were both found by execution — the analyzer labelling `git status && rm -rf build` as
+  `[read-only?]`, and `loopctl --root <sandbox> status` silently returning the **live** fleet. Neither
+  is visible by reading, and the test suites of both tasks were green.
+- **Accepted: a negative control in the fix re-review.** Before accepting the `--root` fix, the reviewer
+  re-ran the probe against the pre-fix tree and confirmed `--root <sandbox> pause <production-loop>`
+  really did write `enabled=false` into the production loop.conf. A fix verified only forward is a fix
+  you hope works.
+- **Rejected: tightening the read-only classifier further.** Each adversarial round closed the named
+  escapes and revealed a new variant of the same family (long-form flags → clustered short opts →
+  `-execdir` → process substitution). Stopped at two rounds and made the label advisory by contract
+  (`docs/SKILL_IMPORT.md` §6 enumerates its own residual escapes). The safety property is that the line
+  is COMMENTED, not that the label is right.
+- **Gotcha: argparse subparser defaults clobber top-level values.** `_SubParsersAction.__call__` parses a
+  verb's trailing tokens into a fresh namespace and copies every key onto the outer one — so a subparser
+  `--root` with a real default silently overwrites the value the top-level parser already resolved. Fix
+  is `default=argparse.SUPPRESS` on the subparser copy. Promoted to CLAUDE.md: this is re-hittable by
+  anyone who "simplifies" the two parser flavors into one.
+- **Gotcha: free-text answers became config.** `--apply` regex-scraped `q11_budget` prose, shipping
+  `model=override` from "no model override needed" and `timeout_s=30` from "timeout 30 minutes" — both
+  blessed by `validate`. Same family as the existing "model-emitted metrics get believed" gotcha, now
+  applied to config. Replaced with structured keys validated against `loopconf`'s ranges, refused loudly.
+- **Gotcha: two agents sharing one worktree.** Parallelizing Task 12's fix round against Tasks 15+16 made
+  each see the other's mid-write TDD state as transient suite failures. Non-overlapping *files* is not
+  the same as non-overlapping *tree*; the honest fix is one authoritative suite run at closeout with
+  nothing else in flight.
+- **Gotcha: `git checkout --merge <file>` relabels conflict markers** from `HEAD`/`main` to
+  `ours`/`theirs`, silently breaking a marker-matching resolver script.
+- **Gotcha: a merge-parity check against `HEAD` during an uncommitted merge is vacuous.** Comparing
+  `main`'s test functions to `HEAD:` compared main to itself. The real check reads the working tree —
+  and it was worth doing: it proved all 457 of main's test functions survived.
+
+### Decisions
+- **CLI-first; MCP explicitly rejected for v1** (design doc §2.1). Rationale from axi.md's benchmarks
+  (schema overhead inflates every turn) plus the house doctrine already in CLAUDE.md. If a non-shell
+  context ever needs access, the answer is a thin subprocess wrapper over `loopctl --json`.
+- **No human approval gate for agents adding loops; observability + one mechanical precondition instead.**
+  Provenance/events/live-run indicator answer "what did an agent just do", and `install` refuses without
+  a prior non-failed supervised run — an agent can satisfy it itself, so it enforces gauntlet ORDER, not
+  human presence.
+- **The dashboard is canonical for `needs_attention`.** `loopctl` imports `generate.py`'s own
+  `compute_light`/`is_died`/`is_stale`/`is_overdue` rather than reimplementing them, so an agent reading
+  `status --json` and a human reading the page cannot disagree.
+- **Explicit answers beat rubric-derived values; there is no "derived default" fallback.** Ids with
+  neither stay `[FILL:]` and `validate` catches them.
+- **`import --apply --overwrite` refuses on an installed loop** (uninstall first), and the runner now
+  guards `schedule=manual` against launchd firings — closing the one path where an acknowledged-blocked
+  skill could keep firing on a bootstrapped plist.
+- **Merge reconciliation preferred main's visuals and this branch's semantics**, with the parser kept
+  from this branch: taking main's `common_base`/`common` structure would have silently reintroduced the
+  Critical.
+
 ## 2026-07-30 — Report-pages follow-up wave: KV single-sourcing, kit.css becomes the real kit, self-containment by reference
 
 ### Summary

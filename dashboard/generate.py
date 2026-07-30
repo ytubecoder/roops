@@ -728,7 +728,7 @@ main { padding: 0 0 8px; }
 }
 .sw.on { border: 1.5px solid var(--koke); color: var(--koke); }
 .sw.off { border: 1.5px solid var(--hair2); color: var(--nibi); }
-.sw.off.paused { border: 1.5px dashed var(--ochre); color: var(--ochre); }
+.sw.off.paused { border: 1.5px dashed var(--hair2); color: var(--nibi); }
 .sw.manual { border: 1.5px dashed var(--hair2); color: var(--nibi); }
 
 /* small ink dots — run history, heartbeats */

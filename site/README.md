@@ -12,8 +12,9 @@ truth — edit here, then publish per `workflows/publish.txt`.
 
 | Page | What it is |
 |---|---|
-| `index.html` | Landing — "welcome to the zen garden": what Roops is, the three pillars (karesansui / bushidō / ikebana), vocabulary, palette, marks, taglines |
+| `index.html` | Product page — "welcome to the zen garden": what Roops is, how a round works (the five moves + the CLI strip), the three pillars (karesansui / bushidō / ikebana), and the interface as a dashboard still |
 | `ui.html` | UI concept "The Garden" — loop matrix with per-loop tokonoma output alcoves, per-run token costs, off switches, ensō-as-spinner, 縁側 live drop-in panel, pancaked findings, 掃 swept pile, 帳 metrics ledger, 承 approve → orders queue |
+| `brandkit/index.html` | Public brand kit — the mark (open ensō, 巡 seal, lockup), color, type & rules, working vocabulary, voice |
 
 Single static pages, vanilla HTML/CSS/JS, no build step. Design system rules live in
 `CLAUDE.md` (this directory); `garden-desktop.png` is a rendered reference of the ui.html

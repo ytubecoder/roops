@@ -21,7 +21,7 @@
    - Navigate to http://127.0.0.1:8664/<page>.html; check console for errors; screenshot changed zones
    - index.html gotcha: scroll-reveal content is opacity-0 below the fold — force with `document.querySelectorAll('.reveal').forEach(el=>el.classList.add('in'))` before element screenshots
    - ui.html: exercise whatever interaction the edit touched (stamp, toggle, engawa, lightbox) via evaluate; re-check at 390px if layout changed
-   - brandkit/index.html gotcha: verify at http://127.0.0.1:8664/brandkit/ (folder-with-index, not /brandkit/index.html); same .reveal force-gotcha as index.html applies
+   - brandkit/index.html gotcha: verify at http://127.0.0.1:8664/brandkit/ (folder-with-index; both URL forms work, but verify the folder form — it's the production URL shape); same .reveal force-gotcha as index.html applies
    - Expected outcome: 0 console errors (favicon 404 excepted locally), zones render correctly, no horizontal overflow at 390px
    - If fails: fix the page, re-verify before proceeding
 
@@ -49,8 +49,9 @@
    - If fails: check `gh api repos/ytubecoder/ytubecoder.github.io/pages/builds/latest --jq .status`
 
 7. Taildrop copies to the desktop machine
-   - Run: tailscale file cp ~/projects/loops/site/index.html ~/projects/loops/site/ui.html ~/projects/loops/site/brandkit/index.html desktop-7dms6vl:
-   - Expected outcome: TAILDROP_OK-style clean exit (version-mismatch warning is harmless); files land in the desktop's Tailscale inbox/Downloads (the brandkit file arrives as a second flat index.html — receiver renames; say so in the caption when sending)
+   - Run: cp ~/projects/loops/site/brandkit/index.html /tmp/roops-brandkit.html
+   - Run: tailscale file cp ~/projects/loops/site/index.html ~/projects/loops/site/ui.html /tmp/roops-brandkit.html desktop-7dms6vl:
+   - Expected outcome: TAILDROP_OK-style clean exit (version-mismatch warning is harmless); three distinctly-named files land in the desktop's Tailscale inbox/Downloads
    - If fails: `tailscale status` — confirm desktop-7dms6vl is online, retry
 
 ## Verification

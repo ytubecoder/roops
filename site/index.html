@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Roops — ループス · Scheduled agent rounds</title>
-<meta name="description" content="Roops is a thin harness for recurring agent jobs. Scheduled rounds, kept like a garden: raked every morning, read-only on patrol, quiet when all is well.">
+<meta name="description" content="Roops is a thin harness for recurring agent jobs. Scheduled rounds, kept like a garden: raked every morning, touched by no one, quiet when all is well.">
 <meta property="og:title" content="Roops — ループス">
 <meta property="og:description" content="Scheduled agent rounds, kept like a garden. Read-only on patrol, quiet when all is well — and every finding is an action in waiting.">
 <meta property="og:type" content="website">
@@ -315,36 +315,36 @@
       <div class="step reveal">
         <span class="no">一</span>
         <div>
-          <span class="t">The schedule fires — launchd, not a daemon.</span>
-          <span class="d">Nothing runs between rounds. The operating system wakes the loop at its hour and hands it a clean process.</span>
+          <h3 class="t">The schedule fires — launchd, not a daemon.</h3>
+          <p class="d">Nothing runs between rounds. The operating system wakes the loop at its hour and hands it a clean process.</p>
         </div>
       </div>
       <div class="step reveal" style="--i:1">
         <span class="no">二</span>
         <div>
-          <span class="t">A fresh agent walks the patrol — read-only by enforcement, not by promise.</span>
-          <span class="d">No memory of the last round, and no way to alter this one: write sandbox, restricted tools, no network. All of it sits beneath the model; none of it is prompt text.</span>
+          <h3 class="t">A fresh agent walks the patrol — read-only by enforcement, not by promise.</h3>
+          <p class="d">No memory of the last round, and no way to alter this one: write sandbox, restricted tools, no network. All of it sits beneath the model; none of it is prompt text.</p>
         </div>
       </div>
       <div class="step reveal" style="--i:2">
         <span class="no">三</span>
         <div>
-          <span class="t">Findings come back arranged by severity — shin 真, soe 副, hikae 控.</span>
-          <span class="d">Few stems, deliberate placement, everything that does not belong cut away. An empty arrangement is the healthy one.</span>
+          <h3 class="t">Findings come back arranged by severity — shin 真, soe 副, hikae 控.</h3>
+          <p class="d">Few stems, deliberate placement, everything that does not belong cut away. An empty arrangement is the healthy one.</p>
         </div>
       </div>
       <div class="step reveal" style="--i:3">
         <span class="no">四</span>
         <div>
-          <span class="t">You stamp — <span class="hn">認</span> ack · <span class="hn">休</span> snooze · <span class="hn">済</span> dismiss · <span class="hn">承</span> approve.</span>
-          <span class="d">The first three quiet the garden, and the loop stops raising what you have already answered. The fourth is not a quieting.</span>
+          <h3 class="t">You stamp — <span class="hn">認</span> ack · <span class="hn">休</span> snooze · <span class="hn">済</span> settle · <span class="hn">承</span> approve.</h3>
+          <p class="d">The first three quiet the garden, and the loop stops raising what you have already answered. The fourth is not a quieting.</p>
         </div>
       </div>
       <div class="step reveal" style="--i:4">
         <span class="no">五</span>
         <div>
-          <span class="t">An approved finding becomes an order, executed on its own audited path — never mid-patrol.</span>
-          <span class="d">Dry-run, execute, confirm — each step with its own record, and none of it inside the round that proposed it.</span>
+          <h3 class="t">An approved finding becomes an order, executed on its own audited path — never mid-patrol.</h3>
+          <p class="d">Dry-run, execute, confirm — each step with its own record, and none of it inside the round that proposed it.</p>
         </div>
       </div>
     </div>
@@ -360,7 +360,7 @@
           <div class="cli-row"><span class="k ok">済</span><span>backups-verify</span><span class="meta">weekly mon 07:00</span><span class="meta">—</span></div>
         </div>
         <div class="cli-cmd"><span class="p">$</span>roops stamp deps-drift F-114 <span class="arg">--note "upgrade scheduled friday"</span></div>
-        <div class="cli-res"><span class="k">認</span>F-114 stamped <span class="meta">· deps-drift · note kept · the loop stops raising it</span></div>
+        <div class="cli-res"><span class="k">認</span>F-114 stamped <span class="meta">· deps-drift · note kept · noted on the finding</span></div>
       </div>
     </div>
   </section>

@@ -16,7 +16,7 @@ all remain "loops". Do not rename mechanical internals from here.
 
 ## Non-negotiables (design system — every addition must conform)
 
-- **Tokens** (CSS vars in both files): sumi `#1C1A17` ink · washi `#F2EDE3` paper ·
+- **Tokens** (CSS vars in all three pages): sumi `#1C1A17` ink · washi `#F2EDE3` paper ·
   shu `#C73E2B` vermillion · ai `#2E4A5B` indigo · nibi `#8C8578` · koke `#6B7A5C` moss ·
   ochre `#A87A2A`. No new colors. Never pure black. No purple, no glows, no gradients.
 - **Vermillion is the ONLY accent** and appears only where a hanko would: seals, alerts,
@@ -31,7 +31,7 @@ all remain "loops". Do not rename mechanical internals from here.
 - **Motion is slow and breathing:** `cubic-bezier(0.16,1,0.3,1)`, transitions ≥.8s,
   ambient cycles 3–6s. The ensō draw-on IS the spinner. Every animation needs a
   `prefers-reduced-motion` fallback; every layout must hold at 390px with zero horizontal
-  overflow. Both files have existing blocks for each — extend them, don't fork.
+  overflow. All three pages have existing blocks for each — extend them, don't fork.
 - **Mock data is genericized on purpose** (tls-certs, dead-links, deps-drift…). NEVER put
   internal loop names (`ads-*`) or real business data on these public pages. Numbers must
   look organic, never round.

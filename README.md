@@ -1,4 +1,4 @@
-# loops
+# roops - the zen garden of loop harnesses
 
 ![Python 3](https://img.shields.io/badge/python-3-blue)
 ![Platform: macOS / launchd](https://img.shields.io/badge/platform-macOS%20%2F%20launchd-lightgrey)

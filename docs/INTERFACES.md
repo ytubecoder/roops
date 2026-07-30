@@ -785,8 +785,12 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   a loop does NOT exempt it from either — `stale` keys on `installed` (plist presence) alone,
   so a paused loop whose last run is overdue still renders `stale` and still counts toward
   `needs_attention`. Only the no-plist state is staleness-exempt (the pre-existing 2026-07-30
-  amendment above). Open question, deliberately unresolved: whether a paused loop *should* be
-  staleness-exempt — today it is not.
+  amendment above). **(Resolved 2026-07-30):** paused loops stay staleness-visible — settled,
+  do not relitigate. Pause has no expiry (unlike `snooze --until`), so a paused-and-forgotten
+  loop is exactly the failure mode `needs_attention` exists to catch; exempting it would
+  create a silent way to turn a loop off forever. A deliberate long-term off is
+  `set-schedule manual`, which removes the plist and lands in the staleness-exempt 休
+  no-schedule state. Paused → keep nagging; manual → exempt. That split is the design.
 - **Died-run detection (§4.6):** a run row with `finished_at IS NULL` older than
   `timeout_s + 120s` renders as `died` (red, harness-problem marker) and counts toward
   `needs_attention`.

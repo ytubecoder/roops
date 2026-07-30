@@ -13,6 +13,7 @@
   @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;500;600&family=Yuji+Syuku&display=swap');
   :root {
     --sumi: #1C1A17;        /* 墨 ink */
+    --sumi-deep: #16130F;   /* outer shell */
     --washi: #F2EDE3;       /* 生成 kinari paper */
     --washi-shade: #E9E2D3; /* layered paper */
     --shu: #C73E2B;         /* 朱 vermillion — the ONLY accent */
@@ -27,7 +28,7 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
-    background: var(--sumi);
+    background: var(--sumi-deep);
     color: var(--sumi);
     font-family: var(--serif);
     line-height: 1.7;
@@ -65,7 +66,7 @@
     font-weight: 500; font-size: clamp(28px, 4vw, 44px);
     letter-spacing: -.01em; line-height: 1.25; max-width: 18ch; margin-bottom: 20px;
   }
-  p.lede { font-size: clamp(16px, 1.6vw, 19px); max-width: 58ch; color: var(--sumi); }
+  p.lede { font-size: clamp(16px, 1.6vw, 19px); max-width: 58ch; color: #3A362F; }
 
   /* ---------- brand-kit header ---------- */
   .bk-header { padding-bottom: clamp(32px, 5vw, 64px); }
@@ -89,7 +90,7 @@
   .lex-row .k.marubatsu { display: flex; align-items: baseline; gap: 4px; font-size: 20px; white-space: nowrap; }
   .lex-row .r { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; color: var(--nibi); }
   .lex-row .r b { color: var(--sumi); font-weight: 400; display: block; font-size: 13px; margin-bottom: 2px; }
-  .lex-row .d { font-size: 15px; color: var(--sumi); }
+  .lex-row .d { font-size: 15px; color: #3A362F; }
   .lex-row .d code { font-family: var(--mono); font-size: 12.5px; background: var(--washi-shade); padding: 2px 7px; border-radius: 2px; }
 
   /* ---------- palette ---------- */
@@ -129,7 +130,7 @@
   .spec-sample--mono { font-family: var(--mono); font-weight: 400; font-size: clamp(15px, 1.6vw, 18px); color: var(--ai); letter-spacing: .02em; }
   .spec-meta { display: flex; flex-direction: column; gap: 8px; }
   .spec-stack { font-family: var(--mono); font-size: 11.5px; color: var(--nibi); line-height: 1.6; }
-  .spec-role { font-size: 13.5px; color: var(--sumi); }
+  .spec-role { font-size: 13.5px; color: #3A362F; }
 
   /* ---------- taglines ---------- */
   .taglines { margin-top: 44px; }

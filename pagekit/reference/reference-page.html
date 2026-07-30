@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exposure audit — fixture</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><path d='M5 1 L9.5 9 H0.5 Z' fill='%23279a83'/></svg>">
+<style>
+:root{
+  --bg:#0e0f12; --panel:#14161a; --line:#22252b; --line2:#2c3037;
+  --ink:#e7e9ec; --sub:#9aa1ab; --mut:#5d6570;
+  --accent:#279a83; --high:#d84f63; --med:#b48c1a;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+::selection{background:var(--accent);color:#06120f}
+html{color-scheme:dark}
+body{
+  background:var(--bg);color:var(--ink);
+  font:16px/1.55 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:var(--accent);text-underline-offset:3px}
+.wrap{max-width:1060px;margin:0 auto;padding:56px 40px 80px}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.brow,.frow,.stat{animation:rise .45s cubic-bezier(.16,1,.3,1) both;
+  animation-delay:calc(var(--i,0)*35ms)}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* header */
+.hd{display:grid;grid-template-columns:2fr 1fr;gap:32px;align-items:end;
+  padding-bottom:36px}
+.kicker{font:600 11px/1 var(--mono);letter-spacing:.22em;color:var(--accent);
+  text-transform:uppercase;margin-bottom:22px}
+.hero{font-size:clamp(64px,9vw,104px);font-weight:700;letter-spacing:-.045em;
+  line-height:.9;font-family:var(--mono)}
+.hero .unit{display:block;font:400 15px/1.4 -apple-system,sans-serif;
+  letter-spacing:0;color:var(--sub);margin-top:14px}
+.hero .unit strong{color:var(--ink);font-weight:600}
+.meta{font:12px/2 var(--mono);color:var(--mut);text-align:right}
+.meta b{color:var(--sub);font-weight:500}
+
+/* stat strip */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);
+  border-top:1px solid var(--line)}
+.stat{padding:20px 20px 24px;border-left:1px solid var(--line)}
+.stat:first-child{border-left:0;padding-left:0}
+.stat .n{font:600 30px/1 var(--mono);letter-spacing:-.02em}
+.stat .l{font-size:12px;color:var(--mut);margin-top:8px;
+  display:flex;align-items:center;gap:7px}
+.dot{width:8px;height:8px;border-radius:2px;display:inline-block}
+.n.hi,.cell-sev.high{color:var(--high)} .n.md,.cell-sev.med{color:var(--med)}
+
+/* bars */
+h2{font-size:14px;font-weight:600;letter-spacing:.01em;margin:52px 0 6px}
+.sub{font-size:13px;color:var(--mut);margin-bottom:22px}
+.legend{display:flex;gap:22px;font-size:12px;color:var(--sub);margin-bottom:18px}
+.legend span{display:flex;align-items:center;gap:7px}
+.mk{width:10px;height:10px;flex:none}
+.brow{display:grid;grid-template-columns:190px 1fr 44px;gap:14px;
+  align-items:center;padding:5px 0}
+.blabel{font:12px/1.2 var(--mono);color:var(--sub);text-align:right;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btrack{display:flex;gap:2px;height:14px}
+.seg{height:14px;border-radius:0 4px 4px 0;transition:filter .15s}
+.seg:first-child{border-radius:2px 4px 4px 2px}
+.seg.high{background:var(--high)} .seg.med{background:var(--med)}
+.seg:hover{filter:brightness(1.25)}
+.bcount{font:600 13px var(--mono);color:var(--sub)}
+
+/* groups */
+.group{margin-top:46px}
+.ghead{display:flex;align-items:baseline;justify-content:space-between;
+  border-bottom:1px solid var(--line2);padding-bottom:10px}
+.ghead h3{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.gmeta{font:12px var(--mono);color:var(--mut)}
+.gblurb{font-size:13px;color:var(--mut);margin:10px 0 4px;max-width:62ch}
+.frow{border-bottom:1px solid var(--line)}
+.frow summary{display:grid;grid-template-columns:16px 180px 1fr 52px;gap:14px;
+  align-items:center;padding:13px 8px;cursor:pointer;list-style:none;
+  transition:background .15s}
+.frow summary::-webkit-details-marker{display:none}
+.frow summary:hover{background:var(--panel)}
+.frow summary:active{transform:scale(.997)}
+.frow[open] summary{background:var(--panel)}
+.cell-src{font:500 13px var(--mono)}
+.cell-path{font:12px var(--mono);color:var(--sub);overflow-wrap:anywhere}
+.cell-sev{font:600 11px var(--mono);letter-spacing:.08em;text-align:right}
+.fbody{padding:6px 8px 22px 30px;max-width:74ch}
+.fbody h4{font:600 11px/1 var(--mono);letter-spacing:.18em;color:var(--mut);
+  text-transform:uppercase;margin:16px 0 8px}
+.explain{font-size:14px;color:var(--ink)}
+.sol{font-size:13.5px;color:var(--sub)}
+.docs{margin-top:12px;font-size:13px}
+.path{color:var(--sub)}
+
+/* footer + tooltip */
+footer{margin-top:64px;border-top:1px solid var(--line);padding-top:18px;
+  font:11.5px/1.9 var(--mono);color:var(--mut)}
+footer .cmd{color:var(--sub)}
+#tip{position:fixed;z-index:10;background:#1b1e24;border:1px solid var(--line2);
+  color:var(--ink);font:12px var(--mono);padding:5px 9px;border-radius:5px;
+  pointer-events:none;white-space:nowrap;
+  box-shadow:0 4px 16px rgba(4,6,10,.5)}
+#tip[hidden]{display:none}
+
+@media(max-width:760px){
+  .wrap{padding:32px 18px 56px}
+  .hd{grid-template-columns:1fr;gap:18px}
+  .meta{text-align:left}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .stat:nth-child(3){border-left:0;padding-left:0}
+  .brow{grid-template-columns:110px 1fr 36px}
+  .frow summary{grid-template-columns:16px 1fr 52px}
+  .cell-path{grid-column:2/4}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hd">
+    <div>
+      <p class="kicker">Automic Vault · exposure audit</p>
+      <p class="hero">5<span class="unit"><strong>open findings</strong>
+        on this machine — 3 high · 2 medium</span></p>
+    </div>
+    <p class="meta">
+      host <b>fixture</b><br>
+      scanner <b>av 0.0-stub</b><br>
+      scanned <b>2026-07-30 07:52</b><br>
+      rendered <b>2026-07-30 07:54</b>
+    </p>
+  </header>
+
+  <div class="stats">
+    <div class="stat" style="--i:1"><p class="n hi">3</p>
+      <p class="l"><span class="dot" style="background:var(--high)"></span>high severity</p></div>
+    <div class="stat" style="--i:2"><p class="n md">2</p>
+      <p class="l"><span class="dot" style="background:var(--med)"></span>medium severity</p></div>
+    <div class="stat" style="--i:3"><p class="n">3</p>
+      <p class="l">tools affected</p></div>
+    <div class="stat" style="--i:4"><p class="n">5</p>
+      <p class="l">exposed paths</p></div>
+  </div>
+
+  <h2>Findings by tool</h2>
+  <p class="sub">Count of open findings per detector source.</p>
+  <div class="legend">
+    <span><svg class="mk" viewBox="0 0 10 10"><path d="M5 1 L9.5 9 H0.5 Z" fill="var(--high)"/></svg>high</span>
+    <span><svg class="mk" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1" fill="var(--med)"/></svg>medium</span>
+  </div>
+  <div class="bars">
+<div class="brow" style="--i:0"><span class="blabel">github-cli</span><span class="btrack"><span class="seg high" style="width:100.00%" data-tip="github-cli — 2 high"></span></span><span class="bcount">2</span></div>
+<div class="brow" style="--i:1"><span class="blabel">path-hygiene</span><span class="btrack"><span class="seg med" style="width:100.00%" data-tip="path-hygiene — 2 medium"></span></span><span class="bcount">2</span></div>
+<div class="brow" style="--i:2"><span class="blabel">ssh-keys</span><span class="btrack"><span class="seg high" style="width:50.00%" data-tip="ssh-keys — 1 high"></span></span><span class="bcount">1</span></div>
+  </div>
+
+<section class="group">
+  <header class="ghead">
+    <h3>Other exposures</h3>
+    <span class="gmeta">5 findings</span>
+  </header>
+  <p class="gblurb"></p>
+  <div class="glist">
+<details class="frow" style="--i:1">
+  <summary>
+    <span class="cell-mk"><svg class="mk" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1 L9.5 9 H0.5 Z" fill="var(--high)"/></svg></span>
+    <span class="cell-src">github-cli</span>
+    <span class="cell-path"><span class="path">/Users/taro/.config/gh/hosts.yml:3</span></span>
+    <span class="cell-sev high">HIGH</span>
+  </summary>
+  <div class="fbody">
+    <p class="explain">A plaintext OAuth token is stored in the GitHub CLI hosts file.</p>
+    <h4>Suggested remediation</h4>
+    <p class="sol">Move the token into an encrypted store and remove the plaintext copy.</p>
+    <p class="docs"><a href="https://example.invalid/docs/github-cli" rel="noopener">detector documentation</a></p>
+  </div>
+</details>
+<details class="frow" style="--i:2">
+  <summary>
+    <span class="cell-mk"><svg class="mk" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1 L9.5 9 H0.5 Z" fill="var(--high)"/></svg></span>
+    <span class="cell-src">github-cli</span>
+    <span class="cell-path"><span class="path">/Users/taro/.config/gh/config.yml</span></span>
+    <span class="cell-sev high">HIGH</span>
+  </summary>
+  <div class="fbody">
+    <p class="explain">The CLI config grants credential helpers broad scope.</p>
+    <h4>Suggested remediation</h4>
+    <p class="sol">Restrict helper scope to the hosts that need it.</p>
+    <p class="docs"><a href="https://example.invalid/docs/github-cli" rel="noopener">detector documentation</a></p>
+  </div>
+</details>
+<details class="frow" style="--i:3">
+  <summary>
+    <span class="cell-mk"><svg class="mk" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1 L9.5 9 H0.5 Z" fill="var(--high)"/></svg></span>
+    <span class="cell-src">ssh-keys</span>
+    <span class="cell-path"><span class="path">/Users/taro/.ssh/id_ed25519</span></span>
+    <span class="cell-sev high">HIGH</span>
+  </summary>
+  <div class="fbody">
+    <p class="explain">An SSH private key is stored without a passphrase.</p>
+    <h4>Suggested remediation</h4>
+    <p class="sol">Re-key with a passphrase or move the key to a hardware token.</p>
+    <p class="docs"><a href="https://example.invalid/docs/ssh" rel="noopener">detector documentation</a></p>
+  </div>
+</details>
+<details class="frow" style="--i:4">
+  <summary>
+    <span class="cell-mk"><svg class="mk" viewBox="0 0 10 10" aria-hidden="true"><rect x="1" y="1" width="8" height="8" rx="1" fill="var(--med)"/></svg></span>
+    <span class="cell-src">path-hygiene</span>
+    <span class="cell-path"><span class="path">/opt/fixturebrew/bin</span></span>
+    <span class="cell-sev med">MED</span>
+  </summary>
+  <div class="fbody">
+    <p class="explain">A group-writable directory appears early in PATH.</p>
+    <h4>Suggested remediation</h4>
+    <p class="sol">Tighten the directory mode or move it later in PATH.</p>
+    <p class="docs"><a href="https://example.invalid/docs/path" rel="noopener">detector documentation</a></p>
+  </div>
+</details>
+<details class="frow" style="--i:5">
+  <summary>
+    <span class="cell-mk"><svg class="mk" viewBox="0 0 10 10" aria-hidden="true"><rect x="1" y="1" width="8" height="8" rx="1" fill="var(--med)"/></svg></span>
+    <span class="cell-src">path-hygiene</span>
+    <span class="cell-path"><span class="path">/Users/taro/bin</span></span>
+    <span class="cell-sev med">MED</span>
+  </summary>
+  <div class="fbody">
+    <p class="explain">A user-writable directory shadows system binaries.</p>
+    <h4>Suggested remediation</h4>
+    <p class="sol">Audit the directory contents and PATH ordering.</p>
+    <p class="docs"><a href="https://example.invalid/docs/path" rel="noopener">detector documentation</a></p>
+  </div>
+</details>
+  </div>
+</section>
+
+  <footer>
+    data <span class="cmd">fixture-scan.json</span> · produced by
+    <span class="cmd">av scan --json</span> (exit 0 even with findings — alert on count)<br>
+    render <span class="cmd">render_report.py</span> · raw envelope embedded as
+    <span class="cmd">#scan-data</span> · remediation for this machine follows the
+    native headless plan, not <span class="cmd">av save</span>
+  </footer>
+</div>
+<div id="tip" hidden></div>
+<script type="application/json" id="report-data">{"meta": {"loop": "kagi-ban", "run_id": "reference", "generated_at": "2026-07-29T23:54:58Z", "title": "Exposure audit \u2014 fixture", "page_class": "snapshot", "host": "fixture", "av_version": "0.0-stub", "scanned_at": "2026-07-30T07:52:51+08:00", "source_file": "fixture-scan.json", "totals": {"findings": 5, "sev_high": 3, "sev_medium": 2, "tools": 3, "paths": 5}}, "data": {"findings": [{"source": "github-cli", "severity": "high", "affected": [{"path": "/Users/taro/.config/gh/hosts.yml", "line": 3}], "explanation": "A plaintext OAuth token is stored in the GitHub CLI hosts file.", "solution": "Move the token into an encrypted store and remove the plaintext copy.", "docs_url": "https://example.invalid/docs/github-cli", "homepage": "https://cli.github.com"}, {"source": "github-cli", "severity": "high", "affected": [{"path": "/Users/taro/.config/gh/config.yml", "line": null}], "explanation": "The CLI config grants credential helpers broad scope.", "solution": "Restrict helper scope to the hosts that need it.", "docs_url": "https://example.invalid/docs/github-cli", "homepage": "https://cli.github.com"}, {"source": "ssh-keys", "severity": "high", "affected": [{"path": "/Users/taro/.ssh/id_ed25519", "line": null}], "explanation": "An SSH private key is stored without a passphrase.", "solution": "Re-key with a passphrase or move the key to a hardware token.", "docs_url": "https://example.invalid/docs/ssh", "homepage": "https://www.openssh.com"}, {"source": "path-hygiene", "severity": "medium", "affected": [{"path": "/opt/fixturebrew/bin", "line": null}], "explanation": "A group-writable directory appears early in PATH.", "solution": "Tighten the directory mode or move it later in PATH.", "docs_url": "https://example.invalid/docs/path", "homepage": "https://example.invalid"}, {"source": "path-hygiene", "severity": "medium", "affected": [{"path": "/Users/taro/bin", "line": null}], "explanation": "A user-writable directory shadows system binaries.", "solution": "Audit the directory contents and PATH ordering.", "docs_url": "https://example.invalid/docs/path", "homepage": "https://example.invalid"}]}}</script>
+<script>
+(function(){
+  var tip=document.getElementById('tip');
+  document.querySelectorAll('[data-tip]').forEach(function(el){
+    el.addEventListener('pointerenter',function(){
+      tip.textContent=el.dataset.tip;tip.hidden=false;});
+    el.addEventListener('pointermove',function(e){
+      tip.style.left=Math.min(e.clientX+14,window.innerWidth-tip.offsetWidth-8)+'px';
+      tip.style.top=(e.clientY+18)+'px';});
+    el.addEventListener('pointerleave',function(){tip.hidden=true;});
+  });
+})();
+</script>
+</body>
+</html>

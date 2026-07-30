@@ -453,7 +453,11 @@ def _page_state(root, name, conn, envelope_mod):
     if os.path.isdir(report_dir):
         try:
             dated = sorted(
-                (entry for entry in os.listdir(report_dir) if _DATED_PAGE_RE.match(entry)),
+                (
+                    entry
+                    for entry in os.listdir(report_dir)
+                    if _DATED_PAGE_RE.match(entry)
+                ),
                 reverse=True,
             )
         except OSError:
@@ -1219,9 +1223,7 @@ def _render_loop_row(loop, now):
     links = []
     if page.get("href"):
         badge = (
-            ' <span class="badge page-stale">stale</span>'
-            if page.get("stale")
-            else ""
+            ' <span class="badge page-stale">stale</span>' if page.get("stale") else ""
         )
         links.append(f'<a href="{e(page["href"])}">page</a>{badge}')
     if loop["report_href"]:
@@ -1641,7 +1643,7 @@ def _render_page(
 
     top = (
         '<div class="topstrip"><span class="seal-mini">巡</span>'
-        "<h1>loops<small>the garden · 庭</small></h1>"
+        "<h1>roops<small>the garden · 庭</small></h1>"
         '<div class="head-stats">'
         f"{top_chips}{na_chip}{standing_chip}"
         f'<span class="chip">spend today <b>{e(spend_today_html)}</b></span>'
@@ -1733,9 +1735,10 @@ def _render_reports_page(loops, now):
             if len(dated) > 30
             else ""
         )
-        history = " ".join(
-            f'<a href="../reports/{e(name)}/{e(d)}">{e(d)}</a>' for d in shown
-        ) + more
+        history = (
+            " ".join(f'<a href="../reports/{e(name)}/{e(d)}">{e(d)}</a>' for d in shown)
+            + more
+        )
         entries.append(
             f'<section class="report-entry"><h2>{head}</h2>'
             f'<div class="chips">{chips}</div>'
@@ -1777,7 +1780,7 @@ def _wrap_html(top, body):
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        "<title>loops — 庭 the garden</title>"
+        "<title>roops — 庭 the garden</title>"
         f"<style>{CSS}</style></head><body>"
         f'<div class="sheet">{top}{body}'
         "<footer>loops harness — static sheet · report/propose-only · "
@@ -1829,9 +1832,7 @@ def main(argv=None):
         help="reports HTML path (default: <root>/dashboard/reports.html)",
     )
     args = parser.parse_args(argv)
-    out = generate(
-        root=args.root, out_file=args.out, reports_out_file=args.reports_out
-    )
+    out = generate(root=args.root, out_file=args.out, reports_out_file=args.reports_out)
     print(out)
     return 0
 

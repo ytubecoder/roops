@@ -1,4 +1,4 @@
-# loops
+# roops — ループス
 
 ![Python 3](https://img.shields.io/badge/python-3-blue)
 ![Platform: macOS / launchd](https://img.shields.io/badge/platform-macOS%20%2F%20launchd-lightgrey)
@@ -8,7 +8,7 @@
 
 ```
                  ┌──────────────────────────────────────────────────┐
-                 │  L O O P S                                       │
+                 │  R O O P S                                       │
                  │  ═════════                                       │
    ⏰ 09:00 ─────▶│  precheck ─▶ engine ─▶ contract ─▶ findings      │─────┐
                  └──────────────────────────────────────────────────┘     │
@@ -20,6 +20,8 @@
 ```
 
 > Scheduled agents that watch your machine and shut up when told.
+
+**Roops** (ループス) — "loop" is already a Japanese loanword (ループ, *rūpu*); Roops is that word borrowed back. The mechanical names predate the rebrand and deliberately keep it: the CLI is `loopctl` (alias `roopctl`), loops live in `loops.d/`, launchd labels are `com.loops.*`. Brand, explainer, and UI-concept pages: [`site/`](site/).
 
 A thin harness for putting work you already do by hand onto a schedule. You describe the job in plain markdown, `launchd` fires it, a deterministic script of yours gathers the facts, a headless model interprets them, and what comes back is a **contract** — findings, metrics, and a report that land on a static dashboard.
 
@@ -34,14 +36,14 @@ Findings keep the same ID across runs, so the same problem is the same row tomor
 ### One-liner
 
 ```bash
-git clone https://github.com/ytubecoder/loops.git ~/projects/loops && cd ~/projects/loops && bash tests/run-tests.sh
+git clone https://github.com/ytubecoder/roops.git ~/projects/loops && cd ~/projects/loops && bash tests/run-tests.sh
 ```
 
 No installer and no dependencies — it's Python 3 and bash against the CLIs you already have. The test suite is hermetic (no network, no real engines); if it passes, the harness works.
 
 ### Or tell your agent
 
-> Clone https://github.com/ytubecoder/loops to ~/projects/loops, run `bash tests/run-tests.sh` to confirm the harness is sound, then read `docs/LOOP_AUTHORING.md` and walk me through the intake interview to build my first loop.
+> Clone https://github.com/ytubecoder/roops to ~/projects/loops, run `bash tests/run-tests.sh` to confirm the harness is sound, then read `docs/LOOP_AUTHORING.md` and walk me through the intake interview to build my first loop.
 
 ### After install
 
@@ -156,6 +158,7 @@ Some loops capture more structured world state than a fleet row and a markdown r
 ./bin/loopctl pause <name>      # stop firing, keep the definition
 ./bin/loopctl resume <name>
 ./bin/loopctl dashboard         # regenerate dashboard/loops.html
+./bin/roopctl <anything>        # alias — the rebrand's only mechanical concession
 ```
 
 ### Findings
@@ -194,6 +197,7 @@ state/loops.sqlite       # runs · heartbeats · metrics · findings · disposit
 reports/<name>/          # per-run markdown + atomically-promoted latest.* (suppression-filtered)
 dashboard/loops.html     # static: fleet view + per-loop panels + findings
 dashboard/reports.html   # static: report pages per loop, totals chips
+site/                    # roops brand · explainer + UI-concept pages · design system
 tests/run-tests.sh       # 661 hermetic tests — no network, no real engines
 ```
 
@@ -210,6 +214,7 @@ tests/run-tests.sh       # 661 hermetic tests — no network, no real engines
 | [`docs/LOOPS_WARMSTART.md`](docs/LOOPS_WARMSTART.md) | Loop candidate selection state |
 | [`docs/OPEN_THREADS_WARMSTART.md`](docs/OPEN_THREADS_WARMSTART.md) | Unfinished design threads — read before assuming something is settled |
 | [`docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md`](docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md) | The five ads loops: current state, open issues with re-check commands, acceptance bar |
+| [`site/CLAUDE.md`](site/CLAUDE.md) | The roops design system — tokens, seal-font rule, concept vocabulary |
 | [`CLAUDE.md`](CLAUDE.md) | Cold-start pointers + non-negotiables for agents |
 
 ## Notes

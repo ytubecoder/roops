@@ -1,11 +1,14 @@
-# roops — brand + UI concept site for the "Roops" rebrand
+# site/ — brand + UI concept pages for the "Roops" rebrand
 
-Static two-page site, no build step. Deploy = push to `main` (GitHub Pages, legacy build,
-~30-60s). Live: https://ytubecoder.github.io/roops/ (landing) and `/ui.html` (UI concept).
+Static two-page site, no build step. Formerly its own repo with GitHub Pages hosting
+(`ytubecoder/roops`, deleted 2026-07-30 after merging here); the pages are no longer
+hosted — serve locally from `site/` to view.
 
-**Status of the rebrand:** CANDIDATE only. The actual harness (`~/projects/loops`) is
-unchanged — repo name, `loopctl`, docs all still "loops". Do not rename anything in the
-harness from here; if the rename ever lands it starts with a `loopctl` alias, not a rewrite.
+**Status of the rebrand:** APPLIED at brand level 2026-07-30 — repo name, README, and
+dashboard header say roops, and `bin/roopctl` exists as an alias. Mechanical names are
+deliberately unchanged per the settled alias-not-a-rewrite rule: `loopctl`, `loops.d/`,
+`state/loops.sqlite`, `com.loops.*` launchd labels, and `docs/INTERFACES.md` vocabulary
+all remain "loops". Do not rename mechanical internals from here.
 
 ## Non-negotiables (design system — every addition must conform)
 

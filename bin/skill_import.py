@@ -155,13 +155,21 @@ _SHELL_FENCE_LANGS = frozenset({"bash", "sh", "shell"})
 # Redirect forms tolerated as "not dangerous" for the read-only check: stderr
 # to /dev/null or to stdout, both common in read-only diagnostic one-liners
 # (e.g. the clean-check fixture's `2>/dev/null`). Anything else involving
-# `>`/`>>` is treated as a write.
-_SAFE_REDIRECTS_RE = re.compile(r"[12]?>&[12]|[12]?>\s*/dev/null")
+# `>`/`>>` is treated as a write. Trailing `(?![^\s])` boundary (fix-round-2
+# minor) so `>/dev/nullx` (a real file, not /dev/null) isn't matched as a
+# prefix of the tolerated form.
+_SAFE_REDIRECTS_RE = re.compile(r"(?:[12]?>&[12]|[12]?>\s*/dev/null)(?![^\s])")
 
 # `<repo>`/`<p>`/`<target>`-style doc placeholders — these fixtures' own
 # convention (e.g. `git -C <repo> status`) — contain a literal `>` that must
 # not be mistaken for shell redirection by the dangerous-redirect check.
-_PLACEHOLDER_RE = re.compile(r"<[^<>\s]+>")
+# fix-round-2 #1: whitespace-delimited on BOTH sides (not just non-nested) —
+# the naive version matched `<payload>` inside `cat <payload>/etc/hosts`
+# (real stdin+stdout redirection: `<payload` then `>/etc/hosts`), swallowing
+# the dangerous `>` along with it. Requiring the token to be flanked by
+# whitespace/string-edges keeps `git -C <repo> status` safe while refusing to
+# strip `<payload>` when it's glued to what follows (`<a>b`, `<url>/tmp/x`).
+_PLACEHOLDER_RE = re.compile(r"(?<![^\s])<[^<>\s]+>(?![^\s])")
 
 RUBRIC_IDS = (
     "q1_purpose",
@@ -472,7 +480,9 @@ def _build_blocked_info(skill: dict, flags: dict) -> tuple:
     the SAME source as the mcp mention. Every applicable check appends a
     reason — including an informational, non-blocking one when mcp has a CLI
     equivalent — so the mcp decision is always visible, not just when it
-    blocks."""
+    blocks. Every entry is prefixed `[blocking] ` or `[info] ` (fix-round-2
+    #3 minor) so a downstream printer can discriminate without parsing the
+    trailing "— not blocked" text."""
     blocked = False
     reasons = []
 
@@ -480,22 +490,24 @@ def _build_blocked_info(skill: dict, flags: dict) -> tuple:
         blocked = True
         matched, location = _first_match_location(RE_CREDENTIALS, skill)
         if matched:
-            reasons.append(f"credentials: matched {matched!r} in {location}")
+            reasons.append(f"[blocking] credentials: matched {matched!r} in {location}")
         else:
-            reasons.append("credentials: matched credential-like text in the skill")
+            reasons.append(
+                "[blocking] credentials: matched credential-like text in the skill"
+            )
 
     if flags.get("mcp"):
         mcp_matched, mcp_location = _first_match_location(RE_MCP, skill)
         cli_matched, cli_location = _find_cli_equivalent_same_file(skill, mcp_location)
         if cli_matched:
             reasons.append(
-                f"mcp: CLI equivalent {cli_matched!r} found in {cli_location} — not blocked"
+                f"[info] mcp: CLI equivalent {cli_matched!r} found in {cli_location} — not blocked"
             )
         else:
             blocked = True
             label = mcp_matched or "mcp__*"
             loc = mcp_location or "the skill"
-            reasons.append(f"mcp: {label!r} with no CLI equivalent in {loc}")
+            reasons.append(f"[blocking] mcp: {label!r} with no CLI equivalent in {loc}")
 
     return blocked, reasons
 
@@ -582,9 +594,14 @@ def _xargs_subcommand(tokens_after_xargs: list):
 
 
 def _segment_is_read_only(segment: str) -> bool:
-    """Classify a single `|`/`;`/`&&`/`||`-delimited segment by its leading
-    command per the brief's scoped-read-forms table. `xargs` is resolved to
-    the command it actually invokes rather than being treated as opaque."""
+    """Classify a single `|`/`;`/`&&`/`||`/`&`-delimited segment by its
+    leading command per the brief's scoped-read-forms table. `xargs` is
+    resolved to the command it actually invokes rather than being treated
+    as opaque. fix-round-2 #2: a segment containing `$(` or a backtick is a
+    command substitution — conservatively demoted to not-read-only rather
+    than trying to parse the inner command."""
+    if "$(" in segment or "`" in segment:
+        return False
     tokens = segment.split()
     if not tokens:
         return True  # an empty segment (trailing separator) contributes nothing
@@ -598,14 +615,15 @@ def _segment_is_read_only(segment: str) -> bool:
 
 
 def _has_full_line_danger(cmd_line: str) -> bool:
-    """fix-round-1 #1: signals that override a read-only-looking head token
-    because precheck.sh runs UNSANDBOXED and this annotation is the only
-    safety signal a human has. Checked over the FULL line, not per segment:
-    a dangerous redirect/flag anywhere in a compound command taints all of
-    it. Covers exactly the reviewer's six escapes: `>`/`>>` writes (except
-    the tolerated `2>/dev/null`/`>&1` forms), `find -delete`, `find -exec`,
-    `curl -X <non-GET>`, `tail -f`/`--follow` (never terminates), and
-    `xargs <a command that isn't itself read-only>`."""
+    """fix-round-1 #1 (+ fix-round-2 #3 minors): signals that override a
+    read-only-looking head token because precheck.sh runs UNSANDBOXED and
+    this annotation is the only safety signal a human has. Checked over the
+    FULL line, not per segment: a dangerous redirect/flag anywhere in a
+    compound command taints all of it. Covers `>`/`>>` writes (except the
+    tolerated `2>/dev/null`/`>&1` forms), `find -delete`, `find -exec`,
+    `curl -X`/`--request <non-GET>`, `curl -o`/`-O` (writes to local disk
+    without needing an explicit `>`), `tail -f`/`-F`/`--follow` (never
+    terminates), and `xargs <a command that isn't itself read-only>`."""
     # `<repo>`/`<p>`-style doc placeholders (both fixtures use this convention,
     # e.g. `git -C <repo> status`) contain a literal `>` that isn't a shell
     # redirection — strip those spans before scanning for real ones.
@@ -617,11 +635,15 @@ def _has_full_line_danger(cmd_line: str) -> bool:
         return True
     if re.search(r"-exec\b", cmd_line):
         return True
-    m = re.search(r"-X\s*(\S+)", cmd_line)
+    m = re.search(r"(?:-X|--request)\s*(\S+)", cmd_line)
     if m and m.group(1).strip("'\"").upper() != "GET":
         return True
+    if re.search(r"\bcurl\b", cmd_line) and re.search(
+        r"(?:^|\s)(-o|-O)(?:\s|$)", cmd_line
+    ):
+        return True
     if re.search(r"\btail\b", cmd_line) and re.search(
-        r"(?:^|\s)(-f\b|--follow\b)", cmd_line
+        r"(?:^|\s)(-f\b|-F\b|--follow\b)", cmd_line
     ):
         return True
     m = re.search(r"\bxargs\b\s*(.*)$", cmd_line)
@@ -632,7 +654,13 @@ def _has_full_line_danger(cmd_line: str) -> bool:
     return False
 
 
-_SEGMENT_SPLIT_RE = re.compile(r"\|\||&&|\||;")
+# fix-round-2 #2: split on bare `&` (backgrounding) too, not just `&&` — a
+# command chained after a lone `&` was previously invisible to segment
+# classification. The lookbehind excludes `&` preceded by `>`/`&`/a digit so
+# `2>&1` (fd duplication) and `&&` itself are never mis-split; the lookahead
+# excludes the first `&` of a literal `&&` for the same reason (though `&&`
+# is already matched earlier in the alternation at that position anyway).
+_SEGMENT_SPLIT_RE = re.compile(r"\|\||&&|\||;|(?<![>&0-9])&(?!&)")
 
 
 def _is_read_only_command(cmd_line: str) -> bool:

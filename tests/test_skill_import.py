@@ -93,6 +93,11 @@ class TestAnalyze(unittest.TestCase):
         self.assertTrue(r["blocked"])
         self.assertTrue(r["blocked_reasons"])
         self.assertTrue(any("credentials" in reason for reason in r["blocked_reasons"]))
+        # fix-round-2 #3: every blocking reason is prefixed for a downstream
+        # printer to discriminate without parsing trailing text.
+        self.assertTrue(
+            all(reason.startswith("[blocking] ") for reason in r["blocked_reasons"])
+        )
 
     def test_blocked_reasons_empty_when_not_blocked(self):
         r = self._an("clean-check")
@@ -103,6 +108,9 @@ class TestAnalyze(unittest.TestCase):
         r = self._an("mcp-only")
         self.assertTrue(r["blocked"])
         self.assertTrue(any("mcp" in reason for reason in r["blocked_reasons"]))
+        self.assertTrue(
+            all(reason.startswith("[blocking] ") for reason in r["blocked_reasons"])
+        )
 
     def test_mcp_cli_equivalent_scoped_to_same_file_not_whole_bundle(self):
         # A CLI mention in a DIFFERENT bundled file than the mcp mention must
@@ -118,15 +126,23 @@ class TestAnalyze(unittest.TestCase):
         self.assertTrue(
             any("no CLI equivalent" in reason for reason in r["blocked_reasons"])
         )
+        self.assertTrue(
+            all(reason.startswith("[blocking] ") for reason in r["blocked_reasons"])
+        )
 
     def test_mcp_cli_equivalent_in_same_file_unblocks(self):
         # The CLI mention IS in the same source (SKILL.md/body) as the mcp
         # mention this time — the heuristic should recognize it and unblock.
+        # blocked_reasons is non-empty here even though blocked is False:
+        # [info] entries only ever appear for mcp-with-equivalent skills.
         s = skill_import.parse_skill(os.path.join(FIX, "mcp-only"))
         s["body"] = s["body"] + "\nThen `git log` the result.\n"
         r = skill_import.analyze(s)
         self.assertFalse(r["blocked"])
         self.assertTrue(any("not blocked" in reason for reason in r["blocked_reasons"]))
+        self.assertTrue(
+            all(reason.startswith("[info] ") for reason in r["blocked_reasons"])
+        )
 
     def test_q7_axes_value_is_always_a_string(self):
         # Type must be stable whether q7_axes is plain "derived" (clean-check)
@@ -246,6 +262,69 @@ class TestIsReadOnlyCommand(unittest.TestCase):
 
     def test_safe_stderr_redirect_not_flagged_as_write(self):
         self.assertTrue(skill_import._is_read_only_command("git status 2>/dev/null"))
+
+    # --- fix round 2: the reviewer's follow-up escape probes ---
+
+    def test_placeholder_glued_to_real_redirect_stdin_and_stdout(self):
+        self.assertFalse(skill_import._is_read_only_command("cat <payload>/etc/hosts"))
+
+    def test_placeholder_glued_to_trailing_char(self):
+        self.assertFalse(skill_import._is_read_only_command("cat <a>b"))
+
+    def test_placeholder_glued_to_url_redirect(self):
+        self.assertFalse(skill_import._is_read_only_command("curl <url>/tmp/pwned"))
+
+    def test_placeholder_glued_to_path_redirect(self):
+        self.assertFalse(skill_import._is_read_only_command("git status <x>/tmp/pwned"))
+
+    def test_redirect_still_caught_next_to_whitespace_delimited_placeholder(self):
+        self.assertFalse(skill_import._is_read_only_command("cat x ><target>"))
+        self.assertFalse(skill_import._is_read_only_command("cat x > <file>"))
+
+    def test_bare_ampersand_backgrounds_a_mutating_command(self):
+        self.assertFalse(
+            skill_import._is_read_only_command("git status & rm -rf build")
+        )
+
+    def test_dollar_paren_command_substitution_demoted(self):
+        self.assertFalse(skill_import._is_read_only_command("ls $(rm -rf build)"))
+
+    def test_backtick_command_substitution_demoted(self):
+        self.assertFalse(skill_import._is_read_only_command("echo `rm -rf build`"))
+
+    def test_dev_null_lookalike_filename_not_tolerated(self):
+        self.assertFalse(skill_import._is_read_only_command("cat a >/dev/nullx"))
+
+    def test_curl_long_form_request_verb(self):
+        self.assertFalse(
+            skill_import._is_read_only_command(
+                "curl --request POST https://example.com/hook"
+            )
+        )
+
+    def test_tail_capital_f_never_terminates(self):
+        self.assertFalse(skill_import._is_read_only_command("tail -F /var/log/x"))
+
+    def test_curl_dash_o_writes_to_disk(self):
+        self.assertFalse(
+            skill_import._is_read_only_command("curl -o out.txt https://example.com")
+        )
+
+    def test_curl_dash_capital_o_writes_to_disk(self):
+        self.assertFalse(
+            skill_import._is_read_only_command("curl -O https://example.com/file")
+        )
+
+    # --- fix round 2: legitimate positives that must NOT regress ---
+
+    def test_git_status_fd_redirect_then_pipe_stays_read_only(self):
+        # The reviewer's probe-verified pattern for the new `&` split: this
+        # must NOT be mis-split at the `&` inside `2>&1`.
+        self.assertTrue(skill_import._is_read_only_command("git status 2>&1 | wc -l"))
+
+    def test_grep_dash_o_stays_read_only(self):
+        # grep's -o ("only matching") must not be confused with curl's -o.
+        self.assertTrue(skill_import._is_read_only_command("grep -o foo file.txt"))
 
 
 if __name__ == "__main__":

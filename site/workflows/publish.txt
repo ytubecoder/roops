@@ -1,0 +1,48 @@
+# Publish roops site
+# Project: roops
+# Frequency: after any edit to index.html or ui.html
+# Description: Verify pages locally in a real browser, deploy to GitHub Pages, confirm live, taildrop copies to the desktop machine
+
+## Prerequisites
+- Changes saved to ~/projects/roops (index.html and/or ui.html)
+- Design conformance checked against CLAUDE.md (tokens, seal-font rule, marubatsu, reduced-motion + 390px)
+- Tailscale up, desktop-7dms6vl visible in `tailscale status`
+
+## Steps
+
+1. Serve the folder on a throwaway localhost port
+   - Run: cd ~/projects/roops && python3 -m http.server 8664 --bind 127.0.0.1 (background; pick another free port if busy)
+   - Expected outcome: server pid printed; http://127.0.0.1:8664/ responds
+   - If fails: check `lsof -i :8664` and pick a different port
+
+2. Verify the changed page(s) in the Playwright MCP browser
+   - Navigate to http://127.0.0.1:8664/<page>.html; check console for errors; screenshot changed zones
+   - index.html gotcha: scroll-reveal content is opacity-0 below the fold — force with `document.querySelectorAll('.reveal').forEach(el=>el.classList.add('in'))` before element screenshots
+   - ui.html: exercise whatever interaction the edit touched (stamp, toggle, engawa, lightbox) via evaluate; re-check at 390px if layout changed
+   - Expected outcome: 0 console errors (favicon 404 excepted locally), zones render correctly, no horizontal overflow at 390px
+   - If fails: fix the page, re-verify before proceeding
+
+3. Close the browser and kill the server
+   - Run: browser_close, then kill the http.server pid
+   - Expected outcome: port free (`lsof -i :8664` empty); no resident browser (browser-windows policy)
+   - If fails: find and kill leftover pids before continuing
+
+4. Commit and push
+   - Run: cd ~/projects/roops && git add <changed files> && git commit && git push origin main
+   - Expected outcome: push accepted; GitHub Pages legacy build starts automatically
+   - If fails: pull/rebase, resolve, re-push
+
+5. Confirm the deploy is live
+   - Run: curl --retry 15 --retry-delay 6 --retry-all-errors -sf -o /dev/null -w "%{http_code}" "https://ytubecoder.github.io/roops/<page>.html?v=$(date +%s)"
+   - Expected outcome: HTTP 200 (build takes ~30-60s; the cache-buster query matters)
+   - If fails: check `gh api repos/ytubecoder/roops/pages/builds/latest --jq .status`
+
+6. Taildrop copies to the desktop machine
+   - Run: tailscale file cp ~/projects/roops/index.html ~/projects/roops/ui.html desktop-7dms6vl:
+   - Expected outcome: TAILDROP_OK-style clean exit (version-mismatch warning is harmless); files land in the desktop's Tailscale inbox/Downloads
+   - If fails: `tailscale status` — confirm desktop-7dms6vl is online, retry
+
+## Verification
+- Live URLs return 200 and render the new content (cache-busted)
+- No local server or browser left running
+- User has fresh copies on the desktop machine

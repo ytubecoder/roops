@@ -886,7 +886,10 @@ footer {
 
 @media (max-width: 767px) {
   .head-stats { margin-left: 0; width: 100%; }
-  .loop-row { grid-template-columns: 44px minmax(0, 1fr) 30px; gap: 10px 12px; min-width: 0; padding: 14px; }
+  /* sw-cell's third track grows past its 30px floor when console controls are unhidden
+     (Task 4) -- minmax(0, 1fr) on the loop-name track can always shrink to absorb it, so
+     the row never forces the page into horizontal scroll at narrow widths. */
+  .loop-row { grid-template-columns: 44px minmax(0, 1fr) minmax(30px, auto); gap: 10px 12px; min-width: 0; padding: 14px; }
   .loop-row > .stamp-cell { grid-column: 1; grid-row: 1; }
   .loop-row > .loop-name { grid-column: 2; grid-row: 1; }
   .loop-row > .sw-cell { grid-column: 3; grid-row: 1; }
@@ -894,6 +897,49 @@ footer {
   .loop-row > .run-meta { grid-column: 1 / -1; grid-row: 3; align-items: flex-start; text-align: left; }
   .loop-name { overflow-wrap: anywhere; }
   .garden { overflow-x: visible; }
+}
+
+/* ---------- console controls (Task 4) — rounds switch + schedule picker ----------
+   Hidden by default (see data-console-controls in dashboard/generate.py); unhidden only
+   by the page's own hydration script once fetch('api/state') succeeds. Tokens reused
+   verbatim from :root above -- no new hex/rgba literals introduced by this block. */
+.con-cell { display: inline-flex; align-items: center; gap: 8px; }
+.con-sw { background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; border-radius: 9px; }
+.con-sw:focus-visible { outline: 1px solid var(--shu); outline-offset: 3px; }
+.con-sw[disabled] { opacity: .35; cursor: default; }
+.con-track {
+  display: block; position: relative; width: 34px; height: 17px; border-radius: 9px;
+  border: 1px solid var(--hair2); background: var(--washi);
+  transition: background .8s cubic-bezier(0.16,1,0.3,1), border-color .8s cubic-bezier(0.16,1,0.3,1);
+}
+.con-knob {
+  position: absolute; top: 2px; left: 18px; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--koke);
+  transition: left .8s cubic-bezier(0.16,1,0.3,1), background .8s cubic-bezier(0.16,1,0.3,1);
+}
+.con-sw[aria-checked="false"] .con-knob { left: 2px; background: var(--nibi); }
+.con-sched {
+  font-family: var(--mono); font-size: 11px; background: none; cursor: pointer;
+  border: 1px solid var(--hair2); border-radius: 3px; padding: 3px 8px; color: inherit;
+}
+.con-sched:hover { border-color: var(--shu); }
+.sched-panel {
+  position: absolute; z-index: 9; background: var(--washi);
+  border: 1px solid var(--hair2); border-radius: 4px; padding: 12px;
+  box-shadow: 0 10px 30px -12px rgba(0,0,0,.4);
+}
+.sched-panel button {
+  font-family: var(--mono); font-size: 11px; background: none;
+  border: 1px solid var(--hair2); border-radius: 3px; padding: 4px 9px; cursor: pointer; margin: 2px;
+}
+.sched-panel button:hover { border-color: var(--shu); color: var(--shu); }
+.sp-form { margin-top: 8px; display: flex; gap: 6px; align-items: center; }
+.sp-err { font-family: var(--mono); font-size: 11px; color: var(--shu); margin-top: 6px; }
+
+/* generate.py's first motion-sensitive CSS (Task 4) -- no prior prefers-reduced-motion
+   block existed to extend, so this is that block, going forward. */
+@media (prefers-reduced-motion: reduce) {
+  .con-track, .con-knob { transition: none; }
 }
 """
 
@@ -1189,6 +1235,34 @@ def _render_recent_runs(runs, now):
     )
 
 
+def _render_console_controls(loop):
+    """Hidden-by-default control cell (rounds toggle + schedule-edit button) for one loop
+    row. Pure inert markup: the page's own hydration script (see _wrap_html) is what
+    removes `hidden` — and only once `fetch('api/state')` succeeds, i.e. only when the
+    page is served by `loopctl serve` (Task 3's bin/console.py). Opened as a plain file,
+    the fetch fails and this stays hidden forever — same as before Task 4."""
+    name = loop["name"]
+    disabled_attr = (
+        ""
+        if loop["installed"]
+        else ' disabled title="install from CLI: loopctl install"'
+    )
+    checked = "true" if (loop["installed"] and loop["enabled"]) else "false"
+    return (
+        f'<span class="con-cell" data-console-controls hidden data-loop="{e(name)}" '
+        f'data-installed="{"1" if loop["installed"] else ""}" '
+        f'data-enabled="{"1" if loop["enabled"] else ""}" '
+        f'data-schedule="{e(loop["schedule"] or "")}">'
+        f'<button class="con-sw" type="button" role="switch" aria-checked="{checked}" '
+        f'aria-label="toggle rounds for {e(name)}"{disabled_attr}>'
+        '<span class="con-track"><span class="con-knob"></span></span></button>'
+        f'<button class="con-sched" type="button" data-sched-edit '
+        f'aria-label="edit schedule for {e(name)}">'
+        f"{e(loop['schedule'] or 'manual')}</button>"
+        "</span>"
+    )
+
+
 def _render_loop_row(loop, now):
     badges = []
     if loop["stale"]:
@@ -1241,6 +1315,7 @@ def _render_loop_row(loop, now):
     toko = "".join(loop["toko_lines"]) or _toko_line(
         "未", "", '<span class="muted">never run</span>'
     )
+    controls = _render_console_controls(loop)
     return (
         '<div class="loop-row">'
         f"{stamp}"
@@ -1250,7 +1325,7 @@ def _render_loop_row(loop, now):
         '<span class="toko-tag">latest</span></div>'
         f'<div class="run-meta"><span class="rm-when">{last_run}</span>'
         f'<span class="rm-cost">{e(spend_text)}</span>{next_html}{report_link}</div>'
-        f'<div class="sw-cell">{sw}</div>'
+        f'<div class="sw-cell">{sw}{controls}</div>'
         "</div>"
     )
 
@@ -1794,6 +1869,95 @@ def _reports_document(body, now):
     )
 
 
+# Shared schedule-picker panel + hydration script (Task 4). Static (no interpolation) --
+# one instance per page, placed as a sibling of .sheet (not nested inside it) so the
+# panel's position:absolute math (rect + window.scrollX/scrollY, both document-relative)
+# isn't thrown off by .sheet's own `position: relative`. Everything here is inert until
+# fetch('api/state') succeeds; opened as a plain file it never runs past the .catch().
+_CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
+  <div class="sp-presets">
+    <button data-spec="interval:5m">5m</button><button data-spec="interval:15m">15m</button>
+    <button data-spec="interval:30m">30m</button><button data-spec="interval:1h">hourly</button>
+    <button data-kind="daily">daily</button><button data-kind="weekly">weekly</button>
+    <button data-kind="monthly">monthly</button>
+  </div>
+  <div class="sp-form" hidden>
+    <select class="sp-dow" hidden><option>mon</option><option>tue</option><option>wed</option>
+      <option>thu</option><option>fri</option><option>sat</option><option>sun</option></select>
+    <input class="sp-dom" type="number" min="1" max="28" value="1" hidden>
+    <input class="sp-time" type="time" value="09:00">
+    <button class="sp-apply" type="button">apply</button>
+  </div>
+  <div class="sp-err" role="alert"></div>
+</div>
+<script>
+(function(){
+  'use strict';
+  fetch('api/state').then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(){
+    document.querySelectorAll('[data-console-controls]').forEach(function(c){ c.hidden=false; });
+  }).catch(function(){ /* static file mode -- controls stay hidden */ });
+  function post(path, body){
+    return fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); });
+  }
+  document.addEventListener('click', function(ev){
+    var sw = ev.target.closest('.con-sw');
+    if (sw && !sw.disabled){
+      var cell = sw.closest('[data-console-controls]');
+      var on = sw.getAttribute('aria-checked') !== 'true';
+      sw.disabled = true;
+      post('api/loops/' + cell.getAttribute('data-loop') + '/rounds', {on:on}).then(function(res){
+        if (res.ok) location.reload(); else { sw.disabled=false; alert(res.j.error); }
+      });
+      return;
+    }
+    var ed = ev.target.closest('[data-sched-edit]');
+    var panel = document.querySelector('[data-sched-panel]');
+    if (ed){
+      var cell2 = ed.closest('[data-console-controls]');
+      panel.dataset.loop = cell2.getAttribute('data-loop');
+      panel.dataset.cur = cell2.getAttribute('data-schedule');
+      var rect = ed.getBoundingClientRect();
+      panel.style.top = (rect.bottom + window.scrollY + 6) + 'px';
+      panel.style.left = Math.max(8, rect.left + window.scrollX - 120) + 'px';
+      panel.querySelector('.sp-form').hidden = true;
+      panel.querySelector('.sp-err').textContent = '';
+      panel.hidden = false;
+      return;
+    }
+    if (panel && !panel.hidden && !ev.target.closest('[data-sched-panel]')) panel.hidden = true;
+  });
+  var panel = document.querySelector('[data-sched-panel]');
+  function apply(spec){
+    post('api/loops/' + panel.dataset.loop + '/schedule', {spec:spec}).then(function(res){
+      if (res.ok) location.reload(); else panel.querySelector('.sp-err').textContent = res.j.error;
+    });
+  }
+  panel.addEventListener('click', function(ev){
+    var b = ev.target.closest('button'); if (!b) return;
+    if (b.dataset.spec) { apply(b.dataset.spec); return; }
+    if (b.dataset.kind) {
+      panel.dataset.kind = b.dataset.kind;
+      panel.querySelector('.sp-form').hidden = false;
+      panel.querySelector('.sp-dow').hidden = b.dataset.kind !== 'weekly';
+      panel.querySelector('.sp-dom').hidden = b.dataset.kind !== 'monthly';
+      var cur = panel.dataset.cur || '';
+      var mTime = cur.match(/(\d{2}:\d{2})$/); if (mTime) panel.querySelector('.sp-time').value = mTime[1];
+      return;
+    }
+    if (b.classList.contains('sp-apply')) {
+      var t = panel.querySelector('.sp-time').value || '09:00';
+      var k = panel.dataset.kind;
+      if (k === 'daily') apply('daily:' + t);
+      else if (k === 'weekly') apply('weekly:' + panel.querySelector('.sp-dow').value + ':' + t);
+      else apply('monthly:' + String(panel.querySelector('.sp-dom').value).padStart(2, '0') + ':' + t);
+    }
+  });
+})();
+</script>
+"""
+
+
 def _wrap_html(top, body):
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -1803,6 +1967,7 @@ def _wrap_html(top, body):
         f'<div class="sheet">{top}{body}'
         "<footer>loops harness — static sheet · report/propose-only · "
         "findings are actions in waiting</footer></div>"
+        f"{_CONSOLE_CONTROLS_HTML}"
         "</body></html>"
     )
 

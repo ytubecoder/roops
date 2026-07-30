@@ -1674,5 +1674,69 @@ class ReportPagesDashboardTests(unittest.TestCase):
         self.assertIn('<a href="reports.html">reports</a>', loops_html)
 
 
+class ConsoleControlsTests(unittest.TestCase):
+    """Task 4: dashboard console controls (rounds switch + schedule picker) — hidden by
+    default, unhidden only by the page's own hydration JS when api/state is reachable
+    (i.e. only when served by `loopctl serve`, Task 3's bin/console.py). These tests only
+    exercise the static markup/JS generate.py emits, not the live API (Task 3 owns that)."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+
+    def render_with(
+        self, name="alpha", plist=False, schedule="interval:15m", enabled=None
+    ):
+        conn = self.fx.init_db()
+        self.fx.add_loop(name, schedule=schedule, enabled=enabled)
+        self.fx.add_run(
+            conn,
+            "r1",
+            name,
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
+        conn.close()
+        if plist:
+            self.fx.install(name)
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            return f.read()
+
+    def render_default(self):
+        return self.render_with()
+
+    def test_console_controls_hidden_by_default(self):
+        html = self.render_default()
+        self.assertIn(
+            "data-console-controls hidden", html
+        )  # wrapper attr on each row's control cell
+        self.assertIn("fetch('api/state'", html)  # relative URL, single quotes
+        self.assertIn("data-sched-edit", html)
+
+    def test_no_network_still_clean(self):
+        # the existing test_no_network_no_external_assets already covers this; just
+        # confirm the new JS didn't introduce banned tokens — same assertion, run here
+        # against a controls-bearing render:
+        html = self.render_with(name="alpha", plist=True)
+        for token in ("http://", "https://", "//cdn", 'src="http'):
+            self.assertNotIn(token, html)
+
+    def test_rounds_toggle_carries_loop_name(self):
+        html = self.render_with(name="alpha", plist=True)
+        self.assertIn('data-loop="alpha"', html)
+
+
 if __name__ == "__main__":
     unittest.main()

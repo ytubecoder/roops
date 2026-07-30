@@ -847,6 +847,13 @@ marker `[FILL: <hint>]`.
    on an agent adding a loop; this precondition is one of the two compensating controls (the other
    is provenance/observability) — an agent can satisfy it itself by running the loop first, it is
    not a human-in-the-loop gate.
+   **Known limitation (spec-mandated, deferred at review):** the check only looks at the most
+   recent 50 run rows. A loop that succeeded once, long ago, and has since accumulated 50+ newer
+   non-`completed`/`skipped-precheck` runs (e.g. a long streak of failures after a working
+   re-install) is falsely refused on re-install even though it has a real prior success — the
+   fix (widen or drop the limit, or query for existence rather than a bounded window) is
+   intentionally not built; the workaround is the same as the primary case: `loopctl run <name>`
+   again to produce a fresh non-failed row inside the window.
 3. Write `launchd/com.loops.<name>.plist` with **absolute** paths, `WorkingDirectory`,
    `EnvironmentVariables` (at minimum `HOME`, `PATH`, `LOOPS_ROOT`), `StandardOutPath` /
    `StandardErrorPath` under `state/`, and the schedule from §5.1.

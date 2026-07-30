@@ -19,6 +19,8 @@ Verified facts:
 
 **Open question put to him, unanswered:** should approval live in the loops harness (new disposition verb, e.g. `approve`) or in GC, where ads-google's SPEC already says decisions get recorded ("applies/declines via `record_and_apply` + runbook")? If GC, the harness only needs the ack≠approval distinction made explicit.
 
+**v1 stand-in shipped 2026-07-30:** the dashboard now renders a deterministic, generator-templated "paste this into your agent" prompt for each unsuppressed open finding (`docs/INTERFACES.md` §10, Amendment 2) — built only from sqlite + `latest.json` fields, never model output, and the template MUST NEVER say "approve". It hands the decision to the reader's own agent/permission context rather than executing anything; the harness-side bridge (an actual approve verb, or the GC-side record) is still this thread's open question. `docs/SKILL_IMPORT_AND_AGENT_SURFACE_PLAN.md` §7 records this as the intentional v1 stand-in, not a resolution.
+
 ## 2. Approval counting / standing approval
 
 Wanted regardless of #1's answer: count approvals per `finding_id`; at some threshold surface "approved N× — set approval status for next time?". Standing approval is a **recorded status only** — report/propose-only stays until explicitly widened.
@@ -31,11 +33,11 @@ Wanted regardless of #1's answer: count approvals per `finding_id`; at some thre
 - ~~§9.1 omits `findings`~~ — present, with a "required but MAY be empty" bullet.
 - **Remaining (cosmetic):** §4 sections run 4.1, 4.2, 4.3, **4.5, 4.6, 4.4** — §4.4
   (Redaction pass) sits at line 362, after §4.6.
-- **New (minor, harness):** `cmd_status` (`bin/loopctl:745`) does `last-runs LIMIT 1`
-  ordered by `started_at DESC` with **no filter on `runner_status`**, so a `started` or
-  `skipped-overlap` row — both NULL headline/effective_status — blanks the status display
-  even when a completed run sits right behind it. Observed live 2026-07-28. Not fixed
-  (harness internals are frozen).
+- ~~`cmd_status` blanking on a `started`/`skipped-overlap` newest row~~ — **fixed 2026-07-30**
+  (INTERFACES.md §8 Amendment 2, "blanking fix"): `status` now falls back to the newest
+  *terminal* run (within the last 10) for display text when the true newest row is
+  `started`/`skipped-overlap`/unfinished; each row also gains `"in_flight"` independent of
+  that fallback. Verified against `bin/loopctl`'s `_resolve_display_row`.
 
 ## 3b. Ads loops status + next steps → `docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md`
 

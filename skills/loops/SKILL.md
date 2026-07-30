@@ -64,10 +64,14 @@ Gates are unchanged from hand-authored loops: **analyze → apply → validate �
      "skill_sha256": "…",
      "answers": {"<question_id>": "<value>"},
      "provenance": {"<question_id>": "user|agent"},
-     "acknowledge_blocked": false
+     "acknowledge_blocked": false,
+     "tags": ["imported", "skill:<name>"],
+     "model": "claude-sonnet-5",
+     "timeout_s": 600,
+     "retry_transient": 2
    }
    ```
-   Copy `analyzer_version` and `skill_sha256` from the analyze output. If the skill file changes you must re-analyze — apply refuses stale answers. Set `acknowledge_blocked: true` only when the analysis came back blocked **and** the user accepted a manual-schedule scaffold.
+   Copy `analyzer_version` and `skill_sha256` from the analyze output. If the skill file changes you must re-analyze — apply refuses stale answers. Set `acknowledge_blocked: true` only when the analysis came back blocked **and** the user accepted a manual-schedule scaffold. `tags`/`model`/`timeout_s`/`retry_transient` are all OPTIONAL top-level keys (siblings of `answers`, not nested inside it) that map straight onto the matching `loop.conf` fields — omit any you don't need. They are validated and refused outright (never coerced) if out of shape; `q11_budget`'s free text does NOT set `model`/`timeout_s`/`retry_transient` — use these keys instead (`docs/SKILL_IMPORT.md` §7).
 4. `loopctl import <skill-path> --apply --answers answers.json --actor "claude/<project>"` — scaffolds the loop, records provenance. **Never installs.**
 5. `loopctl validate <name>` must exit 0. Any remaining `[FILL:` marker in `SPEC.md` is a hard fail.
 6. `loopctl run <name>` — then **read the report against ground truth**. Passing validate is necessary, never sufficient: validate cannot see a volatile `finding_id` rule or a precheck that skips forever. This step is the real gate.

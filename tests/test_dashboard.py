@@ -757,6 +757,37 @@ class GenerateIntegrationTests(unittest.TestCase):
             html = f.read()
         self.assertIn("no schedule loaded", html)
 
+    def test_schedule_state_renders_as_readonly_switch(self):
+        """B-11: scheduled states render the section-04 mock's rounds switch (track +
+        knob + kanji label), read-only; manual keeps the 手 chip; console-active hides
+        the static switch so it never doubles with the console's interactive toggle."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("alpha")
+        self.fx.add_loop("byhand", schedule="manual")
+        self.fx.install("alpha")
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            html = f.read()
+        self.assertIn('class="sw on"', html)
+        self.assertIn(
+            '<span class="sw-track"><span class="sw-knob"></span></span>', html
+        )
+        self.assertIn('<span class="sw-lab">巡</span>', html)
+        self.assertIn(
+            '<span class="sw manual" title="manual — run via loopctl">手</span>', html
+        )
+        # the static switch is display, not a control — no <button> markup in the cell
+        self.assertNotIn('<button class="sw', html)
+        self.assertIn("html.console-active .sw { display: none; }", html)
+
     def test_manual_loop_never_flagged_stale(self):
         conn = self.fx.init_db()
         self.fx.add_loop("occasional", schedule="manual")
@@ -1759,6 +1790,39 @@ class FindingHandoffTests(unittest.TestCase):
         self.assertIn('<details class="finding-handoff"', html)
         self.assertIn("repo:no-remote", html)
 
+    def test_hanko_rank_on_unsuppressed_finding(self):
+        """B-11: each unsuppressed open finding carries the section-04 mock's hanko
+        rank — 認/休/済 copy their full loopctl command (data-copy, root flag
+        included), 承 is rendered but disabled with no command wired."""
+        root = self._root_with_finding("l1", "repo:no-remote")
+        html = self._generate(root)
+        self.assertIn(f'data-copy="loopctl ack l1 repo:no-remote --root {root}"', html)
+        self.assertIn(
+            f'data-copy="loopctl snooze l1 repo:no-remote --root {root} '
+            '--until YYYY-MM-DD"',
+            html,
+        )
+        self.assertIn(
+            f'data-copy="loopctl dismiss l1 repo:no-remote --root {root} '
+            '--note &quot;…&quot;"',
+            html,
+        )
+        # 承: present, disabled, and carries NO command in any attribute
+        self.assertIn('<button class="hanko-btn" type="button" disabled', html)
+        # the copy wiring ships with the page (static, no console needed)
+        self.assertIn(".hanko-btn[data-copy]", html)
+        self.assertIn("navigator.clipboard", html)
+
+    def test_suppressed_finding_gets_stamp_not_buttons(self):
+        """B-11: a suppressed finding shows its disposition as a stamp-mark (済 for
+        dismiss) instead of the hanko rank; the reopen one-liner stays."""
+        root = self._root_with_finding("l1", "repo:no-remote", dismiss=True)
+        html = self._generate(root)
+        self.assertIn('<span class="stamp-mark"', html)
+        self.assertIn("済</span>", html)
+        self.assertNotIn("data-copy=", html)
+        self.assertIn(f"loopctl reopen l1 repo:no-remote --root {root}", html)
+
 
 class TagsProvenanceEventsTests(unittest.TestCase):
     """Tag chips, per-loop provenance line, and the fleet-wide recent-events strip
@@ -2323,21 +2387,23 @@ class ConsoleControlsTests(unittest.TestCase):
         self.assertIn('data-loop="alpha"', html)
 
     def test_desktop_control_track_widens_only_when_console_active(self):
-        # Reviewer fix: the base `.loop-row` rule must stay pinned at a bare 30px third
-        # track -- pixel-identical to the pre-console page -- because CSS Grid grows a
-        # *definite* minmax(..., <px>) max using free space before flexible (fr) tracks,
-        # regardless of that row's own content; widening the base rule directly (the
-        # first attempt at this fix) was verified live (Playwright) to silently expand
-        # every row's sw-cell to 214px even with controls hidden -- a real regression
-        # against "keep the collapsed state visually unchanged". The wider track for the
-        # unhidden state must instead live in a rule gated on a `console-active` class
-        # that the hydration script only adds in the same fetch('api/state') success
-        # branch that unhides the controls, so the widen and the reveal always happen
-        # together and a plain-file/no-console load sees neither.
+        # Reviewer fix (Task 4): the wider console track must NOT live in the base
+        # `.loop-row` rule -- CSS Grid grows a *definite* minmax(..., <px>) max using
+        # free space before flexible (fr) tracks, regardless of that row's own content;
+        # widening the base rule to the console width was verified live (Playwright) to
+        # silently expand every row's sw-cell even with controls hidden. The wider track
+        # for the unhidden state must instead live in a rule gated on a `console-active`
+        # class that the hydration script only adds in the same fetch('api/state')
+        # success branch that unhides the controls, so the widen and the reveal always
+        # happen together and a plain-file/no-console load sees neither.
+        # (B-11 supersedes Task 4's secondary pin of the base track at the pre-console
+        # 30px: the static page now renders the section-04 mock's read-only rounds
+        # switch -- 36px track + 7px gap + 13px label -- so the base track is 64px.
+        # The gating mechanism this test exists for is unchanged.)
         html = self.render_default()
-        self.assertIn("grid-template-columns: 44px 1.1fr 1.5fr 190px 30px;", html)
+        self.assertIn("grid-template-columns: 44px 1.1fr 1.5fr 190px 64px;", html)
         self.assertIn("html.console-active .loop-row", html)
-        self.assertIn("minmax(30px, 214px)", html)
+        self.assertIn("minmax(64px, 214px)", html)
         self.assertIn("document.documentElement.classList.add('console-active')", html)
 
     def test_hidden_attribute_is_enforced_at_author_origin(self):

@@ -2,6 +2,9 @@
 
 ## WIP
 
+### B-11: Dashboard: mockup-parity right-side controls (rounds switch + hanko finding buttons)
+Priority: medium | Status: in-progress
+
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)

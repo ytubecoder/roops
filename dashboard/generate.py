@@ -761,7 +761,7 @@ main { padding: 0 0 8px; }
 /* ---------- the garden (global view) ---------- */
 .garden { border: 1px solid var(--hair2); border-radius: 3px; background: rgba(255,255,255,.25); overflow-x: auto; }
 .loop-row {
-  display: grid; grid-template-columns: 44px 1.1fr 1.5fr 190px 30px; gap: 16px;
+  display: grid; grid-template-columns: 44px 1.1fr 1.5fr 190px 64px; gap: 16px;
   align-items: center; padding: 12px 18px; min-width: 960px;
   border-bottom: 1px solid var(--hair);
 }
@@ -820,16 +820,28 @@ main { padding: 0 0 8px; }
 .run-meta .rm-next.off { color: var(--nibi); }
 .run-meta a { font-size: 10px; letter-spacing: .06em; }
 
-/* schedule state — 巡 loaded / 休 not loaded or paused / 手 manual */
+/* schedule state — 巡 loaded / 休 not loaded or paused / 手 manual (B-11: rendered as the
+   section-04 mock's rounds switch, read-only — same three states, same kanji + title
+   vocabulary as §10; the console's interactive toggle (.con-sw) replaces this span when
+   console-active, so the two never show together). 手 manual keeps the square chip: there
+   is no schedule to toggle, and a switch would misread as "off". */
 .sw-cell { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
-.sw {
-  width: 24px; height: 24px; border-radius: 3px; font-family: var(--serif); font-size: 13px;
-  display: inline-flex; align-items: center; justify-content: center; flex: none;
+.sw { display: inline-flex; align-items: center; gap: 7px; flex: none; }
+.sw .sw-track {
+  display: block; position: relative; width: 36px; height: 18px; border-radius: 9px;
+  border: 1px solid var(--hair2); background: var(--washi);
 }
-.sw.on { border: 1.5px solid var(--koke); color: var(--koke); }
-.sw.off { border: 1.5px solid var(--hair2); color: var(--nibi); }
-.sw.off.paused { border: 1.5px dashed var(--hair2); color: var(--nibi); }
-.sw.manual { border: 1.5px dashed var(--hair2); color: var(--nibi); }
+.sw .sw-knob { position: absolute; top: 2px; width: 12px; height: 12px; border-radius: 50%; }
+.sw.on .sw-knob { left: 20px; background: var(--koke); }
+.sw.off .sw-track { background: var(--washi-shade); }
+.sw.off .sw-knob { left: 2px; background: var(--nibi); }
+.sw.off.paused .sw-track { border-style: dashed; }
+.sw .sw-lab { font-family: var(--serif); font-size: 12px; line-height: 1; color: var(--nibi); width: 13px; flex: none; }
+.sw.manual {
+  width: 24px; height: 24px; border-radius: 3px; font-family: var(--serif); font-size: 13px;
+  justify-content: center; border: 1.5px dashed var(--hair2); color: var(--nibi);
+}
+html.console-active .sw { display: none; }
 
 /* small ink dots — run history, heartbeats */
 .light {
@@ -919,7 +931,10 @@ table.list-panel th { color: var(--nibi); font-weight: 400; text-transform: uppe
 .finding {
   padding: 12px 4px 12px 14px; border-bottom: 1px solid var(--hair);
   border-left: 3px solid var(--nibi);
+  display: flex; flex-wrap: wrap; align-items: flex-start;
+  justify-content: space-between; gap: 10px 18px;
 }
+.finding .f-main { flex: 1 1 32ch; min-width: 0; }
 .finding:last-child { border-bottom: none; }
 .finding[data-sev="alert"] { border-left-color: var(--shu); }
 .finding[data-sev="warn"] { border-left-color: var(--ochre); }
@@ -945,6 +960,30 @@ table.list-panel th { color: var(--nibi); font-weight: 400; text-transform: uppe
   display: block; margin-top: 6px; font-family: var(--mono); font-size: 10px;
   color: var(--ai); background: rgba(28,26,23,.05); border: 1px solid var(--hair);
   padding: 3px 8px; border-radius: 2px; width: fit-content; max-width: 100%; overflow-wrap: anywhere;
+}
+/* hanko button rank (B-11) — the section-04 mock's per-finding stamps, wired to the only
+   write path a static page has: each enabled button copies its ready-to-paste loopctl
+   command (§10: dispositions are entered via loopctl). 承 is rendered but disabled — its
+   verb does not exist yet, and ack is deliberately not it (open thread §1). */
+.arr-btns { display: flex; gap: 8px; flex: none; align-items: center; margin-top: 2px; }
+.hanko-btn {
+  width: 34px; height: 34px; border-radius: 4px; border: 1.5px solid var(--shu);
+  background: transparent; color: var(--shu); font-family: var(--serif); font-size: 16px;
+  line-height: 1; cursor: pointer; transform: rotate(-2deg);
+  transition: background .3s cubic-bezier(0.16, 1, 0.3, 1),
+              color .3s cubic-bezier(0.16, 1, 0.3, 1),
+              transform .15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.hanko-btn:hover { background: rgba(199,62,43,.08); }
+.hanko-btn:active { transform: rotate(-2deg) scale(.94); background: var(--shu); color: var(--washi); }
+.hanko-btn:disabled { opacity: .25; cursor: default; }
+.stamp-mark {
+  font-family: var(--serif); font-size: 17px; color: var(--shu);
+  transform: rotate(-4deg); display: inline-block; margin-left: 4px;
+}
+.copy-note {
+  font-family: var(--mono); font-size: 9px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ai);
 }
 details.finding-handoff { margin-top: 8px; }
 details.finding-handoff summary {
@@ -1061,34 +1100,34 @@ footer {
 /* generate.py's first motion-sensitive CSS (Task 4) -- no prior prefers-reduced-motion
    block existed to extend, so this is that block, going forward. */
 @media (prefers-reduced-motion: reduce) {
-  .con-track, .con-knob { transition: none; }
+  .con-track, .con-knob, .hanko-btn { transition: none; }
 }
 
 /* Each .loop-row is its own independent grid (no shared parent grid across rows), so every
    row must keep IDENTICAL grid-template-columns to stay column-aligned -- a content-sized
    track (auto/fit-content) would size differently per row depending on that row's own
-   schedule-string length, breaking alignment. A definite (non-fr) max like minmax(30px,
-   214px) also does NOT behave like a plain 30px column when idle: CSS Grid grows
+   schedule-string length, breaking alignment. A definite (non-fr) max like minmax(64px,
+   214px) also does NOT behave like a plain 64px column when idle: CSS Grid grows
    non-flexible tracks up to their fixed max using free space BEFORE flexible (fr) tracks
-   get a share, so widening the base `.loop-row` rule's third track directly (the first
-   attempt at this fix) would have widened every row's sw-cell column even with controls
-   hidden -- confirmed live by measuring swCellWidth == 214px in a hidden-controls render,
-   a real regression against "keep the collapsed state visually unchanged". So the base
-   `.loop-row` rule (near the top of this stylesheet) is untouched (bare 30px, byte-identical
-   to pre-Task-4), and the wider column applies ONLY once the hydration script (in
-   _CONSOLE_CONTROLS_HTML below) confirms api/state is live and stamps `console-active` on
-   <html> in the same success branch that unhides the controls -- so the widen and the
-   reveal always happen together, and a plain-file/no-console load sees neither. Widths
-   below are measured, not guessed (see Task 4 fix report): a worst-realistic-case schedule
-   chip ("weekly:mon:08:00" / "monthly:01:09:00", the longest §5.1 grammar strings) renders
-   con-cell at ~166px; 24px sw + 8px gap + 166px leaves headroom under 214px desktop /
-   clears 160px mobile (the mobile block's tighter .con-sched max-width keeps the chip
-   itself from ever exceeding the mobile budget). */
-html.console-active .loop-row { grid-template-columns: 44px 1.1fr 1.5fr 190px minmax(30px, 214px); }
+   get a share -- widening the base rule to the console width was verified live (Task 4)
+   to expand every row's sw-cell even with controls hidden. So the wider column applies
+   ONLY once the hydration script (in _CONSOLE_CONTROLS_HTML below) confirms api/state is
+   live and stamps `console-active` on <html> in the same success branch that unhides the
+   controls -- the widen and the reveal always happen together. (Task 4 pinned the base
+   track at the pre-console 30px "byte-identical" width; B-11 deliberately supersedes that
+   pin -- the static page now renders the section-04 mock's read-only rounds switch, which
+   needs 36px track + 7px gap + 13px label ≈ 56px, so the base track is 64px. The
+   mechanism above -- console widen gated on console-active -- is unchanged.) Console
+   widths are measured, not guessed (see Task 4 fix report): a worst-realistic-case
+   schedule chip ("weekly:mon:08:00" / "monthly:01:09:00", the longest §5.1 grammar
+   strings) renders con-cell at ~166px, and console-active hides the static .sw switch,
+   leaving headroom under 214px desktop / 160px mobile (the mobile block's tighter
+   .con-sched max-width keeps the chip itself from ever exceeding the mobile budget). */
+html.console-active .loop-row { grid-template-columns: 44px 1.1fr 1.5fr 190px minmax(64px, 214px); }
 
 @media (max-width: 767px) {
   .head-stats { margin-left: 0; width: 100%; }
-  .loop-row { grid-template-columns: 44px minmax(0, 1fr) 30px; gap: 10px 12px; min-width: 0; padding: 14px; }
+  .loop-row { grid-template-columns: 44px minmax(0, 1fr) 64px; gap: 10px 12px; min-width: 0; padding: 14px; }
   .loop-row > .stamp-cell { grid-column: 1; grid-row: 1; }
   .loop-row > .loop-name { grid-column: 2; grid-row: 1; }
   .loop-row > .sw-cell { grid-column: 3; grid-row: 1; }
@@ -1101,7 +1140,7 @@ html.console-active .loop-row { grid-template-columns: 44px 1.1fr 1.5fr 190px mi
      stylesheet (by convention -- see the note above .con-cell) so it reliably wins
      over the unconditional .con-sched rule at equal specificity. */
   .con-sched { max-width: 84px; }
-  html.console-active .loop-row { grid-template-columns: 44px minmax(0, 1fr) minmax(30px, 160px); }
+  html.console-active .loop-row { grid-template-columns: 44px minmax(0, 1fr) minmax(64px, 160px); }
 }
 /* tags + provenance + fleet recent-events strip (Amendment 2 — 2026-07-30) */
 .tags { margin: 4px 0; display: flex; flex-wrap: wrap; gap: 4px 6px; }
@@ -1456,6 +1495,42 @@ def _render_finding_handoff(
     )
 
 
+# Disposition → hanko kanji, matching the section-04 mock's stamp vocabulary:
+# 認 acknowledge · 休 snooze · 済 settle (dismiss). 承 approve exists in the mock but has
+# no CLI verb — ack ≠ approval is settled doctrine (docs/OPEN_THREADS_WARMSTART.md §1).
+_DISP_KANJI = {"ack": "認", "snooze": "休", "dismiss": "済"}
+
+
+def _render_hanko_btns(loop_name, fid, root_flag, action):
+    """The hanko rank for one unsuppressed open finding. Enabled stamps carry their full
+    loopctl command in data-copy (the page script copies it to the clipboard); the command
+    text also sits in the title so it is readable without JS. 承 is always disabled."""
+
+    def btn(kanji, verb, cmd_text):
+        return (
+            f'<button class="hanko-btn" type="button" data-copy="{e(cmd_text)}" '
+            f'title="{e(verb + " — copies: " + cmd_text)}" '
+            f'aria-label="{e("copy " + verb + " command for " + fid)}">{kanji}</button>'
+        )
+
+    def cmd_for(verb):
+        return f"loopctl {verb} {loop_name} {fid}{root_flag}"
+
+    # NB: the word "appro*" is banned page-wide (test_finding_paste_block pins it, per
+    # the §10 handoff doctrine) — 承's title says what it will be without saying it.
+    parts = [
+        '<button class="hanko-btn" type="button" disabled '
+        'title="承 — becomes an order · not wired: that verb does not exist yet '
+        '(ack is not it); to act now, use the hand-to-an-agent block">承</button>',
+        btn("認", "acknowledge", cmd_for("ack")),
+        btn("休", "snooze", cmd_for("snooze") + " --until YYYY-MM-DD"),
+        btn("済", "settle (dismiss)", cmd_for("dismiss") + ' --note "…"'),
+    ]
+    if action == "ack":
+        parts.append('<span class="stamp-mark" title="acknowledged">認</span>')
+    return f'<span class="arr-btns">{"".join(parts)}</span>'
+
+
 def _render_findings(conn, loop_name, latest_json, now, root):
     findings = _open_findings(conn, loop_name)
     if not findings:
@@ -1488,21 +1563,27 @@ def _render_findings(conn, loop_name, latest_json, now, root):
         cls = "finding suppressed" if suppressed else "finding"
         cmd = ""
         handoff_html = ""
+        btns_html = ""
         if not suppressed:
-            # MINOR #3 (fix wave, 2026-07-30): this visible one-liner used to
-            # omit --root while the handoff block below (finding_handoff_text)
-            # already included it -- on a non-default root the visible
-            # command targeted the wrong root. Use the same root_flag_for()
-            # both blocks share.
-            cmd = (
-                f'<code class="cmd">loopctl dismiss {e(loop_name)} {e(fid)}'
-                f'{e(root_flag)} --note "…"</code>'
-            )
+            # B-11: the section-04 mock's hanko rank, wired to the static page's only
+            # write path — each enabled stamp copies its ready-to-paste loopctl command
+            # (§10: "the page may display the ready-to-paste command"; delivery moved
+            # from a visible one-liner into data-copy/title, MINOR #3's root_flag
+            # guarantee carries over — all three verbs share root_flag_for()). 承 is
+            # rendered disabled: ack ≠ approval is settled doctrine and the approve
+            # verb does not exist (open thread — approve→action bridge).
+            btns_html = _render_hanko_btns(loop_name, fid, root_flag, action)
             handoff_html = _render_finding_handoff(
                 loop_name, fid, title, severity, detail, f, root, root_flag
             )
         else:
             cmd = f'<code class="cmd">loopctl reopen {e(loop_name)} {e(fid)}{e(root_flag)}</code>'
+            kanji = _DISP_KANJI.get(action)
+            if kanji:
+                btns_html = (
+                    f'<span class="arr-btns"><span class="stamp-mark" '
+                    f'title="{e(dtext or action)}">{kanji}</span></span>'
+                )
         detail_html = f"<div>{e(detail)}</div>" if detail else ""
         # pancaked — the same finding across N rounds is one stack, one decision
         pchip = ""
@@ -1510,10 +1591,12 @@ def _render_findings(conn, loop_name, latest_json, now, root):
             pchip = f'<span class="pchip"><i>巡</i> ×{int(f["times_seen"])}</span>'
         out.append(
             f'<div class="{cls}" data-sev="{e(severity)}">'
+            f'<div class="f-main">'
             f'<span class="sev {e(severity)}">{e(severity)}</span>'
             f'<span class="fid">{e(fid)}</span> — {e(title)} {pchip}'
             f'<span class="recurrence">{e(recurrence)}</span>{detail_html}{cmd}'
             f"{handoff_html}</div>"
+            f"{btns_html}</div>"
         )
     return f'<div class="findings"><h3>Findings</h3>{"".join(out)}</div>'
 
@@ -1600,20 +1683,40 @@ def _render_loop_row(loop, now):
     if spend_cost:
         spend_text += f" (${spend_cost:.2f})"
 
+    # B-11: scheduled states render as the section-04 mock's rounds switch — read-only
+    # (the write path stays loopctl/console; the console's own toggle replaces this when
+    # console-active). Same three states, kanji, and title strings as before (§10).
+    _switch = (
+        '<span class="sw {cls}" role="img" aria-label="{aria}" title="{title}">'
+        '<span class="sw-track"><span class="sw-knob"></span></span>'
+        '<span class="sw-lab">{kanji}</span></span>'
+    )
     if loop["schedule"] == "manual":
         sw = '<span class="sw manual" title="manual — run via loopctl">手</span>'
         next_html = '<span class="rm-next off">manual</span>'
     elif loop["installed"] and loop["enabled"]:
-        sw = '<span class="sw on" title="schedule loaded (launchd)">巡</span>'
+        sw = _switch.format(
+            cls="on",
+            aria="rounds on",
+            title="schedule loaded (launchd)",
+            kanji="巡",
+        )
         next_html = f'<span class="rm-next">next 巡 {e(loop["next_run_text"])}</span>'
     elif loop["installed"]:
-        sw = (
-            '<span class="sw off paused" '
-            'title="rounds paused — resume from console or loopctl resume">休</span>'
+        sw = _switch.format(
+            cls="off paused",
+            aria="rounds paused",
+            title="rounds paused — resume from console or loopctl resume",
+            kanji="休",
         )
         next_html = '<span class="rm-next off">paused</span>'
     else:
-        sw = '<span class="sw off" title="no schedule loaded — supervised runs only">休</span>'
+        sw = _switch.format(
+            cls="off",
+            aria="rounds off",
+            title="no schedule loaded — supervised runs only",
+            kanji="休",
+        )
         next_html = '<span class="rm-next off">no schedule loaded</span>'
 
     page = loop.get("page") or {}
@@ -2267,6 +2370,35 @@ _CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
 <script>
 (function(){
   'use strict';
+  // B-11: hanko copy stamps -- run on the static page too (no console involved). The
+  // stamp copies its ready-to-paste loopctl command; if the clipboard is unavailable
+  // (file:// open, denied permission), the command is revealed as a selectable line.
+  document.addEventListener('click', function(ev){
+    var hb = ev.target.closest('.hanko-btn[data-copy]');
+    if (!hb || hb.disabled) return;
+    var cmd = hb.getAttribute('data-copy');
+    var rank = hb.closest('.arr-btns');
+    function note(msg){
+      var n = rank.querySelector('.copy-note');
+      if (!n){ n = document.createElement('span'); n.className = 'copy-note'; rank.appendChild(n); }
+      n.textContent = msg;
+      clearTimeout(n._t); n._t = setTimeout(function(){ n.textContent = ''; }, 1800);
+    }
+    function fallback(){
+      var row = hb.closest('.finding');
+      var line = row.querySelector('.cmd[data-copy-fallback]');
+      if (!line){
+        line = document.createElement('code');
+        line.className = 'cmd'; line.setAttribute('data-copy-fallback', '');
+        row.querySelector('.f-main').appendChild(line);
+      }
+      line.textContent = cmd;
+      note('clipboard blocked -- select the line');
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(cmd).then(function(){ note('copied'); }, fallback);
+    } else { fallback(); }
+  });
   fetch('api/state').then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(){
     document.querySelectorAll('[data-console-controls]').forEach(function(c){ c.hidden=false; });
     document.documentElement.classList.add('console-active');

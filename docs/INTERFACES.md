@@ -1064,6 +1064,21 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   those pasted commands only when the generating root's realpath differs from the realpath of
   `~/projects/loops` (`root_flag_for`). Suppressed findings are unaffected — still
   greyed/collapsed with the existing `reopen` command, no handoff block.
+  **Mock-parity controls (B-11 — 2026-07-31, presentation-only):** the fleet row's three-way
+  schedule state renders as the site mock's read-only rounds switch (section 04 of `site/index.html`;
+  same kanji and title-string vocabulary as the Console amendment above — 手 manual keeps the
+  chip). It is display, not a control: hidden under `html.console-active`, where the console's
+  interactive toggle takes over, and the base row grid widened 30px → 64px to seat it (the
+  Task-4 rule that the wider *console* track is gated on `console-active` is unchanged). Each
+  **unsuppressed** open finding renders a hanko rank (承 認 休 済): 認/休/済 carry their full
+  ready-to-paste `loopctl ack|snooze|dismiss` command in `data-copy`/`title` and copy it to the
+  clipboard on click (this is where the "may display the ready-to-paste command" affordance now
+  lives — the always-visible dismiss one-liner is retired; `--root` inclusion via
+  `root_flag_for` is unchanged). Clipboard failure degrades to revealing the command as a
+  selectable line; nothing touches the network. 承 is rendered **disabled**: its verb does not
+  exist and `ack` is deliberately not it (open thread — the handoff doctrine's page-wide ban on
+  the word stays pinned by test). Suppressed findings keep the `reopen` one-liner and show
+  their disposition as a stamp-mark (認/休/済) in place of the rank.
 - **Failure surfacing (amendment 2026-07-29):** runs whose `runner_status` is one of
   `precheck-failed | engine-failed | engine-timeout | auth-failed | tool-denied |
   contract-violation | harness-error` render their `error_detail` + `exit_code` in the

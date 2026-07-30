@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Roops — ループス · Scheduled agent rounds</title>
-<meta name="description" content="Roops is a thin harness for recurring, report-only agent jobs. Scheduled rounds, kept like a garden: raked every morning, touched by no one, quiet when all is well.">
+<meta name="description" content="Roops is a thin harness for recurring agent jobs. Scheduled rounds, kept like a garden: raked every morning, read-only on patrol, quiet when all is well.">
 <meta property="og:title" content="Roops — ループス">
-<meta property="og:description" content="Scheduled agent rounds, kept like a garden. Report-only by enforcement, quiet when all is well.">
+<meta property="og:description" content="Scheduled agent rounds, kept like a garden. Read-only on patrol, quiet when all is well — and every finding is an action in waiting.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='14' fill='%23C73E2B'/%3E%3Ctext x='50' y='72' font-size='62' text-anchor='middle' fill='%23F2EDE3' font-family='serif'%3E%E5%B7%A1%3C/text%3E%3C/svg%3E">
 <style>
@@ -135,6 +135,41 @@
   .fact p { font-size: 14.5px; color: #3A362F; max-width: 48ch; }
   .fact p code { font-family: var(--mono); font-size: 12px; background: var(--washi-shade); padding: 2px 7px; border-radius: 2px; }
 
+  /* ---------- round lifecycle ---------- */
+  .steps { border-top: 1px solid rgba(28,26,23,.2); margin-top: 44px; }
+  .step {
+    display: grid; grid-template-columns: 72px 1fr; gap: clamp(16px, 3vw, 40px);
+    padding: 24px 0; border-bottom: 1px solid rgba(28,26,23,.12); align-items: baseline;
+  }
+  .step .no { font-size: 30px; font-weight: 500; color: var(--shu); line-height: 1; }
+  .step .t { display: block; font-size: clamp(16px, 1.8vw, 19px); font-weight: 500; margin-bottom: 6px; }
+  .step .t .hn { color: var(--shu); }
+  .step .d { display: block; font-size: 14.5px; color: #3A362F; max-width: 64ch; }
+
+  /* ---------- CLI strip ---------- */
+  .cli {
+    margin-top: 32px; background: var(--sumi-deep); border-radius: 3px;
+    box-shadow: 0 12px 40px -18px rgba(28,26,23,.5);
+    overflow-x: auto;
+  }
+  .cli-body {
+    min-width: 560px; padding: clamp(22px, 3vw, 34px) clamp(20px, 3vw, 32px);
+    font-family: var(--mono); font-size: 12.5px; line-height: 2; color: var(--washi);
+  }
+  .cli-cmd { white-space: nowrap; }
+  .cli-cmd .p { color: var(--nibi); margin-right: 10px; }
+  .cli-cmd .arg { color: var(--nibi); }
+  .cli-rows { margin: 8px 0 24px; }
+  .cli-row { display: grid; grid-template-columns: 26px 152px 164px 1fr; gap: 12px; white-space: nowrap; }
+  .cli-row .k { font-family: var(--serif); font-size: 15px; }
+  .cli-row .k.ok { color: var(--koke); }
+  .cli-row .k.warn { color: var(--ochre); }
+  .cli-row .k.alert { color: var(--shu); }
+  .cli-row .meta { color: var(--nibi); }
+  .cli-res { margin-top: 8px; white-space: nowrap; }
+  .cli-res .k { font-family: var(--serif); font-size: 15px; color: var(--shu); margin-right: 10px; }
+  .cli-res .meta { color: var(--nibi); }
+
   /* ---------- pillars (asymmetric rows) ---------- */
   .pillar {
     display: grid; grid-template-columns: minmax(120px, 1fr) 2fr;
@@ -155,43 +190,6 @@
 
   /* ---------- karesansui divider ---------- */
   .rake { display: block; width: 100%; height: auto; margin: 0; opacity: .9; }
-
-  /* ---------- lexicon ---------- */
-  .lexicon { border-top: 1px solid rgba(28,26,23,.2); margin-top: 40px; }
-  .lex-row {
-    display: grid; grid-template-columns: 96px 1fr 1.4fr; gap: clamp(16px, 3vw, 48px);
-    padding: 22px 0; border-bottom: 1px solid rgba(28,26,23,.12); align-items: baseline;
-  }
-  .lex-row .k { font-size: 34px; font-weight: 500; }
-  .lex-row .r { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; color: var(--nibi); }
-  .lex-row .r b { color: var(--sumi); font-weight: 400; display: block; font-size: 13px; margin-bottom: 2px; }
-  .lex-row .d { font-size: 15px; color: #3A362F; }
-  .lex-row .d code { font-family: var(--mono); font-size: 12.5px; background: var(--washi-shade); padding: 2px 7px; border-radius: 2px; }
-
-  /* ---------- palette ---------- */
-  .swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: rgba(28,26,23,.18); border: 1px solid rgba(28,26,23,.18); margin-top: 44px; }
-  .swatch { background: var(--washi); padding: 0; }
-  .swatch .chip { height: 110px; }
-  .swatch .meta { padding: 14px 16px 18px; }
-  .swatch .meta .jp-name { font-size: 20px; font-weight: 500; }
-  .swatch .meta .en { font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--nibi); display: block; margin: 4px 0 8px; }
-  .swatch .meta .hex { font-family: var(--mono); font-size: 12px; color: var(--ai); }
-  .swatch .meta .use { font-size: 12.5px; color: var(--nibi); display: block; margin-top: 6px; line-height: 1.5; }
-
-  /* ---------- marks ---------- */
-  .marks { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 1px; background: rgba(28,26,23,.18); border: 1px solid rgba(28,26,23,.18); margin-top: 44px; }
-  .mark-cell { background: var(--washi); padding: clamp(28px, 4vw, 48px); display: flex; flex-direction: column; align-items: center; text-align: center; gap: 20px; }
-  .mark-cell .art { height: 150px; display: flex; align-items: center; justify-content: center; }
-  .mark-cell h4 { font-size: 16px; font-weight: 500; }
-  .mark-cell p { font-size: 13px; color: var(--nibi); max-width: 32ch; }
-  .hanko {
-    width: 92px; height: 92px; background: var(--shu); color: var(--washi);
-    display: flex; align-items: center; justify-content: center;
-    font-family: var(--seal); font-size: 54px; border-radius: 6px;
-    transform: rotate(-2.5deg);
-  }
-  .lockup { font-size: 44px; font-weight: 500; letter-spacing: -.02em; display: flex; align-items: center; gap: 14px; }
-  .lockup .seal-dot { width: 30px; height: 30px; background: var(--shu); border-radius: 4px; color: var(--washi); font-family: var(--seal); font-size: 17px; display: inline-flex; align-items: center; justify-content: center; transform: rotate(-2deg); }
 
   /* ---------- UI articulation (dashboard mock) ---------- */
   .mock {
@@ -241,16 +239,6 @@
   .findings-note .fx p { font-size: 13.5px; color: #55503F; max-width: 62ch; }
   .findings-note .fx .lv { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; margin-top: 10px; display: block; color: var(--ai); }
 
-  /* ---------- taglines ---------- */
-  .taglines { margin-top: 44px; }
-  .tagline {
-    padding: 26px 0; border-bottom: 1px solid rgba(28,26,23,.12);
-    display: grid; grid-template-columns: 56px 1fr; gap: 24px; align-items: baseline;
-  }
-  .tagline .no { font-family: var(--mono); font-size: 11px; color: var(--nibi); letter-spacing: .2em; }
-  .tagline .line { font-size: clamp(20px, 2.6vw, 30px); font-weight: 500; letter-spacing: -.01em; }
-  .tagline .sub { font-family: var(--mono); font-size: 11.5px; color: var(--nibi); display: block; margin-top: 6px; letter-spacing: .1em; }
-
   /* ---------- footer ---------- */
   footer {
     padding: 40px clamp(24px, 6vw, 96px); border-top: 1px solid rgba(28,26,23,.2);
@@ -274,11 +262,9 @@
     .hero { grid-template-columns: 1fr; min-height: auto; padding-top: 24px; }
     .vertical-rail { display: none; }
     .facts { grid-template-columns: 1fr; }
+    .step { grid-template-columns: 46px 1fr; gap: 14px; }
     .pillar, .pillar:nth-child(even) { grid-template-columns: 1fr; gap: 18px; }
     .pillar:nth-child(even) .pillar-mark { order: 0; text-align: left; }
-    .marks { grid-template-columns: 1fr; }
-    .lex-row { grid-template-columns: 64px 1fr; }
-    .lex-row .d { grid-column: 1 / -1; }
   }
 </style>
 </head>
@@ -309,7 +295,7 @@
   <!-- ================= WHAT IT IS ================= -->
   <section>
     <span class="kicker reveal">01 · What it is · <b>何</b></span>
-    <h2 class="reveal">Small agents, on a schedule, that only ever report.</h2>
+    <h2 class="reveal">Small agents, on a schedule, that watch and report.</h2>
     <p class="lede reveal" style="--i:1">Roops is a thin harness for recurring agent jobs — the boring, valuable kind: audits, drift checks, health sweeps. Each loop wakes on its schedule, looks at one thing carefully, files its findings, and disappears.</p>
     <div class="facts">
       <div class="fact reveal"><span class="num">一</span><h3>Rounds, not sessions</h3><p>Every firing is a fresh agent with no memory of the last run. State lives in the harness — run history, findings, dispositions — never in the model. The patrol is the same every night; only the garden changes.</p></div>
@@ -319,35 +305,62 @@
     </div>
   </section>
 
-  <!-- ================= PILLARS ================= -->
+  <!-- ================= HOW A ROUND WORKS ================= -->
   <section>
-    <span class="kicker reveal">02 · Three pillars · <b>三柱</b></span>
-    <h2 class="reveal">Minimal as a garden.<br>Dependable as a guard.<br>Arranged as a vase.</h2>
+    <span class="kicker reveal">02 · How a round works · <b>巡回</b></span>
+    <h2 class="reveal">From the schedule to your seal.</h2>
+    <p class="lede reveal" style="--i:1">A firing is five moves, always the same five. Nothing is resident between them: the round starts empty, and what it brings back waits for you.</p>
 
-    <div class="pillar">
-      <div class="pillar-mark reveal"><span class="kanji">枯山水</span><span class="reading">karesansui · dry garden</span></div>
-      <div class="pillar-body">
-        <h3 class="reveal" style="--i:1">The garden is raked every morning</h3>
-        <p class="reveal" style="--i:2">A zen garden is not built once — it is <strong>tended on a schedule</strong>. The raking is the product. Roops is the same object: recurring, disciplined maintenance whose output is order, not novelty. And like a garden, its default state is silence — the aesthetic principle of <strong>ma</strong> (間), meaningful empty space. A quiet dashboard is not “no data”; it is the deliberate, beautiful display of nothing being wrong.</p>
-        <span class="maps-to">maps&nbsp;to → scheduled firings · fresh session per run · empty findings = healthy · whitespace-first dashboard</span>
+    <div class="steps">
+      <div class="step reveal">
+        <span class="no">一</span>
+        <div>
+          <span class="t">The schedule fires — launchd, not a daemon.</span>
+          <span class="d">Nothing runs between rounds. The operating system wakes the loop at its hour and hands it a clean process.</span>
+        </div>
+      </div>
+      <div class="step reveal" style="--i:1">
+        <span class="no">二</span>
+        <div>
+          <span class="t">A fresh agent walks the patrol — read-only by enforcement, not by promise.</span>
+          <span class="d">No memory of the last round, and no way to alter this one: write sandbox, restricted tools, no network. All of it sits beneath the model; none of it is prompt text.</span>
+        </div>
+      </div>
+      <div class="step reveal" style="--i:2">
+        <span class="no">三</span>
+        <div>
+          <span class="t">Findings come back arranged by severity — shin 真, soe 副, hikae 控.</span>
+          <span class="d">Few stems, deliberate placement, everything that does not belong cut away. An empty arrangement is the healthy one.</span>
+        </div>
+      </div>
+      <div class="step reveal" style="--i:3">
+        <span class="no">四</span>
+        <div>
+          <span class="t">You stamp — <span class="hn">認</span> ack · <span class="hn">休</span> snooze · <span class="hn">済</span> dismiss · <span class="hn">承</span> approve.</span>
+          <span class="d">The first three quiet the garden, and the loop stops raising what you have already answered. The fourth is not a quieting.</span>
+        </div>
+      </div>
+      <div class="step reveal" style="--i:4">
+        <span class="no">五</span>
+        <div>
+          <span class="t">An approved finding becomes an order, executed on its own audited path — never mid-patrol.</span>
+          <span class="d">Dry-run, execute, confirm — each step with its own record, and none of it inside the round that proposed it.</span>
+        </div>
       </div>
     </div>
 
-    <div class="pillar">
-      <div class="pillar-mark reveal"><span class="kanji">武士道</span><span class="reading">bushidō · the way</span></div>
-      <div class="pillar-body">
-        <h3 class="reveal" style="--i:1">The rounds are kept. The blade stays sheathed.</h3>
-        <p class="reveal" style="--i:2">A castle guard walks the same perimeter at the same hour, every night, whether or not anything happened the night before. That patrol is <strong>junkai</strong> (巡回) — and it is exactly what a scheduled run is. The second half of the discipline matters just as much: <strong>the patrol itself is read-only, enforced at the engine level</strong>. On rounds, the guard observes and reports. The acting comes after — when the lord seals an order, it is carried out in daylight, on its own path, with its own record. The blade is drawn on command, never on patrol.</p>
-        <span class="maps-to">maps&nbsp;to → cron-like reliability · per-loop permission axes · rounds propose · 承 approves · execution on its own audited path</span>
-      </div>
-    </div>
-
-    <div class="pillar">
-      <div class="pillar-mark reveal"><span class="kanji">生け花</span><span class="reading">ikebana · living flowers</span></div>
-      <div class="pillar-body">
-        <h3 class="reveal" style="--i:1">Findings are arranged, not dumped</h3>
-        <p class="reveal" style="--i:2">Classical ikebana arranges three stems at three heights: <strong>shin</strong> (真), the tallest; <strong>soe</strong> (副), the middle; <strong>hikae</strong> (控), the lowest. This is — exactly, with no forcing — a severity hierarchy: <strong>shin = alert, soe = warn, hikae = info</strong>. A run’s findings are a small arrangement: few stems, deliberate placement, and the cutting away of everything that does not belong. Dismissal is part of the art.</p>
-        <span class="maps-to">maps&nbsp;to → severity levels · ack / dismiss / snooze as pruning · effective_status = the tallest stem in the vase</span>
+    <p class="quiet reveal" style="--i:1; margin-top:36px">The same round, from the terminal.</p>
+    <div class="cli reveal" style="--i:2">
+      <div class="cli-body">
+        <div class="cli-cmd"><span class="p">$</span>roops rounds</div>
+        <div class="cli-rows">
+          <div class="cli-row"><span class="k ok">済</span><span>tls-certs</span><span class="meta">daily 06:00</span><span class="meta">2m11s</span></div>
+          <div class="cli-row"><span class="k warn">注</span><span>dead-links</span><span class="meta">daily 06:10</span><span class="meta">3m02s</span></div>
+          <div class="cli-row"><span class="k alert">警</span><span>deps-drift</span><span class="meta">daily 06:20</span><span class="meta">1m44s</span></div>
+          <div class="cli-row"><span class="k ok">済</span><span>backups-verify</span><span class="meta">weekly mon 07:00</span><span class="meta">—</span></div>
+        </div>
+        <div class="cli-cmd"><span class="p">$</span>roops stamp deps-drift F-114 <span class="arg">--note "upgrade scheduled friday"</span></div>
+        <div class="cli-res"><span class="k">認</span>F-114 stamped <span class="meta">· deps-drift · note kept · the loop stops raising it</span></div>
       </div>
     </div>
   </section>
@@ -369,65 +382,42 @@
     <ellipse cx="588" cy="55" rx="30" ry="7" fill="#F2EDE3" fill-opacity=".14"/>
   </svg>
 
-  <!-- ================= LEXICON ================= -->
+  <!-- ================= PILLARS ================= -->
   <section>
-    <span class="kicker reveal">03 · Working vocabulary · <b>語彙</b></span>
-    <h2 class="reveal">Words the product borrows.</h2>
-    <p class="lede reveal" style="--i:1">Not decoration — each term earns its place by naming something the harness already does. Used sparingly: one or two in the UI, the rest in docs and voice.</p>
-    <div class="lexicon">
-      <div class="lex-row reveal"><span class="k">巡</span><span class="r"><b>meguru / jun</b>to go around; a patrol</span><span class="d">A single firing of a loop. “Last 巡: 06:00.” CLI verb: <code>roops rounds</code>.</span></div>
-      <div class="lex-row reveal" style="--i:1"><span class="k">手入れ</span><span class="r"><b>teire</b>tending, upkeep</span><span class="d">The category of work Roops does — garden-keeping for repos and systems. The docs’ word for “maintenance loop.”</span></div>
-      <div class="lex-row reveal" style="--i:2"><span class="k">間</span><span class="r"><b>ma</b>meaningful interval / negative space</span><span class="d">Both meanings apply: the <em>interval</em> between runs, and the <em>empty space</em> of a healthy dashboard. One kanji, the whole product.</span></div>
-      <div class="lex-row reveal" style="--i:3"><span class="k">判</span><span class="r"><b>han</b>the seal / stamp</span><span class="d">Dispositions. To ack a finding is to stamp it. Hanko stamps as status iconography: <code>済</code> settled, <code>認</code> acknowledged, <code>休</code> snoozed — and <code>承</code> approved, the one stamp that becomes an order.</span></div>
-      <div class="lex-row reveal" style="--i:4"><span class="k">改善</span><span class="r"><b>kaizen</b>continuous improvement</span><span class="d">The philosophy of small recurring passes — the reason loops exist at all. Voice-of-brand word, not UI copy.</span></div>
-    </div>
-  </section>
+    <span class="kicker reveal">03 · Three pillars · <b>三柱</b></span>
+    <h2 class="reveal">Minimal as a garden.<br>Dependable as a guard.<br>Arranged as a vase.</h2>
 
-  <!-- ================= PALETTE ================= -->
-  <section>
-    <span class="kicker reveal">04 · Color · <b>色</b></span>
-    <h2 class="reveal">Ink, paper, and one seal of vermillion.</h2>
-    <p class="lede reveal" style="--i:1">Traditional Japanese color names (nihon no iro), each with a job. Vermillion is the only accent — it appears exactly where a hanko would: on things a human decided.</p>
-    <div class="swatches reveal" style="--i:2">
-      <div class="swatch"><div class="chip" style="background:#1C1A17"></div><div class="meta"><span class="jp-name">墨</span><span class="en">sumi · ink</span><span class="hex">#1C1A17</span><span class="use">Text, marks, the ensō. Never pure black.</span></div></div>
-      <div class="swatch"><div class="chip" style="background:#F2EDE3"></div><div class="meta"><span class="jp-name">生成</span><span class="en">kinari · raw paper</span><span class="hex">#F2EDE3</span><span class="use">The surface. Warm, faintly textured washi.</span></div></div>
-      <div class="swatch"><div class="chip" style="background:#C73E2B"></div><div class="meta"><span class="jp-name">朱</span><span class="en">shu · vermillion</span><span class="hex">#C73E2B</span><span class="use">The seal. Alerts, acks, the one accent.</span></div></div>
-      <div class="swatch"><div class="chip" style="background:#2E4A5B"></div><div class="meta"><span class="jp-name">藍</span><span class="en">ai · indigo</span><span class="hex">#2E4A5B</span><span class="use">Secondary ink — code, links, quiet emphasis.</span></div></div>
-      <div class="swatch"><div class="chip" style="background:#6B7A5C"></div><div class="meta"><span class="jp-name">苔</span><span class="en">koke · moss</span><span class="hex">#6B7A5C</span><span class="use">Healthy status only. Moss grows on what is left in peace.</span></div></div>
-      <div class="swatch"><div class="chip" style="background:#8C8578"></div><div class="meta"><span class="jp-name">鈍</span><span class="en">nibi · dulled</span><span class="hex">#8C8578</span><span class="use">Metadata, timestamps, the recessive layer.</span></div></div>
+    <div class="pillar">
+      <div class="pillar-mark reveal"><span class="kanji">枯山水</span><span class="reading">karesansui · dry garden</span></div>
+      <div class="pillar-body">
+        <h3 class="reveal" style="--i:1">The garden is raked every morning</h3>
+        <p class="reveal" style="--i:2">A zen garden is not built once — it is <strong>tended on a schedule</strong>, and the raking is the product. Roops keeps a garden’s default state too: silence, the <strong>ma</strong> (間) of meaningful empty space, where a quiet dashboard is not “no data” but the deliberate display of nothing being wrong.</p>
+        <span class="maps-to">maps&nbsp;to → scheduled firings · fresh session per run · empty findings = healthy · whitespace-first dashboard</span>
+      </div>
     </div>
-  </section>
 
-  <!-- ================= MARKS ================= -->
-  <section>
-    <span class="kicker reveal">05 · The mark · <b>印</b></span>
-    <h2 class="reveal">An ensō is a loop drawn with discipline.</h2>
-    <p class="lede reveal" style="--i:1">The ensō (円相) — the zen circle, one breath, one stroke — is the rare logo concept that is not a metaphor. It literally <em>is</em> a loop. Left slightly open it is a run in progress; closed, a run complete.</p>
-    <div class="marks">
-      <div class="mark-cell reveal">
-        <div class="art"><svg viewBox="0 0 200 200" width="150" aria-hidden="true">
-          <path d="M 108 22 C 62 20 24 58 24 102 C 24 148 62 182 106 180 C 148 178 178 144 177 102 C 176 66 152 38 122 28" fill="none" stroke="#1C1A17" stroke-width="10" stroke-linecap="round"/>
-          <path d="M 112 26 C 74 22 32 56 30 100 C 28 146 64 178 106 176" fill="none" stroke="#1C1A17" stroke-width="3.5" stroke-linecap="round" opacity=".35"/>
-        </svg></div>
-        <h4>Primary — the open ensō</h4>
-        <p>Brush-weighted, imperfect, gap at the top right: the loop that will run again. The whole identity in one stroke.</p>
+    <div class="pillar">
+      <div class="pillar-mark reveal"><span class="kanji">武士道</span><span class="reading">bushidō · the way</span></div>
+      <div class="pillar-body">
+        <h3 class="reveal" style="--i:1">The rounds are kept. The blade stays sheathed.</h3>
+        <p class="reveal" style="--i:2">A castle guard walks the same perimeter at the same hour every night, whether or not anything happened the night before — that patrol is <strong>junkai</strong> (巡回), and it is exactly what a scheduled run is. The patrol itself is read-only, enforced at the engine level, and the acting comes after: <strong>the blade is drawn on command, never on patrol</strong>.</p>
+        <span class="maps-to">maps&nbsp;to → cron-like reliability · per-loop permission axes · rounds propose · 承 approves · execution on its own audited path</span>
       </div>
-      <div class="mark-cell reveal" style="--i:1">
-        <div class="art"><div class="hanko">巡</div></div>
-        <h4>Seal — 巡 in vermillion</h4>
-        <p>The hanko form for favicons, stamps, and small sizes. 巡: to make the rounds.</p>
-      </div>
-      <div class="mark-cell reveal" style="--i:2">
-        <div class="art"><div class="lockup">roops<span class="seal-dot">巡</span></div></div>
-        <h4>Lockup — wordmark + seal</h4>
-        <p>Lowercase serif wordmark, sealed like a signed document. The seal always sits last, as a signature does.</p>
+    </div>
+
+    <div class="pillar">
+      <div class="pillar-mark reveal"><span class="kanji">生け花</span><span class="reading">ikebana · living flowers</span></div>
+      <div class="pillar-body">
+        <h3 class="reveal" style="--i:1">Findings are arranged, not dumped</h3>
+        <p class="reveal" style="--i:2">Classical ikebana arranges three stems at three heights — <strong>shin</strong> (真) tallest, <strong>soe</strong> (副) middle, <strong>hikae</strong> (控) lowest — which is, with no forcing at all, a severity hierarchy: <strong>shin = alert, soe = warn, hikae = info</strong>. A run’s findings are a small arrangement of few stems and deliberate placement, with everything that does not belong cut away — <strong>dismissal is part of the art</strong>.</p>
+        <span class="maps-to">maps&nbsp;to → severity levels · ack / dismiss / snooze as pruning · effective_status = the tallest stem in the vase</span>
       </div>
     </div>
   </section>
 
-  <!-- ================= UI ARTICULATION ================= -->
+  <!-- ================= THE INTERFACE ================= -->
   <section>
-    <span class="kicker reveal">06 · Applied · <b>実装</b></span>
+    <span class="kicker reveal">04 · The interface · <b>実装</b></span>
     <h2 class="reveal">What the dashboard becomes.</h2>
     <p class="lede reveal" style="--i:1">The run matrix as a tended garden. Runs are rake-lines; findings are stems; human dispositions are stamps.</p>
 
@@ -489,21 +479,10 @@
     <p class="quiet reveal" style="margin-top:28px">This is a still. The full interface concept — running rounds, the live engawa view, stamping — is a page of its own: <a href="./ui.html">enter the garden</a>.</p>
   </section>
 
-  <!-- ================= TAGLINES ================= -->
-  <section>
-    <span class="kicker reveal">07 · Voice · <b>声</b></span>
-    <h2 class="reveal">Ways to say it.</h2>
-    <div class="taglines">
-      <div class="tagline reveal"><span class="no">案 A</span><div><span class="line">Quiet rounds. Kept promises.</span><span class="sub">The bushidō read — dependability first.</span></div></div>
-      <div class="tagline reveal" style="--i:1"><span class="no">案 B</span><div><span class="line">The garden is raked every morning.</span><span class="sub">The karesansui read — the README’s opening line.</span></div></div>
-      <div class="tagline reveal" style="--i:2"><span class="no">案 C</span><div><span class="line">Tend, don’t toil.</span><span class="sub">The teire read — shortest, best on a terminal banner.</span></div></div>
-      <div class="tagline reveal" style="--i:3"><span class="no">案 D</span><div><span class="line">毎朝、庭を整える。</span><span class="sub">“Each morning, the garden is set in order.” — for the people who will ask what it means. That is the point of a tagline.</span></div></div>
-    </div>
-  </section>
-
   <footer>
     <span><span class="f-shu">巡</span>&nbsp; ROOPS — RECURRING AGENT HARNESS</span>
     <span><a href="./ui.html">THE GARDEN — UI CONCEPT</a></span>
+    <span><a href="./brandkit/">BRAND KIT — 印</a></span>
     <span><a href="https://github.com/ytubecoder/roops">GITHUB</a></span>
     <span>SET IN NOTO SERIF JP / YUJI SYUKU</span>
   </footer>

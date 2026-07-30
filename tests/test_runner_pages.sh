@@ -116,6 +116,9 @@ EOF
   run_runner "$root" pageloop
   unset FAKE_CONTRACT_FILE
   assert_file_missing "no promotion on run_id mismatch" "$root/reports/pageloop/latest.html"
+  local dated
+  dated="$(ls "$root/reports/pageloop/" 2>/dev/null | grep -c '^[0-9-]*[0-9]\.html$')"
+  assert_eq "no dated page on run_id mismatch" 0 "$dated"
   rm -rf "$root"
 }
 
@@ -175,6 +178,31 @@ EOF
   rm -rf "$root"
 }
 
+test_loop_data_commit_sets_restrictive_modes() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"; seed_pagekit "$root"
+  local dir; dir="$(make_loop "$root" pageloop agent)"
+  make_precheck "$dir" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$OUT_DIR/loop-data.commit"
+printf 'baseline-v2' > "$OUT_DIR/loop-data.commit/baseline.txt"
+echo "digest line"
+EOF
+  local fixture="$root/fixture-contract.json"
+  write_contract_fixture "$fixture" ok '[]'
+  export FAKE_CONTRACT_FILE="$fixture"
+  run_runner "$root" pageloop
+  unset FAKE_CONTRACT_FILE
+  local mode_parent mode_loop_dir mode_file
+  mode_parent="$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$root/state/loop-data")"
+  mode_loop_dir="$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$root/state/loop-data/pageloop")"
+  mode_file="$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$root/state/loop-data/pageloop/baseline.txt")"
+  assert_eq "loop-data parent dir is 0700" 700 "$mode_parent"
+  assert_eq "loop-data loop dir is 0700" 700 "$mode_loop_dir"
+  assert_eq "committed loop-data file is 0600" 600 "$mode_file"
+  rm -rf "$root"
+}
+
 test_retention_keeps_latest_html() {
   reset_fake_env
   local root; root="$(new_hermetic_root)"; seed_pagekit "$root"
@@ -214,6 +242,7 @@ test_failing_renderer_leaves_latest_untouched_and_run_completed
 test_gate_rejects_wrong_run_id
 test_gate_rejects_secret_shaped_content
 test_loop_data_commit_only_on_promotion
+test_loop_data_commit_sets_restrictive_modes
 test_retention_keeps_latest_html
 test_no_render_sh_means_no_pages
 

@@ -949,7 +949,7 @@ finish_render_log() {
   fi
   printf '%s\n' "$1" >> "$RENDER_LOG" || true
   chmod 600 "$RENDER_LOG" 2>/dev/null || true
-  redact_file_inplace "$RENDER_LOG" 2>/dev/null || true
+  redact_file_inplace "$RENDER_LOG" || { log_err "render log redaction failed (ignored)"; true; }
   rm -f "$raw"
   return 0
 }

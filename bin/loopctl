@@ -1400,21 +1400,16 @@ def main(argv=None):
     # — `loopctl` alone, or `loopctl --root R` — parses those flags onto
     # `args` same as always; `args.verb` just comes back None (no subparser
     # ever ran). `extra` is only non-empty for genuinely unrecognized
-    # arguments, reported as a usage error below exactly like `parse_args`
-    # would have — except when there's no verb at all, in which case
-    # content-first (Amendment 2 — 2026-07-30) wins: print the live fleet
-    # summary instead of a usage error, exit 0.
+    # arguments — checked unconditionally below, BEFORE the verb-is-None
+    # branch (Amendment 2 — 2026-07-30 fix round 2: checking verb-is-None
+    # first let a typo'd flag like `--root-dir=X` silently print the
+    # DEFAULT-root fleet at exit 0 instead of erroring — the exact
+    # signal-loss the flag-placement fix eliminated for the "clobbered"
+    # case, now closed for "genuinely unrecognized" too).
     args, extra = parser.parse_known_args(argv)
-
-    if args.verb is None:
-        args.root = os.path.abspath(args.root)
-        args.name = None
-        return cmd_status(args)
 
     if extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
-
-    args.root = os.path.abspath(args.root)
 
     dispatch = {
         "new": cmd_new,
@@ -1434,6 +1429,36 @@ def main(argv=None):
         "snooze": lambda a: cmd_disposition(a, "snooze"),
         "reopen": lambda a: cmd_disposition(a, "reopen"),
     }
+
+    if args.verb is None:
+        # (fix round 2) An `extra`-free parse with no verb ISN'T always a
+        # genuine bare invocation: `--root`/`--actor`/`--from` each take a
+        # value, so a verb placed right after one of them with nothing
+        # following gets silently consumed AS that value instead of ever
+        # reaching the subparsers positional — `loopctl --actor status`
+        # parses cleanly as actor="status", verb=None, extra=[] — nothing
+        # for the check above to catch, yet the user's `status` verb just
+        # vanished. This is indistinguishable from a genuinely-intended
+        # literal value by parsing alone, so treat any raw argv token that
+        # exactly matches a known verb name as a near-certain mistake and
+        # refuse loudly rather than silently defaulting to the default
+        # root. `--flag=value` syntax (e.g. `--actor=status`) is the
+        # escape hatch: it never appears in argv as a bare token equal to
+        # a verb name, so a genuinely-intended literal value survives.
+        raw = argv if argv is not None else sys.argv[1:]
+        collided = [tok for tok in raw if tok in dispatch]
+        if collided:
+            parser.error(
+                f"ambiguous invocation: {collided[0]!r} looks like a verb but was "
+                "consumed as a flag's value — use --flag=value syntax, or reorder, "
+                "if that's intentional"
+            )
+        args.root = os.path.abspath(args.root)
+        args.name = None
+        return cmd_status(args)
+
+    args.root = os.path.abspath(args.root)
+
     fn = dispatch.get(args.verb)
     if fn is None:
         parser.print_usage(sys.stderr)

@@ -677,9 +677,15 @@ Global flags: `--root R` (default `$LOOPS_ROOT`), `--json` (machine-readable out
 `--from loops.d|examples`, `--actor A` (default `$USER`, or `unknown` if unset — Amendment 2 —
 2026-07-30). Exit codes: `0` ok · `1` operation failed · `2` usage — **except** a bare, verb-less
 invocation (Amendment 2 — 2026-07-30, content-first): that is no longer a usage error, it dispatches
-to `status` and exits `0`. Only an unrecognized verb (e.g. `loopctl frobnicate`), or genuinely
-unrecognized arguments after a valid verb, still exit `2`; `--help` is unaffected — it still prints
-usage and exits `0` without dispatching anywhere.
+to `status` and exits `0`. Everything else that used to be a usage error still is, at `2`: an
+unrecognized verb (e.g. `loopctl frobnicate`), genuinely unrecognized arguments regardless of
+whether a verb was given (fix round 2 — 2026-07-30: this check now runs unconditionally, before the
+bare-invocation branch, not after it), and (fix round 2) a verb-less parse where a raw argv token
+exactly matches a known verb name — meaning a preceding `--root`/`--actor`/`--from` almost certainly
+swallowed it as that flag's value instead of it ever reaching the verb position (e.g. `loopctl
+--actor status`) — refused as "ambiguous invocation" rather than silently defaulting to the default
+root at exit `0`. `--help` is unaffected — it still prints usage and exits `0` without dispatching
+anywhere.
 
 **Bare invocation (Amendment 2 — 2026-07-30, fix round 1 — 2026-07-30):** `loopctl` and `loopctl
 --root R` (no verb, in any flag placement) call the exact same code path as `loopctl status` — same
@@ -700,8 +706,20 @@ on the subparser's copy means an unrepeated flag is simply absent from the sub-n
 clobbering copy loop never touches it and `p`'s resolved value survives; a flag that IS repeated
 after the verb (the pre-existing, still most common convention — `status --root R`) is parsed for
 real by the subparser and correctly wins, same as before. Both flag placements are equivalent for
-all four flags — verified in `TestGlobalFlagPlacement`. Only an unrecognized verb, or genuinely
-unrecognized arguments after a valid verb, still exit `2`.
+all four flags — verified in `TestGlobalFlagPlacement`.
+  **Fix round 2 — the swallowed-verb case:** an `extra`-free parse with `args.verb is None` isn't
+always a genuine bare invocation — `--root`/`--actor`/`--from` each take a value, so a verb token
+placed right after one of them (with nothing following it) is silently consumed AS that value
+instead of ever reaching the subparsers positional: `loopctl --actor status` parses cleanly as
+`actor="status"`, `verb=None`, `extra=[]` — nothing for the "unrecognized arguments" check to catch,
+yet the intended `status` verb vanished, defaulting the root at exit `0`. Indistinguishable from a
+genuinely-intended literal value by parsing alone, so `main()` treats any raw argv token that
+exactly matches a known verb name (once `args.verb is None`) as a near-certain mistake and refuses
+loudly (`"ambiguous invocation: '<token>' looks like a verb but was consumed as a flag's value"`,
+exit `2`) rather than silently defaulting. `--flag=value` syntax (e.g. `--actor=status`) is the
+escape hatch — it's a single argv token, never equal to a bare verb name, so a genuinely-intended
+literal value survives. Covers `loopctl --root-dir=/sandbox` (a typo'd flag name — caught by the
+hoisted `extra` check instead, same fix), `loopctl --actor status`, and `loopctl --root status`.
 
 **`status` aggregates + blanking fix + `in_flight` (Amendment 2 — 2026-07-30, fix round 1 —
 2026-07-30):** `status` (with or without `<name>`) prints a leading line before anything else:

@@ -1990,7 +1990,14 @@ class TestBareInvocation(LoopsRootTestCase):
 
     def test_bare_invocation_respects_root_flag(self):
         self.fixture.minimal_valid_loop("b2")
-        r = run_cli(["--root", self.root])
+        # Decoy default root (fix round 2 test hygiene): without this, the
+        # assertion leans on the real ~/projects/loops not happening to
+        # have exactly 1 loop — a silent fallback to the default would
+        # pass or fail this test depending on machine state, not on
+        # whether --root was actually respected.
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(["--root", self.root], env_overrides={"LOOPS_ROOT": decoy})
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         self.assertIn("fleet: 1 loops", r.stdout)
 
@@ -2036,6 +2043,58 @@ class TestBareInvocation(LoopsRootTestCase):
         for flag in ("--root", "--json", "--from", "--actor"):
             self.assertIn(flag, r.stdout)
 
+    # -- fix round 2: a verb-less parse isn't always a genuine bare
+    # invocation -- three ways a typo silently loses the verb/root and
+    # must now exit 2 instead of exit 0 against the default root.
+
+    def test_unrecognized_flag_with_no_verb_exits_2(self):
+        # Repro 1: on the pre-Task-16 base this exited 2. The bug: `extra`
+        # was checked AFTER the verb-is-None branch, so a typo'd flag name
+        # with no verb silently printed the DEFAULT-root fleet at exit 0.
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(["--root-dir=/sandbox"], env_overrides={"LOOPS_ROOT": decoy})
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("fleet:", r.stdout)
+        self.assertIn("unrecognized arguments", r.stderr)
+
+    def test_actor_swallowing_a_verb_token_exits_2(self):
+        # Repro 2: --actor takes a value, so `loopctl --actor status`
+        # parses cleanly as actor="status", verb=None, extra=[] -- nothing
+        # for an "unrecognized arguments" check to catch. Must refuse
+        # rather than silently default the root.
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(["--actor", "status"], env_overrides={"LOOPS_ROOT": decoy})
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("fleet:", r.stdout)
+        self.assertIn("ambiguous invocation", r.stderr)
+
+    def test_root_swallowing_a_verb_token_exits_2(self):
+        # Repro 3: same shape as above but for --root -- the more
+        # dangerous case, since root silently becoming the literal string
+        # "status" would (if not refused) drive every subsequent read
+        # against a bogus path instead of the intended root.
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(["--root", "status"], env_overrides={"LOOPS_ROOT": decoy})
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("fleet:", r.stdout)
+        self.assertIn("ambiguous invocation", r.stderr)
+
+    def test_flag_equals_syntax_is_the_ambiguity_escape_hatch(self):
+        # `--actor=status` is a single argv token, never equal to a bare
+        # verb name, so a genuinely-intended literal value survives the
+        # ambiguity check the three tests above rely on.
+        self.fixture.minimal_valid_loop("b4")
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(
+            ["--root", self.root, "--actor=status"], env_overrides={"LOOPS_ROOT": decoy}
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("fleet: 1 loops", r.stdout)
+
 
 # ---------------------------------------------------------------------------
 # loopctl global flag placement (Amendment 2 — 2026-07-30 fix round 1):
@@ -2067,14 +2126,18 @@ class TestGlobalFlagPlacement(LoopsRootTestCase):
         self.assertEqual(fleet_before["loops"], 1)
         self.assertEqual(fleet_before, fleet_after)
 
-    def test_root_before_verb_on_bare_invocation_too(self):
-        # The bare-invocation case specifically named in the live repro.
+    def test_root_before_verb_on_genuine_bare_invocation(self):
+        # Fix round 2 test hygiene: this used to be misnamed and actually
+        # duplicate the "before" half of test_root_before_and_after_verb_
+        # are_equivalent (its argv included the "status" verb, so it
+        # wasn't a bare invocation at all). A genuine bare invocation —
+        # --root with no verb whatsoever — must resolve --root correctly
+        # too, not just the "flags before a real verb" case.
         self.fixture.minimal_valid_loop("g1b")
         decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
         self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
         r = run_cli(
-            ["--root", self.root, "status", "--json"],
-            env_overrides={"LOOPS_ROOT": decoy},
+            ["--root", self.root, "--json"], env_overrides={"LOOPS_ROOT": decoy}
         )
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         self.assertEqual(json.loads(r.stdout)["fleet"]["loops"], 1)

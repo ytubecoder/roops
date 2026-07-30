@@ -88,6 +88,20 @@ class KagiBanPrecheckTests(unittest.TestCase):
             )
             self.assertEqual(ids1, ids2)
 
+    def test_unparseable_current_scan_fails_without_committing_baseline(self):
+        with tempfile.TemporaryDirectory() as root:
+            scan = os.path.join(root, "garbage-scan.json")
+            with open(scan, "w") as f:
+                f.write("{not json")
+            proc, out_dir = self.run_precheck(root, scan)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("unparseable", proc.stderr)
+            self.assertFalse(
+                os.path.exists(
+                    os.path.join(out_dir, "loop-data.commit", "scan-prev.json")
+                )
+            )
+
 
 class KagiBanRendererTests(unittest.TestCase):
     def test_renderer_passes_the_gate(self):

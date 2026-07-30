@@ -118,6 +118,25 @@ class TestRedactPatterns(unittest.TestCase):
         self.assertNotIn("hunter2value", out)
         self.assertNotIn("trailing context", out)
 
+    def test_compound_keyword_finding_id_is_not_redacted(self):
+        text = "hosts-token: av:gh-cli-hosts-token:1a2b3c4d | high | detail"
+        self.assertEqual(redact(text), text)
+
+    def test_bare_token_keyword_still_redacts_value(self):
+        out = redact("token: hunter2")
+        self.assertEqual(out, "token: «redacted:secret»")
+
+    def test_authorization_bearer_still_redacts_value(self):
+        out = redact("Authorization: Bearer abc.def")
+        self.assertEqual(out, "Authorization: «redacted:secret»")
+
+    def test_digest_shaped_precheck_line_is_not_redacted(self):
+        text = (
+            "ONGOING av:gh-cli-hosts-token:1a2b3c4d | high | "
+            "gh-cli-hosts-token | /Users/x/.config/gh/hosts.yml"
+        )
+        self.assertEqual(redact(text), text)
+
 
 class TestRedactCLI(unittest.TestCase):
     def test_stdin_to_stdout_filter(self):

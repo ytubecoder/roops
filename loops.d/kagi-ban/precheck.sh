@@ -12,6 +12,15 @@ if [ ! -x "$AV_BIN" ]; then
   exit 1
 fi
 
+# The audit's world-view must not depend on the trigger context (launchd's
+# minimal PATH silently dropped 4 path-hygiene exposures on 2026-07-30).
+# Pin to the login-shell PATH — the surface the user actually lives in.
+AUDIT_PATH="$(/bin/zsh -l -c 'printf %s "$PATH"' 2>/dev/null | tail -n 1)"
+case "$AUDIT_PATH" in
+  */bin*) export PATH="$AUDIT_PATH" ;;
+  *) echo "WARN: could not resolve login-shell PATH; using inherited PATH" >&2 ;;
+esac
+
 AV_VERSION="$("$AV_BIN" --version 2>/dev/null | head -n1 || echo unknown)"
 "$AV_BIN" scan --json > "$OUT_DIR/scan.json"
 
@@ -26,14 +35,24 @@ import sys
 
 scan_path, prev_path, commit_path, av_version = sys.argv[1:5]
 
-def keys(path):
-    """finding key: av:<source>:<sha8 of sorted affected paths> (no line
-    numbers — volatile identity is forbidden, LOOP_AUTHORING §2)."""
+def current_findings(path):
     try:
         with open(path) as f:
-            findings = json.load(f).get("findings") or []
+            return json.load(f).get("findings") or []
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: current scan JSON unparseable: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+def previous_findings(path):
+    try:
+        with open(path) as f:
+            return json.load(f).get("findings") or []
     except (OSError, ValueError):
-        return {}
+        return []
+
+def keys(findings):
+    """finding key: av:<source>:<sha8 of sorted affected paths> (no line
+    numbers — volatile identity is forbidden, LOOP_AUTHORING §2)."""
     out = {}
     for item in findings:
         paths = sorted(a.get("path") or "" for a in item.get("affected") or [])
@@ -43,8 +62,8 @@ def keys(path):
                     "paths": paths}
     return out
 
-current = keys(scan_path)
-previous = keys(prev_path)
+current = keys(current_findings(scan_path))
+previous = keys(previous_findings(prev_path))
 new = sorted(set(current) - set(previous))
 resolved = sorted(set(previous) - set(current))
 ongoing = sorted(set(current) & set(previous))

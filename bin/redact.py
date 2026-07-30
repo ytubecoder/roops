@@ -29,9 +29,12 @@ _PRIVATE_KEY_RE = re.compile(
 # REST OF THE LINE (not just the first token: multi-token values like
 # `Authorization: Bearer eyJ...` must not leak past the key name). Applied
 # last so it doesn't fight with the token patterns above. `.` does not match
-# `\n` (no DOTALL), so this naturally stops at end-of-line.
+# `\n` (no DOTALL), so this naturally stops at end-of-line. Compound names like
+# `my-token: value` do not trip this generic defense-in-depth rule; specific
+# high-value token patterns above still fire regardless and are the primary
+# controls.
 _KV_RE = re.compile(
-    r"(api[_-]?key|secret|password|token|authorization)(\s*[:=]\s*)(.+)",
+    r"(?<![\w-])(api[_-]?key|secret|password|token|authorization)(\s*[:=]\s*)(.+)",
     re.IGNORECASE,
 )
 

@@ -804,6 +804,22 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   findings shown greyed/collapsed, not hidden; a recent-runs table including runner_status,
   report links, and the raw fallback panel. The dashboard is static (Change 4 Option A):
   dispositions are entered via `loopctl`, and the page may display the ready-to-paste command.
+  **Per-finding agent handoff (Amendment 2 — 2026-07-30):** each **unsuppressed** open finding
+  additionally renders a collapsed `<details class="finding-handoff">` paste-into-an-agent
+  block (`_render_findings`/`finding_handoff_text`) — same deterministic-template pattern as
+  the run-failure handoff block, merging sqlite's recurrence fields (`finding_id`, `severity`,
+  `times_seen`, `first_seen_at`) with `latest.json`'s `title`/`detail` (falling back to
+  sqlite's `title`/`severity` and an empty detail when the finding has no live entry — e.g.
+  resolved since, or `latest.json` missing — never a crash). Model-derived text (`title`,
+  `detail`) is HTML-escaped along with the rest of the composed block; `detail` is clamped at
+  2 KiB (`truncate_value`) with a truncation marker. The template MUST NEVER contain the word
+  "approve" in any form (ack ≠ approval is settled doctrine): it distinguishes acting on the
+  finding in the reader's OWN agent context/permissions from suppressing it via the pasted
+  `loopctl dismiss <loop> <finding_id> [--root R] --note "..."` / `loopctl snooze <loop>
+  <finding_id> [--root R] --until YYYY-MM-DD` command lines. `--root <root>` is included in
+  those pasted commands only when the generating root's realpath differs from the realpath of
+  `~/projects/loops` (`root_flag_for`). Suppressed findings are unaffected — still
+  greyed/collapsed with the existing `reopen` command, no handoff block.
 - **Failure surfacing (amendment 2026-07-29):** runs whose `runner_status` is one of
   `precheck-failed | engine-failed | engine-timeout | auth-failed | tool-denied |
   contract-violation | harness-error` render their `error_detail` + `exit_code` in the

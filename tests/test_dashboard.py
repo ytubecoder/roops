@@ -1372,6 +1372,138 @@ class FailureSurfacingTests(unittest.TestCase):
         self.assertNotIn('class="report-drawer"', html)
 
 
+class FindingHandoffTests(unittest.TestCase):
+    """Per-finding paste-into-an-agent blocks (Amendment 2) — mirrors the run-failure
+    handoff block's deterministic-template style, but scoped to one open finding."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+
+    def _root_with_finding(
+        self,
+        loop_name,
+        finding_id,
+        severity="warn",
+        detail=None,
+        title=None,
+        times_seen=1,
+        dismiss=False,
+        in_latest_json=True,
+    ):
+        conn = self.fx.init_db()
+        self.fx.add_loop(loop_name)
+        self.fx.add_run(
+            conn,
+            "r1",
+            loop_name,
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            severity,
+            severity,
+            "issues found",
+        )
+        title = title or f"{loop_name} finding {finding_id}"
+        conn.execute(
+            "INSERT INTO findings (finding_id, loop_name, title, severity, first_seen_run, "
+            "first_seen_at, last_seen_run, last_seen_at, times_seen, resolved_at) VALUES "
+            "(?,?,?,?,?,?,?,?,?,NULL)",
+            (
+                finding_id,
+                loop_name,
+                title,
+                severity,
+                "r0",
+                iso(NOW - timedelta(days=1)),
+                "r1",
+                iso(NOW - timedelta(minutes=4)),
+                times_seen,
+            ),
+        )
+        if dismiss:
+            conn.execute(
+                "INSERT INTO dispositions (loop_name, finding_id, action, note, "
+                "snooze_until, created_at) VALUES (?,?,?,?,?,?)",
+                (
+                    loop_name,
+                    finding_id,
+                    "dismiss",
+                    "handled elsewhere",
+                    None,
+                    iso(NOW - timedelta(hours=1)),
+                ),
+            )
+        conn.commit()
+        conn.close()
+        if in_latest_json:
+            finding_entry = {
+                "finding_id": finding_id,
+                "title": title,
+                "severity": severity,
+            }
+            if detail is not None:
+                finding_entry["detail"] = detail
+            self.fx.write_latest_json(
+                loop_name,
+                {
+                    "schema_version": 1,
+                    "run_id": "r1",
+                    "status": severity,
+                    "status_reason": "x",
+                    "headline": "issues found",
+                    "report_markdown": "# x",
+                    "metrics": "{}",
+                    "findings": [finding_entry],
+                },
+            )
+        return self.fx.root
+
+    def _generate(self, root):
+        out = os.path.join(root, "dashboard", "loops.html")
+        generate.generate(
+            root=root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            return f.read()
+
+    def test_finding_paste_block(self):
+        root = self._root_with_finding(
+            "l1", "repo:no-remote", severity="warn", detail="23 unpushed commits"
+        )
+        html = self._generate(root)
+        self.assertIn("finding-handoff", html)
+        self.assertIn("repo:no-remote", html)
+        self.assertIn("23 unpushed commits", html)  # detail from latest.json
+        self.assertIn("loopctl dismiss l1 repo:no-remote --note", html)
+        self.assertNotIn("approve", html.lower())
+
+    def test_paste_block_includes_root_when_nondefault(self):
+        root = self._root_with_finding("l1", "a:b")  # temp root ≠ ~/projects/loops
+        self.assertIn(f"--root {root}", self._generate(root))
+
+    def test_suppressed_finding_gets_no_paste_block(self):
+        root = self._root_with_finding("l1", "repo:no-remote", dismiss=True)
+        html = self._generate(root)
+        # suppressed finding is still shown (greyed), just without a handoff block --
+        # exact rendered markup, not just the substring "finding-handoff" which also
+        # appears in the page's static CSS rule regardless of wiring
+        self.assertIn("repo:no-remote", html)
+        self.assertNotIn('<details class="finding-handoff"', html)
+
+    def test_finding_missing_from_latest_json_still_renders_without_crash(self):
+        # sqlite has the open finding but latest.json doesn't carry it (e.g. resolved
+        # since, or the file is simply missing) — must degrade, never crash.
+        root = self._root_with_finding("l1", "repo:no-remote", in_latest_json=False)
+        html = self._generate(root)
+        self.assertIn('<details class="finding-handoff"', html)
+        self.assertIn("repo:no-remote", html)
+
+
 class TagsProvenanceEventsTests(unittest.TestCase):
     """Tag chips, per-loop provenance line, and the fleet-wide recent-events strip
     (Amendment 2 -- 2026-07-30). loop_events rows are inserted directly against the

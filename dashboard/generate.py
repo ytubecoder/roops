@@ -226,6 +226,41 @@ def truncate_value(s, limit=2048):
     return s[:limit] + " …[truncated]"
 
 
+def root_flag_for(root):
+    """`--root <root>` only when the generating root's realpath differs from the default
+    `~/projects/loops` checkout -- omitted for the common case so pasted commands stay
+    short. Comparison is realpath-to-realpath so symlinked checkouts still match."""
+    default_root = os.path.realpath(os.path.expanduser("~/projects/loops"))
+    if os.path.realpath(root) != default_root:
+        return f" --root {root}"
+    return ""
+
+
+def finding_handoff_text(loop, f, root, root_flag):
+    """Deterministic paste-into-an-agent template for ONE open, unsuppressed finding --
+    same pattern as HANDOFF_TEMPLATE for a failed run: plain text built only from sqlite
+    recurrence fields (`finding_id`, `severity`, `times_seen`, `first_seen_at`) merged with
+    `latest.json`'s `title`/`detail` (the caller falls back to sqlite's title/severity when
+    the finding has no live entry -- e.g. resolved since, or latest.json missing). The whole
+    composed string is HTML-escaped by the caller before embedding, so title/detail need no
+    escaping here. MUST NOT ever say "approve" -- ack/suppress is not approval (settled
+    doctrine): the two actions offered are acting on the finding in the reader's OWN agent
+    context/permissions, or suppressing it via loopctl dismiss/snooze."""
+    detail = truncate_value(f.get("detail") or "", 2048)
+    detail_block = f"\n\n  {detail}" if detail else ""
+    return (
+        f"A scheduled report-only loop ('{loop}') flagged this finding "
+        f"(id {f['finding_id']}, severity {f['severity']}, seen {f['times_seen']}x "
+        f"since {(f.get('first_seen_at') or '')[:10]}):\n\n"
+        f"  {f['title']}{detail_block}\n\n"
+        f"Context files: reports/{loop}/latest.md and state/runs/ under {root}.\n"
+        f"The loop only reports; decide and act in YOUR context and permissions.\n"
+        f"If instead this should stop being reported, suppress it:\n"
+        f'  {root}/bin/loopctl dismiss {loop} {f["finding_id"]}{root_flag} --note "..."\n'
+        f"  {root}/bin/loopctl snooze {loop} {f['finding_id']}{root_flag} --until YYYY-MM-DD\n"
+    )
+
+
 def render_sparkline(points, width=140, height=32):
     """Inline SVG sparkline. No external assets, no JS charting library."""
     points = [p for p in points if p is not None]
@@ -632,6 +667,10 @@ table.list-panel td, table.list-panel th { padding: 0.15rem 0.5rem; }
 .finding .recurrence { color: #808a99; font-size: 0.8rem; margin-left: 0.4rem; }
 .finding .cmd { display: block; margin-top: 0.3rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.76rem; color: #6fb3ff; background: #0b0e14; padding: 0.2rem 0.5rem; border-radius: 4px; }
+details.finding-handoff { margin-top: 0.4rem; }
+details.finding-handoff summary { cursor: pointer; color: #808a99; font-size: 0.76rem; }
+.finding-handoff pre { background: #0b0e14; padding: 0.5rem 0.6rem; border-radius: 6px; overflow-x: auto;
+  margin-top: 0.3rem; font-size: 0.74rem; white-space: pre-wrap; word-break: break-word; }
 .runs-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 0.5rem; }
 .runs-table th { text-align: left; color: #808a99; font-weight: 600; padding: 0.25rem 0.5rem; border-bottom: 1px solid #232a36; }
 .runs-table td { padding: 0.25rem 0.5rem; border-bottom: 1px solid #171c25; }
@@ -935,13 +974,35 @@ def _render_raw_fallback(run_metrics, declared_keys, report_href):
     )
 
 
-def _render_findings(conn, loop_name, latest_json, now):
+def _render_finding_handoff(
+    loop_name, fid, title, severity, detail, f, root, root_flag
+):
+    """Collapsed paste-into-an-agent block for one unsuppressed open finding. `f` is the raw
+    sqlite row (supplies `times_seen`/`first_seen_at`); `title`/`severity`/`detail` are the
+    already-merged (latest.json-preferred) display values computed by the caller."""
+    merged = {
+        "finding_id": fid,
+        "title": title,
+        "severity": severity,
+        "times_seen": f["times_seen"],
+        "first_seen_at": f["first_seen_at"],
+        "detail": detail,
+    }
+    text = finding_handoff_text(loop_name, merged, root, root_flag)
+    return (
+        '<details class="finding-handoff"><summary>hand to an agent</summary>'
+        f"<pre>{e(text)}</pre></details>"
+    )
+
+
+def _render_findings(conn, loop_name, latest_json, now, root):
     findings = _open_findings(conn, loop_name)
     if not findings:
         return ""
     latest_by_id = {}
     if latest_json and isinstance(latest_json.get("findings"), list):
         latest_by_id = {f.get("finding_id"): f for f in latest_json["findings"]}
+    root_flag = root_flag_for(root)
     out = []
     for f in findings:
         fid = f["finding_id"]
@@ -965,10 +1026,14 @@ def _render_findings(conn, loop_name, latest_json, now):
             severity = live.get("severity", severity)
         cls = "finding suppressed" if suppressed else "finding"
         cmd = ""
+        handoff_html = ""
         if not suppressed:
             cmd = (
                 f'<code class="cmd">loopctl dismiss {e(loop_name)} {e(fid)} '
                 f'--note "…"</code>'
+            )
+            handoff_html = _render_finding_handoff(
+                loop_name, fid, title, severity, detail, f, root, root_flag
             )
         else:
             cmd = f'<code class="cmd">loopctl reopen {e(loop_name)} {e(fid)}</code>'
@@ -976,7 +1041,8 @@ def _render_findings(conn, loop_name, latest_json, now):
         out.append(
             f'<div class="{cls}"><span class="sev {e(severity)}">{e(severity)}</span>'
             f'<span class="fid">{e(fid)}</span> — {e(title)}'
-            f'<span class="recurrence">{e(recurrence)}</span>{detail_html}{cmd}</div>'
+            f'<span class="recurrence">{e(recurrence)}</span>{detail_html}{cmd}'
+            f"{handoff_html}</div>"
         )
     return f'<div class="findings"><h3>Findings</h3>{"".join(out)}</div>'
 
@@ -1130,7 +1196,9 @@ def _render_loop_section(loop, conn, now):
     panels_html, declared_keys = _render_panels(
         loop["dashboard_json"], conn, loop["name"], run_metrics_by_key, now
     )
-    findings_html = _render_findings(conn, loop["name"], loop["latest_json"], now)
+    findings_html = _render_findings(
+        conn, loop["name"], loop["latest_json"], now, loop["root"]
+    )
     handoff_html = _render_handoff(loop)
     report_drawer_html = _render_report_drawer(loop["latest_json"], loop["report_href"])
     recent_runs_html = _render_recent_runs(loop["recent_runs"], now)

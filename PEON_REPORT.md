@@ -52,3 +52,17 @@ Task 6 requires dashboard surfaces for promoted report pages under docs/INTERFAC
 
 - Full-suite unittest discovery still emits ResourceWarning messages about unclosed sqlite connections from existing tests; the suite passes and this task did not introduce or address those warnings.
 - No open functional questions.
+
+## Revision Fix Report
+
+Status: DONE
+
+Reviewer findings addressed:
+
+- Added a discoverable `reports.html` chip link to the `loops.html` topstrip, matching the existing reports-to-loops back-link idiom.
+- Extended `test_generate_writes_both_files_atomically` to assert the loops page contains `<a href="reports.html">reports</a>`.
+- Tightened the totals-chip assertion to match the real chip markup with `<span class="chip">findings`, avoiding the CSS-only `.findings` false positive.
+
+Verification after revision:
+
+- `python3 -m unittest tests.test_dashboard -v` passed 66 tests.

@@ -1647,6 +1647,7 @@ def _render_page(
         f'<span class="chip">spend today <b>{e(spend_today_html)}</b></span>'
         f'<span class="chip">spend 7d <b>{e(spend_7d_html)}</b></span>'
         f'<span class="chip muted">regenerated {e(now.strftime("%Y-%m-%dT%H:%M:%SZ"))}</span>'
+        '<span class="chip"><a href="reports.html">reports</a></span>'
         "</div></div>"
     )
 

@@ -1490,7 +1490,7 @@ class ReportPagesDashboardTests(unittest.TestCase):
             return_html=True,
         )
         self.assertIn("Fixture page", reports_html)
-        self.assertIn("findings", reports_html)
+        self.assertIn('<span class="chip">findings', reports_html)
         self.assertIn("2026-07-29-0100.html", reports_html)
 
     def test_reports_page_marks_page_enabled_loop_with_no_page(self):
@@ -1534,6 +1534,9 @@ class ReportPagesDashboardTests(unittest.TestCase):
         self.assertTrue(
             os.path.isfile(os.path.join(self.fx.root, "dashboard", "reports.html"))
         )
+        with open(os.path.join(self.fx.root, "dashboard", "loops.html")) as f:
+            loops_html = f.read()
+        self.assertIn('<a href="reports.html">reports</a>', loops_html)
 
 
 if __name__ == "__main__":

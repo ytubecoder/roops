@@ -48,6 +48,35 @@ except ImportError as exc:
         "to render an ungated page."
     ) from exc
 
+# $PAGEKIT is set by render.sh under the runner; same fallback as _BIN_DIR so a
+# bare `python3 render_page.py` works. kit.css is the canonical report-page kit
+# (docs/REPORT_PAGES_PLAN.md §3) — read here so there is exactly one copy of it.
+_PAGEKIT_DIR = pathlib.Path(
+    os.environ.get("PAGEKIT") or pathlib.Path(__file__).resolve().parents[2] / "pagekit"
+)
+
+# kit.css opens with a header comment aimed at maintainers, not browsers.
+_KIT_HEADER_RE = re.compile(r"\A/\*.*?\*/\s*", re.DOTALL)
+
+
+def load_kit_css():
+    """Return pagekit/kit.css's body, ready to inline in a <style> block.
+
+    Missing/unreadable kit.css is a broken checkout, not a runtime condition —
+    it ships in this repo alongside this file. Fail the render (same call as the
+    redact import above) so page-render.log names the file, rather than silently
+    promoting an unstyled page that looks merely ugly instead of broken."""
+    path = _PAGEKIT_DIR / "kit.css"
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit(
+            f"render_page.py: cannot read {path} — the shared page kit is "
+            "unavailable; refusing to render an unstyled page."
+        ) from exc
+    return _KIT_HEADER_RE.sub("", raw).rstrip("\n")
+
+
 SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 SEV_LABEL = {"critical": "CRIT", "high": "HIGH", "medium": "MED", "low": "LOW"}
 
@@ -269,11 +298,10 @@ $rows
     return "\n".join(out)
 
 
-# The <style> body below is a VERBATIM copy of pagekit/kit.css (minus that file's
-# leading header comment). Pages must be self-contained, so the kit is inlined,
-# not read from $PAGEKIT at render time — that keeps the page byte-deterministic
-# for a given scan and means an unreadable kit.css can never break promotion.
-# tests/test_kagi_ban.py::PagekitParityTests holds the two in sync; edit both.
+# $kit_css is $PAGEKIT/kit.css, read at render time and inlined verbatim (delta
+# 7, 2026-07-30). The kit is the single source of the report-page look: a second
+# page loop styles itself by using it, not by copying this file. Pages stay
+# self-contained because the CSS is INLINED, never <link>ed.
 PAGE = Template("""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -282,114 +310,7 @@ PAGE = Template("""<!DOCTYPE html>
 <title>Exposure audit — $host</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><path d='M5 1 L9.5 9 H0.5 Z' fill='%23279a83'/></svg>">
 <style>
-:root{
-  --bg:#0e0f12; --panel:#14161a; --line:#22252b; --line2:#2c3037;
-  --ink:#e7e9ec; --sub:#9aa1ab; --mut:#5d6570;
-  --accent:#279a83; --high:#d84f63; --med:#b48c1a;
-  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
-}
-*{box-sizing:border-box;margin:0;padding:0}
-::selection{background:var(--accent);color:#06120f}
-html{color-scheme:dark}
-body{
-  background:var(--bg);color:var(--ink);
-  font:16px/1.55 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
-  -webkit-font-smoothing:antialiased;
-}
-a{color:var(--accent);text-underline-offset:3px}
-.wrap{max-width:1060px;margin:0 auto;padding:56px 40px 80px}
-@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-.brow,.frow,.stat{animation:rise .45s cubic-bezier(.16,1,.3,1) both;
-  animation-delay:calc(var(--i,0)*35ms)}
-@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-
-/* header */
-.hd{display:grid;grid-template-columns:2fr 1fr;gap:32px;align-items:end;
-  padding-bottom:36px}
-.kicker{font:600 11px/1 var(--mono);letter-spacing:.22em;color:var(--accent);
-  text-transform:uppercase;margin-bottom:22px}
-.hero{font-size:clamp(64px,9vw,104px);font-weight:700;letter-spacing:-.045em;
-  line-height:.9;font-family:var(--mono)}
-.hero .unit{display:block;font:400 15px/1.4 -apple-system,sans-serif;
-  letter-spacing:0;color:var(--sub);margin-top:14px}
-.hero .unit strong{color:var(--ink);font-weight:600}
-.meta{font:12px/2 var(--mono);color:var(--mut);text-align:right}
-.meta b{color:var(--sub);font-weight:500}
-
-/* stat strip */
-.stats{display:grid;grid-template-columns:repeat(4,1fr);
-  border-top:1px solid var(--line)}
-.stat{padding:20px 20px 24px;border-left:1px solid var(--line)}
-.stat:first-child{border-left:0;padding-left:0}
-.stat .n{font:600 30px/1 var(--mono);letter-spacing:-.02em}
-.stat .l{font-size:12px;color:var(--mut);margin-top:8px;
-  display:flex;align-items:center;gap:7px}
-.dot{width:8px;height:8px;border-radius:2px;display:inline-block}
-.n.hi,.cell-sev.high{color:var(--high)} .n.md,.cell-sev.med{color:var(--med)}
-
-/* bars */
-h2{font-size:14px;font-weight:600;letter-spacing:.01em;margin:52px 0 6px}
-.sub{font-size:13px;color:var(--mut);margin-bottom:22px}
-.legend{display:flex;gap:22px;font-size:12px;color:var(--sub);margin-bottom:18px}
-.legend span{display:flex;align-items:center;gap:7px}
-.mk{width:10px;height:10px;flex:none}
-.brow{display:grid;grid-template-columns:190px 1fr 44px;gap:14px;
-  align-items:center;padding:5px 0}
-.blabel{font:12px/1.2 var(--mono);color:var(--sub);text-align:right;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.btrack{display:flex;gap:2px;height:14px}
-.seg{height:14px;border-radius:0 4px 4px 0;transition:filter .15s}
-.seg:first-child{border-radius:2px 4px 4px 2px}
-.seg.high{background:var(--high)} .seg.med{background:var(--med)}
-.seg:hover{filter:brightness(1.25)}
-.bcount{font:600 13px var(--mono);color:var(--sub)}
-
-/* groups */
-.group{margin-top:46px}
-.ghead{display:flex;align-items:baseline;justify-content:space-between;
-  border-bottom:1px solid var(--line2);padding-bottom:10px}
-.ghead h3{font-size:15px;font-weight:600;letter-spacing:-.01em}
-.gmeta{font:12px var(--mono);color:var(--mut)}
-.gblurb{font-size:13px;color:var(--mut);margin:10px 0 4px;max-width:62ch}
-.frow{border-bottom:1px solid var(--line)}
-.frow summary{display:grid;grid-template-columns:16px 180px 1fr 52px;gap:14px;
-  align-items:center;padding:13px 8px;cursor:pointer;list-style:none;
-  transition:background .15s}
-.frow summary::-webkit-details-marker{display:none}
-.frow summary:hover{background:var(--panel)}
-.frow summary:active{transform:scale(.997)}
-.frow[open] summary{background:var(--panel)}
-.cell-src{font:500 13px var(--mono)}
-.cell-path{font:12px var(--mono);color:var(--sub);overflow-wrap:anywhere}
-.cell-sev{font:600 11px var(--mono);letter-spacing:.08em;text-align:right}
-.fbody{padding:6px 8px 22px 30px;max-width:74ch}
-.fbody h4{font:600 11px/1 var(--mono);letter-spacing:.18em;color:var(--mut);
-  text-transform:uppercase;margin:16px 0 8px}
-.explain{font-size:14px;color:var(--ink)}
-.sol{font-size:13.5px;color:var(--sub)}
-.docs{margin-top:12px;font-size:13px}
-.path{color:var(--sub)}
-
-/* footer + tooltip */
-footer{margin-top:64px;border-top:1px solid var(--line);padding-top:18px;
-  font:11.5px/1.9 var(--mono);color:var(--mut)}
-footer .cmd{color:var(--sub)}
-#tip{position:fixed;z-index:10;background:#1b1e24;border:1px solid var(--line2);
-  color:var(--ink);font:12px var(--mono);padding:5px 9px;border-radius:5px;
-  pointer-events:none;white-space:nowrap;
-  box-shadow:0 4px 16px rgba(4,6,10,.5)}
-#tip[hidden]{display:none}
-
-@media(max-width:760px){
-  .wrap{padding:32px 18px 56px}
-  .hd{grid-template-columns:1fr;gap:18px}
-  .meta{text-align:left}
-  .stats{grid-template-columns:repeat(2,1fr)}
-  .stat:nth-child(3){border-left:0;padding-left:0}
-  .brow{grid-template-columns:110px 1fr 36px}
-  .frow summary{grid-template-columns:16px 1fr 52px}
-  .cell-path{grid-column:2/4}
-}
+$kit_css
 </style>
 </head>
 <body>
@@ -514,6 +435,7 @@ def main():
         "data": {"findings": findings},
     }
     page = PAGE.substitute(
+        kit_css=load_kit_css(),
         host=esc(args.host),
         av_version=esc(args.av_version or "?"),
         scanned=scanned.strftime("%Y-%m-%d %H:%M"),

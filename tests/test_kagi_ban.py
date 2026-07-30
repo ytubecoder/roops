@@ -16,14 +16,47 @@ FIXTURE = os.path.join(REPO, "pagekit", "reference", "fixture-scan.json")
 KIT_CSS = os.path.join(REPO, "pagekit", "kit.css")
 
 sys.path.insert(0, os.path.join(REPO, "bin"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import page_envelope
 import redact
+from html_selfcontained import assert_self_contained
 
 _SPEC = importlib.util.spec_from_file_location(
     "kagi_ban_render_page", os.path.join(LOOP, "render_page.py")
 )
 render_page = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(render_page)
+
+
+def run_renderer(scan_path, out, pagekit=None):
+    """Invoke render_page.py as the runner does. `pagekit` overrides $PAGEKIT so
+    a test can point at a throwaway kit without touching the real one."""
+    env = dict(os.environ)
+    if pagekit is None:
+        env.pop("PAGEKIT", None)
+    else:
+        env["PAGEKIT"] = pagekit
+    return subprocess.run(
+        [
+            sys.executable,
+            os.path.join(LOOP, "render_page.py"),
+            scan_path,
+            "--loop",
+            "kagi-ban",
+            "--run-id",
+            "test-run",
+            "-o",
+            out,
+            "--host",
+            "fixture",
+            "--av-version",
+            "0.0-stub",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
 
 
 def make_stub_av(dirpath, scan_json_path):
@@ -116,26 +149,7 @@ class KagiBanPrecheckTests(unittest.TestCase):
 
 class KagiBanRendererTests(unittest.TestCase):
     def render(self, scan_path, out):
-        proc = subprocess.run(
-            [
-                sys.executable,
-                os.path.join(LOOP, "render_page.py"),
-                scan_path,
-                "--loop",
-                "kagi-ban",
-                "--run-id",
-                "test-run",
-                "-o",
-                out,
-                "--host",
-                "fixture",
-                "--av-version",
-                "0.0-stub",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        proc = run_renderer(scan_path, out)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return proc
 
@@ -276,25 +290,121 @@ class KvKeywordSingleSourceTests(unittest.TestCase):
             )
 
 
-class PagekitParityTests(unittest.TestCase):
-    """pagekit/kit.css is the canonical kit; the renderer inlines a verbatim copy
-    (pages are self-contained and must not read $PAGEKIT at render time). Nothing
-    else binds the two, so this test is the only thing preventing drift."""
+class PagekitSourcingTests(unittest.TestCase):
+    """pagekit/kit.css is THE kit: read at render time and inlined, so there is
+    exactly one copy of the report-page CSS. These tests fail if someone
+    re-inlines a private copy (drift returns) or breaks the $PAGEKIT plumbing."""
 
-    def test_inlined_style_block_matches_pagekit_kit_css(self):
+    def kit_body(self):
         with open(KIT_CSS) as f:
             kit = f.read()
-        # kit.css carries a leading header comment the inlined copy omits.
-        body = re.sub(r"\A/\*.*?\*/\s*", "", kit, flags=re.DOTALL).rstrip("\n")
+        # The header comment is aimed at maintainers and is stripped before inlining.
+        return re.sub(r"\A/\*.*?\*/\s*", "", kit, flags=re.DOTALL).rstrip("\n")
+
+    def test_template_defers_to_pagekit_rather_than_inlining_css(self):
         match = re.search(
             r"<style>\n(.*?)\n</style>", render_page.PAGE.template, re.DOTALL
         )
         self.assertIsNotNone(match, "renderer template has no <style> block")
         self.assertEqual(
-            match.group(1).rstrip("\n"),
-            body,
-            "pagekit/kit.css and the renderer's inlined <style> have drifted",
+            match.group(1).strip(),
+            "$kit_css",
+            "the <style> block must defer to $PAGEKIT/kit.css, not inline a copy",
         )
+
+    def test_load_kit_css_strips_only_the_header_comment(self):
+        loaded = render_page.load_kit_css()
+        self.assertEqual(loaded, self.kit_body())
+        self.assertFalse(
+            loaded.lstrip().startswith("/*"),
+            "kit.css header comment leaked into the inlined body",
+        )
+        self.assertIn(":root{", loaded)
+
+    def test_rendered_page_inlines_the_real_kit_body(self):
+        with tempfile.TemporaryDirectory() as root:
+            out = os.path.join(root, "page.html")
+            proc = run_renderer(FIXTURE, out)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(out) as f:
+                html_text = f.read()
+        self.assertIn(self.kit_body(), html_text)
+        # Self-containment: inlined, never <link>ed to a stylesheet.
+        self.assertNotIn('rel="stylesheet"', html_text)
+
+    def test_edit_to_kit_css_reaches_the_page(self):
+        """The whole point of reading it: a kit edit restyles pages with no
+        renderer change. Uses a throwaway $PAGEKIT so the real kit is untouched."""
+        marker = ".roops-kit-sourcing-probe{outline:1px solid #abcdef}"
+        with tempfile.TemporaryDirectory() as root:
+            kit_dir = os.path.join(root, "pagekit")
+            os.makedirs(kit_dir)
+            with open(os.path.join(kit_dir, "kit.css"), "w") as f:
+                f.write("/* throwaway header */\n" + marker + "\n")
+            out = os.path.join(root, "page.html")
+            proc = run_renderer(FIXTURE, out, pagekit=kit_dir)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(out) as f:
+                html_text = f.read()
+        self.assertIn(marker, html_text)
+        self.assertNotIn("throwaway header", html_text)
+
+    def test_missing_kit_css_fails_the_render_loudly(self):
+        """A missing committed file is a broken checkout. Fail with the path
+        named in page-render.log rather than promote an unstyled page."""
+        with tempfile.TemporaryDirectory() as root:
+            empty_kit = os.path.join(root, "pagekit")
+            os.makedirs(empty_kit)
+            out = os.path.join(root, "page.html")
+            proc = run_renderer(FIXTURE, out, pagekit=empty_kit)
+        self.assertNotEqual(proc.returncode, 0, "missing kit.css must fail the render")
+        self.assertIn("kit.css", proc.stderr)
+        self.assertFalse(os.path.exists(out), "no page may be written on failure")
+
+
+class PageSelfContainmentTests(unittest.TestCase):
+    """The report page is served over the tailnet and opened offline, so it must
+    fetch nothing on load. av findings carry real https:// docs URLs and free
+    text, so this is asserted on references, not on the presence of a scheme."""
+
+    def test_rendered_page_fetches_nothing_on_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "page.html")
+            proc = run_renderer(FIXTURE, out)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(out) as f:
+                html_text = f.read()
+        assert_self_contained(self, html_text, "kagi-ban report page")
+        # The docs links are real and must survive — they are navigation, not
+        # subresources. Their presence is exactly why the substring rule failed.
+        self.assertIn("https://", html_text)
+
+    def test_hostile_finding_text_cannot_inject_a_subresource(self):
+        """Finding text is av's, not ours. Even if a scan carried markup, the
+        renderer escapes it, so it can never become a fetching element."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(FIXTURE) as f:
+                scan = json.load(f)
+            scan["findings"][0]["explanation"] = (
+                '<img src="http://tracker.example/pixel.gif"> and '
+                '<script src="//cdn.example/x.js"></script> plus a bare '
+                "http://127.0.0.1:9/dead probe result"
+            )
+            scan["findings"][1]["solution"] = (
+                "<style>@import url('https://fonts.example/f.css');</style>"
+            )
+            scan_path = os.path.join(tmp, "scan.json")
+            with open(scan_path, "w") as f:
+                json.dump(scan, f)
+            out = os.path.join(tmp, "page.html")
+            proc = run_renderer(scan_path, out)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(out) as f:
+                html_text = f.read()
+        assert_self_contained(self, html_text, "page with hostile finding text")
+        # Escaped, not stripped: the operator still sees what av reported.
+        self.assertIn("tracker.example/pixel.gif", html_text)
+        self.assertNotIn('<img src="http://tracker.example', html_text)
 
 
 if __name__ == "__main__":

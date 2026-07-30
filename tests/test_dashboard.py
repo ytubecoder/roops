@@ -130,6 +130,7 @@ class FixtureRoot:
         schedule="interval:15m",
         dashboard_json=None,
         timeout_s=900,
+        enabled=None,
     ):
         d = os.path.join(self.root, "loops.d", name)
         os.makedirs(d, exist_ok=True)
@@ -138,6 +139,8 @@ class FixtureRoot:
                 f"name={name}\ndescription={description}\ntype={type_}\n"
                 f"engine={engine}\nschedule={schedule}\ntimeout_s={timeout_s}\n"
             )
+            if enabled is not None:
+                f.write(f"enabled={'true' if enabled else 'false'}\n")
         if dashboard_json is not None:
             with open(os.path.join(d, "dashboard.json"), "w") as f:
                 json.dump(dashboard_json, f)
@@ -645,6 +648,60 @@ class GenerateIntegrationTests(unittest.TestCase):
         self.assertNotIn('<span class="badge stale">stale</span>', html)
         self.assertIn("no schedule loaded", html)
         self.assertIn("needs attention 0", html)
+
+    def test_sw_on_when_plist_and_enabled(self):
+        """plist present + enabled (default) -> 巡 loaded, the normal on state."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("alpha")
+        self.fx.install("alpha")
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            html = f.read()
+        self.assertIn('class="sw on"', html)
+
+    def test_sw_paused_when_plist_and_disabled(self):
+        """plist present + enabled=false -> 休 paused, not the misleading 巡 loaded."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("alpha", enabled=False)
+        self.fx.install("alpha")
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            html = f.read()
+        self.assertIn('class="sw off paused"', html)
+        self.assertIn("rounds paused", html)
+
+    def test_sw_off_when_no_plist(self):
+        """No plist at all -> today's 休 ("no schedule loaded"), unchanged."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("alpha")  # no .install()
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            html = f.read()
+        self.assertIn("no schedule loaded", html)
 
     def test_manual_loop_never_flagged_stale(self):
         conn = self.fx.init_db()

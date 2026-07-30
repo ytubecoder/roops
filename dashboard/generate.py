@@ -720,7 +720,7 @@ main { padding: 0 0 8px; }
 .run-meta .rm-next.off { color: var(--nibi); }
 .run-meta a { font-size: 10px; letter-spacing: .06em; }
 
-/* schedule state — 巡 loaded / 休 not loaded / 手 manual */
+/* schedule state — 巡 loaded / 休 not loaded or paused / 手 manual */
 .sw-cell { display: flex; justify-content: flex-end; }
 .sw {
   width: 24px; height: 24px; border-radius: 3px; font-family: var(--serif); font-size: 13px;
@@ -728,6 +728,7 @@ main { padding: 0 0 8px; }
 }
 .sw.on { border: 1.5px solid var(--koke); color: var(--koke); }
 .sw.off { border: 1.5px solid var(--hair2); color: var(--nibi); }
+.sw.off.paused { border: 1.5px dashed var(--ochre); color: var(--ochre); }
 .sw.manual { border: 1.5px dashed var(--hair2); color: var(--nibi); }
 
 /* small ink dots — run history, heartbeats */
@@ -1212,9 +1213,15 @@ def _render_loop_row(loop, now):
     if loop["schedule"] == "manual":
         sw = '<span class="sw manual" title="manual — run via loopctl">手</span>'
         next_html = '<span class="rm-next off">manual</span>'
-    elif loop["installed"]:
+    elif loop["installed"] and loop["enabled"]:
         sw = '<span class="sw on" title="schedule loaded (launchd)">巡</span>'
         next_html = f'<span class="rm-next">next 巡 {e(loop["next_run_text"])}</span>'
+    elif loop["installed"]:
+        sw = (
+            '<span class="sw off paused" '
+            'title="rounds paused — resume from console or loopctl resume">休</span>'
+        )
+        next_html = '<span class="rm-next off">paused</span>'
     else:
         sw = '<span class="sw off" title="no schedule loaded — supervised runs only">休</span>'
         next_html = '<span class="rm-next off">no schedule loaded</span>'
@@ -1482,6 +1489,7 @@ def _resolve_loop(
         "died": died,
         "stale": stale,
         "installed": installed,
+        "enabled": str(conf.get("enabled", "true")).lower() != "false",
         "light_color": light_color,
         "light_marker": light_marker,
         "spend_7d": spend_7d,
@@ -1671,7 +1679,7 @@ def _render_page(
     garden = (
         '<div class="zone"><div class="kicker"><b>庭</b> the garden — all loops'
         '<span class="note">床の間 = each loop hangs its own output · '
-        "休 = no schedule loaded</span></div>"
+        "休 = paused or no schedule loaded</span></div>"
         f'<div class="garden">{global_rows}</div></div>'
     )
 

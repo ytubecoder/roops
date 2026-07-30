@@ -641,13 +641,20 @@ claude -p --output-format json --json-schema "$(cat "$SCHEMA_FILE")" \
 ## 8. `bin/loopctl` — CLI surface
 
 ```
+loopctl                                                               # (Amendment 2 — 2026-07-30) bare, no verb: same
+                                                                      #   as `status` — leading fleet line + per-loop
+                                                                      #   table; exit 0 (content-first, not usage)
 loopctl new <name> [--type agent|watchdog] [--engine codex|claude]   # scaffold from templates
 loopctl validate [<name>|--all]                                      # §5 + §5.2 checks; exit 1 on any fail
 loopctl run <name> [--trigger manual]                                # foreground; streams progress
 loopctl list [--tag TAG]                                             # table: name, type, engine, schedule, enabled,
                                                                       #   installed?, tags (--tag: exact-match filter,
-                                                                      #   Amendment 2 — 2026-07-30)
-loopctl status [<name>]                                              # last run, status, headline, next-run (best effort)
+                                                                      #   Amendment 2 — 2026-07-30); 0 loops prints
+                                                                      #   "0 loops (<from-dir> empty)" (Amendment 2)
+loopctl status [<name>]                                              # leading "fleet: N loops · ok X · warn Y ·
+                                                                      #   alert Z · needs_attention W · spend7d $S"
+                                                                      #   line (Amendment 2 — 2026-07-30), then last
+                                                                      #   run/status/headline/next-run per loop
 loopctl install <name>                                               # generate plist → bootstrap → kickstart-verify (§8.1)
 loopctl uninstall <name>                                             # bootout + remove plist
 loopctl pause <name> / resume <name>                                 # sets enabled= and bootout/bootstrap
@@ -668,7 +675,52 @@ visible immediately). The dashboard stays static (Change 4, Option A — settled
 2026-07-22): dispositions enter via this CLI only.
 Global flags: `--root R` (default `$LOOPS_ROOT`), `--json` (machine-readable output where sensible),
 `--from loops.d|examples`, `--actor A` (default `$USER`, or `unknown` if unset — Amendment 2 —
-2026-07-30). Exit codes: `0` ok · `1` operation failed · `2` usage.
+2026-07-30). Exit codes: `0` ok · `1` operation failed · `2` usage — **except** a bare, verb-less
+invocation (Amendment 2 — 2026-07-30, content-first): that is no longer a usage error, it dispatches
+to `status` and exits `0`. Only an unrecognized verb (e.g. `loopctl frobnicate`), or genuinely
+unrecognized arguments after a valid verb, still exit `2`; `--help` is unaffected — it still prints
+usage and exits `0` without dispatching anywhere.
+
+**Bare invocation (Amendment 2 — 2026-07-30):** `loopctl` and `loopctl --root R` (no verb) call the
+exact same code path as `loopctl status` — same leading fleet line, same per-loop table/JSON, same
+exit 0. Mechanically: `main()`'s top-level parser also carries `common`'s `--root`/`--json`/
+`--from`/`--actor` flags (not just each subparser) so a verb-less invocation still has real values
+for them (`argparse`'s `dest="verb"` yields `None` before any subparser ever runs); once a verb IS
+given, argparse's subparsers action still sweeps every remaining token into that subparser's own
+parse exactly as before, so per-verb flag handling is unchanged.
+
+**`status` aggregates + blanking fix + `in_flight` (Amendment 2 — 2026-07-30):** `status` (with or
+without `<name>`) prints a leading line before anything else: `fleet: N loops · ok X · warn Y ·
+alert Z · needs_attention W · spend7d $S`. `N` is the loop count under `--from` (`loops.d` by
+default); `ok`/`warn`/`alert` bucket each loop's *displayed* `effective_status` (see the blanking
+fix below) on a `runner_status=completed` run; `needs_attention` is `warn + alert` plus any loop
+whose newest resolvable run did not complete cleanly (a failure status, `skipped-precheck`, or no
+resolvable terminal run at all); a loop with zero runs ever contributes to `N` but not to any of the
+four buckets. `spend7d` sums `cost_usd` across `db.py query spend --days 7`. Computed from `db.py
+query loops-summary` (one row per loop: its newest run) plus, only for loops whose newest row isn't
+"terminal" (see below), a `last-runs --limit 10` fallback lookup — the common case (a loop's newest
+run completed cleanly) costs one shared query for the whole fleet, not one query per loop. `--json`
+wraps the existing per-loop rows in an envelope: `{"fleet": {"loops", "ok", "warn", "alert",
+"needs_attention", "spend7d"}, "loops": [...]}` — this applies whether or not `<name>` was given.
+Table form is unchanged below the new leading line.
+  Blanking fix: a run row is "terminal" (safe to display) only if `finished_at` is set AND
+`runner_status != "skipped-overlap"` — a `skipped-overlap` row finishes immediately but never
+carries real status/headline data, and an unfinished row (`finished_at IS NULL`) has none yet
+either; naively using "the newest row" for either case blanked the display. `status` now falls back
+to the newest *terminal* row (within the last 10) for `runner_status`/`effective_status`/
+`headline`/`started_at`; if none of the last 10 is terminal, those fields stay `None`. Independently,
+each row also gains `"in_flight": true/false` — true whenever the loop's actual newest run has
+`finished_at IS NULL` (a real in-progress run), regardless of whether a fallback was needed for
+display. `next_run` estimation is unaffected — it always uses the true newest row's `started_at`,
+never the fallback.
+
+**Definitive empty states (Amendment 2 — 2026-07-30):** `list` (table form) with zero loops under
+`--from` prints `0 loops (<from-dir> empty)` (e.g. `0 loops (loops.d empty)`) instead of the generic
+table placeholder; `status` (no `<name>`) does the same beneath its leading fleet line when the
+fleet is empty (fleet counts all zero, then the empty-state line). `findings <loop>` (table form)
+with no open findings prints `0 open findings for <loop>`. All three still exit `0` — an empty fleet
+or an empty findings list is not a failure. `--json` is unaffected (still `[]`/`{"fleet": …,
+"loops": []}` as appropriate) — these are human-form-only messages.
 
 **`loopctl import` (Amendment 2 — 2026-07-30):** wraps `bin/skill_import.py`'s `parse_skill()` /
 `analyze()` / `apply()` to convert an existing Agent Skill directory into a gap-analysis report or a
@@ -727,7 +779,10 @@ created,imported --limit 1` — the events filter, not a client-side scan of a l
 loop's founding event is never lost behind a large number of later `paused`/`resumed`/etc. events),
 shaped `{"event", "actor", "ts"}`, or `None` if no such event exists (e.g. loops that predate
 lifecycle-event recording, or ones scaffolded by hand). `status` (table form) is unchanged by this
-amendment — only its `--json` rows carry tags/provenance.
+amendment — only its `--json` rows carry tags/provenance. (Amendment 2 — 2026-07-30: those rows now
+live under the `"loops"` key of the `{"fleet": …, "loops": […]}` envelope described above, each also
+carrying `"in_flight"`; the row shape itself — `tags`/`provenance` included — is otherwise
+unchanged.)
 
 **`loopctl new` scaffolding** additionally seeds `loops.d/<name>/SPEC.md` from the intake template
 (`docs/LOOP_AUTHORING.md` carries the interview script). Template placeholders use the literal

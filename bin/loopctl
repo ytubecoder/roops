@@ -638,11 +638,96 @@ def cmd_list(args):
     if args.json:
         print(json.dumps(rows))
     else:
-        table_rows = [{**r, "tags": ",".join(r["tags"])} for r in rows]
-        _print_table(
-            table_rows, ["name", "type", "engine", "schedule", "enabled", "installed", "tags"]
-        )
+        if not rows:
+            print(f"0 loops ({args.from_dir} empty)")
+        else:
+            table_rows = [{**r, "tags": ",".join(r["tags"])} for r in rows]
+            _print_table(
+                table_rows, ["name", "type", "engine", "schedule", "enabled", "installed", "tags"]
+            )
     return 0
+
+
+def _is_terminal_run_row(row):
+    """(Amendment 2 — 2026-07-30) A run row counts as "terminal" — safe to use
+    for the displayed status/headline — when it has finished (`finished_at`
+    set) and isn't a `skipped-overlap` placeholder. `skipped-overlap` rows are
+    finished immediately but never carry real status/headline data, so a
+    naive "newest row" lookup blanks the display the instant an overlap skip
+    (or a still-running row) becomes the newest row for a loop."""
+    return (
+        bool(row)
+        and row.get("finished_at") is not None
+        and row.get("runner_status") != "skipped-overlap"
+    )
+
+
+def _resolve_display_row(root, name, last):
+    """Given `last` (the newest run row for `name`, or None), return the row
+    to use for displayed status/headline: `last` itself if terminal,
+    otherwise the newest row among the last 10 that IS terminal, otherwise
+    None (every recent attempt was skipped-overlap or still running)."""
+    if _is_terminal_run_row(last):
+        return last
+    for row in _db_query(root, "last-runs", loop=name, limit=10):
+        if _is_terminal_run_row(row):
+            return row
+    return None
+
+
+def _fleet_aggregate(root, from_dir):
+    """`fleet: N loops · ok X · warn Y · alert Z · needs_attention W ·
+    spend7d $S` — the leading line on `status` and the bare-invocation
+    summary (Amendment 2 — 2026-07-30). Loop count comes from the loops.d/
+    (or examples/) directory; status/spend come from `db.py query
+    loops-summary` (one row per loop: its newest run) and `db.py query spend
+    --days 7`, with the same skipped-overlap/unfinished fallback `status`
+    itself applies so a loop mid-overlap-skip isn't miscounted."""
+    names = _discover_loop_names(root, from_dir)
+    summary_by_loop = {r["loop_name"]: r for r in _db_query(root, "loops-summary")}
+
+    ok = warn = alert = needs_attention = 0
+    for name in names:
+        last = summary_by_loop.get(name)
+        if last is None:
+            continue  # never run — not yet actionable, doesn't count as needing attention
+        display = _resolve_display_row(root, name, last)
+        if display is None:
+            needs_attention += 1
+            continue
+        if display.get("runner_status") == "completed":
+            es = display.get("effective_status")
+            if es == "ok":
+                ok += 1
+            elif es == "warn":
+                warn += 1
+                needs_attention += 1
+            elif es == "alert":
+                alert += 1
+                needs_attention += 1
+            # else: malformed/missing effective_status on a completed run — uncounted
+        else:
+            needs_attention += 1
+
+    spend_rows = _db_query(root, "spend", days=7)
+    spend7d = round(float(sum((r.get("cost_usd") or 0) for r in spend_rows)), 2)
+
+    return {
+        "loops": len(names),
+        "ok": ok,
+        "warn": warn,
+        "alert": alert,
+        "needs_attention": needs_attention,
+        "spend7d": spend7d,
+    }
+
+
+def _format_fleet_line(fleet):
+    return (
+        f"fleet: {fleet['loops']} loops · ok {fleet['ok']} · warn {fleet['warn']} · "
+        f"alert {fleet['alert']} · needs_attention {fleet['needs_attention']} · "
+        f"spend7d ${fleet['spend7d']:.2f}"
+    )
 
 
 def cmd_status(args):
@@ -656,6 +741,8 @@ def cmd_status(args):
         conf, _errors = loopconf.parse(conf_path)
         last_runs = _db_query(args.root, "last-runs", loop=name, limit=1)
         last = last_runs[0] if last_runs else None
+        display = _resolve_display_row(args.root, name, last)
+        in_flight = bool(last) and last.get("finished_at") is None
 
         next_text = "—"
         sched_spec = conf.get("schedule")
@@ -679,22 +766,30 @@ def cmd_status(args):
         rows.append(
             {
                 "name": name,
-                "runner_status": last.get("runner_status") if last else None,
-                "effective_status": last.get("effective_status") if last else None,
-                "headline": last.get("headline") if last else None,
-                "started_at": last.get("started_at") if last else None,
+                "runner_status": display.get("runner_status") if display else None,
+                "effective_status": display.get("effective_status") if display else None,
+                "headline": display.get("headline") if display else None,
+                "started_at": display.get("started_at") if display else None,
                 "next_run": next_text,
                 "tags": conf.get("tags") or [],
                 "provenance": provenance,
+                "in_flight": in_flight,
             }
         )
 
+    fleet = _fleet_aggregate(args.root, args.from_dir)
+
     if args.json:
-        print(json.dumps(rows))
+        print(json.dumps({"fleet": fleet, "loops": rows}))
     else:
-        _print_table(
-            rows, ["name", "runner_status", "effective_status", "headline", "started_at", "next_run"]
-        )
+        print(_format_fleet_line(fleet))
+        if not rows:
+            print(f"0 loops ({args.from_dir} empty)")
+        else:
+            _print_table(
+                rows,
+                ["name", "runner_status", "effective_status", "headline", "started_at", "next_run"],
+            )
     return 0
 
 
@@ -900,7 +995,10 @@ def cmd_findings(args):
     if args.json:
         print(json.dumps(out_rows))
     else:
-        _print_table(out_rows, ["finding_id", "severity", "age", "times_seen", "disposition"])
+        if not out_rows:
+            print(f"0 open findings for {loop_name}")
+        else:
+            _print_table(out_rows, ["finding_id", "severity", "age", "times_seen", "disposition"])
     return 0
 
 
@@ -1117,14 +1215,32 @@ def _default_root():
     return os.environ.get("LOOPS_ROOT", os.path.expanduser("~/projects/loops"))
 
 
-def build_parser():
+def _common_parser():
+    """The `--root`/`--json`/`--from`/`--actor` flags shared by every verb's
+    subparser. Also reused directly by `main()` (Amendment 2 — 2026-07-30) to
+    fill in the same defaults on a bare, verb-less invocation — `dest="verb"`
+    yields None before any subparser ever runs, so those defaults never get
+    applied to `args` any other way."""
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--root", default=_default_root())
     common.add_argument("--json", action="store_true")
     common.add_argument("--from", dest="from_dir", default="loops.d", choices=["loops.d", "examples"])
     common.add_argument("--actor", default=os.environ.get("USER", "unknown"))
+    return common
 
-    p = argparse.ArgumentParser(prog="loopctl")
+
+def build_parser():
+    common = _common_parser()
+
+    # (Amendment 2 — 2026-07-30) `p` itself also carries `common`'s flags, not
+    # just each subparser: a bare invocation (no verb at all) never reaches a
+    # subparser, so without this, `loopctl --root R` (no verb) would fail as
+    # "unrecognized arguments" before args.verb could ever be observed as
+    # None. This is additive only — once a verb token is present, argparse's
+    # subparsers action (nargs=PARSER) still sweeps every token from that
+    # point on, verb-subparser included, into its own parse, so a verb
+    # invocation's own `--root` etc. keep working exactly as before.
+    p = argparse.ArgumentParser(prog="loopctl", parents=[common])
     sub = p.add_subparsers(dest="verb")
 
     new_p = sub.add_parser("new", parents=[common])
@@ -1186,10 +1302,24 @@ def build_parser():
 
 def main(argv=None):
     parser = build_parser()
-    args = parser.parse_args(argv)
-    if not args.verb:
-        parser.print_usage(sys.stderr)
-        return 2
+    # parse_known_args (not parse_args): `p` now carries --root/--json/--from/
+    # --actor directly (see build_parser), so a bare invocation with no verb
+    # — `loopctl` alone, or `loopctl --root R` — parses those flags onto
+    # `args` same as always; `args.verb` just comes back None (no subparser
+    # ever ran). `extra` is only non-empty for genuinely unrecognized
+    # arguments, reported as a usage error below exactly like `parse_args`
+    # would have — except when there's no verb at all, in which case
+    # content-first (Amendment 2 — 2026-07-30) wins: print the live fleet
+    # summary instead of a usage error, exit 0.
+    args, extra = parser.parse_known_args(argv)
+
+    if args.verb is None:
+        args.root = os.path.abspath(args.root)
+        args.name = None
+        return cmd_status(args)
+
+    if extra:
+        parser.error("unrecognized arguments: %s" % " ".join(extra))
 
     args.root = os.path.abspath(args.root)
 

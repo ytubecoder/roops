@@ -1544,6 +1544,16 @@ class TestFindings(LoopsRootTestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(json.loads(r.stdout), [])
 
+    def test_findings_empty_state(self):
+        # Definitive empty state (Amendment 2 — 2026-07-30): the human form
+        # says explicitly "0 open findings for <loop>" instead of the
+        # generic table "(none)".
+        name = "no-findings-loop2"
+        self.fixture.minimal_valid_loop(name)
+        r = run_cli(["findings", name, "--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn(f"0 open findings for {name}", r.stdout)
+
 
 # ---------------------------------------------------------------------------
 # loopctl list / status
@@ -1575,13 +1585,24 @@ class TestListStatus(LoopsRootTestCase):
         self.assertIn("l3", r.stdout)
         self.assertIn("name", r.stdout)
 
+    def test_list_empty_state(self):
+        # Definitive empty state (Amendment 2 — 2026-07-30): zero loops
+        # under loops.d/ prints "0 loops (loops.d empty)", not the generic
+        # table "(none)", and still exits 0.
+        r = run_cli(
+            ["list", "--root", self.root], env_overrides=self.fixture.base_env()
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("0 loops (loops.d empty)", r.stdout)
+
     def test_status_single_loop_no_runs(self):
         self.fixture.minimal_valid_loop("s1")
         r = run_cli(["status", "s1", "--root", self.root, "--json"])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
-        rows = json.loads(r.stdout)
+        rows = json.loads(r.stdout)["loops"]
         self.assertEqual(len(rows), 1)
         self.assertIsNone(rows[0]["runner_status"])
+        self.assertFalse(rows[0]["in_flight"])
 
     def test_status_single_loop_with_run(self):
         name = "s2"
@@ -1594,7 +1615,7 @@ class TestListStatus(LoopsRootTestCase):
         )
         r = run_cli(["status", name, "--root", self.root, "--json"])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
-        rows = json.loads(r.stdout)
+        rows = json.loads(r.stdout)["loops"]
         self.assertEqual(rows[0]["headline"], "all good")
         self.assertEqual(rows[0]["runner_status"], "completed")
 
@@ -1603,8 +1624,154 @@ class TestListStatus(LoopsRootTestCase):
         self.fixture.minimal_valid_loop("s4")
         r = run_cli(["status", "--root", self.root, "--json"])
         self.assertEqual(r.returncode, 0)
-        rows = json.loads(r.stdout)
+        data = json.loads(r.stdout)
+        rows = data["loops"]
         self.assertEqual({row["name"] for row in rows}, {"s3", "s4"})
+        self.assertEqual(data["fleet"]["loops"], 2)
+
+    def test_status_json_envelope_shape(self):
+        self.fixture.minimal_valid_loop("s3b")
+        r = run_cli(["status", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(set(data), {"fleet", "loops"})
+        self.assertEqual(
+            set(data["fleet"]),
+            {"loops", "ok", "warn", "alert", "needs_attention", "spend7d"},
+        )
+
+    def test_status_aggregate_line(self):
+        self.fixture.minimal_valid_loop("s5")
+        r = run_cli(["status", "--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("fleet:", r.stdout.splitlines()[0])
+
+    def test_status_empty_fleet_prints_aggregate_then_empty_state(self):
+        r = run_cli(["status", "--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        lines = r.stdout.splitlines()
+        self.assertIn("fleet: 0 loops", lines[0])
+        self.assertIn("0 loops (loops.d empty)", r.stdout)
+
+    def test_status_falls_back_past_overlap_row(self):
+        name = "s6"
+        self.fixture.minimal_valid_loop(name)
+        self.fixture.add_run(
+            f"20260722T000000Z-{name}-c1",
+            name,
+            "2026-07-29T00:00:00Z",
+            runner_status="completed",
+            effective_status="ok",
+            headline="all good",
+        )
+        self.fixture.add_run(
+            f"20260722T000000Z-{name}-c2",
+            name,
+            iso(datetime.now(timezone.utc)),
+            runner_status="skipped-overlap",
+        )
+        r = run_cli(["status", name, "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)["loops"]
+        self.assertEqual(rows[0]["headline"], "all good")
+        self.assertEqual(rows[0]["runner_status"], "completed")
+        self.assertFalse(rows[0]["in_flight"])
+
+    def test_status_in_flight_true_for_unfinished_run(self):
+        name = "s7"
+        self.fixture.minimal_valid_loop(name)
+        run_id = f"20260722T000000Z-{name}-c1"
+        r_start = run_db(
+            [
+                "start-run",
+                "--root",
+                self.root,
+                "--run-id",
+                run_id,
+                "--loop",
+                name,
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                iso(datetime.now(timezone.utc)),
+            ]
+        )
+        self.assertEqual(r_start.returncode, 0, msg=r_start.stderr)
+        r = run_cli(["status", name, "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)["loops"]
+        self.assertTrue(rows[0]["in_flight"])
+        self.assertIsNone(rows[0]["runner_status"])
+
+    def test_status_falls_back_past_unfinished_row(self):
+        # An unfinished (still-running) newest row is the OTHER blanking
+        # trigger, alongside skipped-overlap — both must fall back to the
+        # newest terminal row for status/headline, while in_flight still
+        # reports the true (unfinished) newest row's state.
+        name = "s8"
+        self.fixture.minimal_valid_loop(name)
+        self.fixture.add_run(
+            f"20260722T000000Z-{name}-c1",
+            name,
+            "2026-07-29T00:00:00Z",
+            runner_status="completed",
+            effective_status="ok",
+            headline="all good",
+        )
+        run_id = f"20260722T000000Z-{name}-c2"
+        r_start = run_db(
+            [
+                "start-run",
+                "--root",
+                self.root,
+                "--run-id",
+                run_id,
+                "--loop",
+                name,
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                iso(datetime.now(timezone.utc)),
+            ]
+        )
+        self.assertEqual(r_start.returncode, 0, msg=r_start.stderr)
+        r = run_cli(["status", name, "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)["loops"]
+        self.assertEqual(rows[0]["headline"], "all good")
+        self.assertTrue(rows[0]["in_flight"])
+
+    def test_status_fleet_aggregate_counts_ok_warn_and_spend(self):
+        self.fixture.minimal_valid_loop("ok-loop9")
+        self.fixture.minimal_valid_loop("warn-loop9")
+        self.fixture.add_run(
+            "20260722T000000Z-ok-loop9-c1",
+            "ok-loop9",
+            iso(datetime.now(timezone.utc)),
+            runner_status="completed",
+            effective_status="ok",
+            headline="fine",
+        )
+        self.fixture.add_run(
+            "20260722T000000Z-warn-loop9-c1",
+            "warn-loop9",
+            iso(datetime.now(timezone.utc)),
+            runner_status="completed",
+            effective_status="warn",
+            headline="hmm",
+        )
+        r = run_cli(["status", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        fleet = json.loads(r.stdout)["fleet"]
+        self.assertEqual(fleet["loops"], 2)
+        self.assertEqual(fleet["ok"], 1)
+        self.assertEqual(fleet["warn"], 1)
+        self.assertEqual(fleet["alert"], 0)
+        self.assertEqual(fleet["needs_attention"], 1)
 
     def test_list_tag_filter_exact(self):
         self.fixture.minimal_valid_loop("tagged", extra_lines=['tags="project:x"'])
@@ -1667,7 +1834,7 @@ class TestListStatus(LoopsRootTestCase):
         self.assertEqual(r_new.returncode, 0, msg=r_new.stdout + r_new.stderr)
         r = run_cli(["status", "fresh", "--root", self.root, "--json"])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
-        rows = json.loads(r.stdout)
+        rows = json.loads(r.stdout)["loops"]
         self.assertEqual(rows[0]["tags"], [])
         self.assertEqual(rows[0]["provenance"]["actor"], "claude/t")
         self.assertEqual(rows[0]["provenance"]["event"], "created")
@@ -1676,7 +1843,7 @@ class TestListStatus(LoopsRootTestCase):
         self.fixture.minimal_valid_loop("noprov")
         r = run_cli(["status", "noprov", "--root", self.root, "--json"])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
-        rows = json.loads(r.stdout)
+        rows = json.loads(r.stdout)["loops"]
         self.assertIsNone(rows[0]["provenance"])
 
     def test_status_json_provenance_survives_beyond_ten_later_events(self):
@@ -1719,9 +1886,48 @@ class TestListStatus(LoopsRootTestCase):
 
         r = run_cli(["status", name, "--root", self.root, "--json"])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
-        rows = json.loads(r.stdout)
+        rows = json.loads(r.stdout)["loops"]
         self.assertEqual(rows[0]["provenance"]["event"], "created")
         self.assertEqual(rows[0]["provenance"]["actor"], "claude/t")
+
+
+# ---------------------------------------------------------------------------
+# loopctl bare invocation (Amendment 2 — 2026-07-30): content-first — no verb
+# means "show me the fleet", not "show me usage"
+# ---------------------------------------------------------------------------
+
+
+class TestBareInvocation(LoopsRootTestCase):
+    def test_bare_invocation_prints_summary_exit_0(self):
+        self.fixture.minimal_valid_loop("b1")
+        r = run_cli(["--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("fleet:", r.stdout)
+
+    def test_bare_invocation_respects_root_flag(self):
+        self.fixture.minimal_valid_loop("b2")
+        r = run_cli(["--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("fleet: 1 loops", r.stdout)
+
+    def test_bare_invocation_respects_loops_root_env_with_no_args_at_all(self):
+        self.fixture.minimal_valid_loop("b3")
+        r = run_cli([], env_overrides={"LOOPS_ROOT": self.root})
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("fleet: 1 loops", r.stdout)
+
+    def test_unknown_verb_still_exit_2(self):
+        r = run_cli(["frobnicate", "--root", self.root])
+        self.assertEqual(r.returncode, 2)
+
+    def test_help_still_exits_0_and_does_not_dispatch(self):
+        # --help is a deliberate ask for usage, distinct from a bare
+        # invocation — it must keep behaving like before (print help, exit
+        # 0) rather than falling into the new content-first summary path.
+        r = run_cli(["--help"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("usage: loopctl", r.stdout)
+        self.assertNotIn("fleet:", r.stdout)
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roops — brand kit · 印章</title>
+<meta name="description" content="The roops brand kit — marks, color, type, working vocabulary, and voice for the scheduled-agent harness.">
+<meta property="og:title" content="Roops — brand kit · 印章">
+<meta property="og:description" content="Marks, color, type, working vocabulary, and voice — the roops identity system in one place.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='14' fill='%23C73E2B'/%3E%3Ctext x='50' y='72' font-size='62' text-anchor='middle' fill='%23F2EDE3' font-family='serif'%3E%E5%B7%A1%3C/text%3E%3C/svg%3E">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;500;600&family=Yuji+Syuku&display=swap');
+  :root {
+    --sumi: #1C1A17;        /* 墨 ink */
+    --washi: #F2EDE3;       /* 生成 kinari paper */
+    --washi-shade: #E9E2D3; /* layered paper */
+    --shu: #C73E2B;         /* 朱 vermillion — the ONLY accent */
+    --ai: #2E4A5B;          /* 藍 indigo — ink-adjacent, for quiet secondary text */
+    --nibi: #8C8578;        /* 鈍 dull grey-brown, metadata */
+    --koke: #6B7A5C;        /* 苔 moss — ok status only */
+    --ochre: #A87A2A;       /* 黄土 warn status only */
+    --serif: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif;
+    --seal: "Yuji Syuku", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--sumi);
+    color: var(--sumi);
+    font-family: var(--serif);
+    line-height: 1.7;
+    padding: clamp(12px, 3vw, 48px);
+  }
+
+  /* ---------- washi sheet ---------- */
+  .sheet {
+    position: relative;
+    max-width: 1240px;
+    margin: 0 auto;
+    background:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.55 0 0 0 0 0.5 0 0 0 0 0.42 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23p)'/%3E%3C/svg%3E"),
+      var(--washi);
+    border-radius: 4px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.5), 0 24px 80px -24px rgba(0,0,0,.8);
+    overflow: hidden;
+  }
+  .sheet::before, .sheet::after {
+    content: ""; position: absolute; width: 28px; height: 28px; pointer-events: none;
+  }
+  .sheet::before { top: 18px; left: 18px; border-top: 1px solid var(--nibi); border-left: 1px solid var(--nibi); }
+  .sheet::after { bottom: 18px; right: 18px; border-bottom: 1px solid var(--nibi); border-right: 1px solid var(--nibi); }
+
+  section { padding: clamp(48px, 8vw, 120px) clamp(24px, 6vw, 96px); }
+  section + section { border-top: 1px solid rgba(28,26,23,.14); }
+
+  .kicker {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .28em;
+    text-transform: uppercase; color: var(--nibi); display: block; margin-bottom: 28px;
+  }
+  .kicker b { color: var(--shu); font-weight: 400; }
+
+  h2 {
+    font-weight: 500; font-size: clamp(28px, 4vw, 44px);
+    letter-spacing: -.01em; line-height: 1.25; max-width: 18ch; margin-bottom: 20px;
+  }
+  p.lede { font-size: clamp(16px, 1.6vw, 19px); max-width: 58ch; color: var(--sumi); }
+
+  /* ---------- brand-kit header ---------- */
+  .bk-header { padding-bottom: clamp(32px, 5vw, 64px); }
+  .bk-header .lockup { margin: 22px 0 20px; }
+  .bk-header .lede { margin-bottom: 22px; }
+  .back-link {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--nibi); text-decoration: none; display: inline-block;
+    border-bottom: 1px solid rgba(140,133,120,.4);
+    transition: color .25s cubic-bezier(0.16,1,0.3,1), border-color .25s cubic-bezier(0.16,1,0.3,1);
+  }
+  .back-link:hover { color: var(--shu); border-color: var(--shu); }
+
+  /* ---------- lexicon ---------- */
+  .lexicon { border-top: 1px solid rgba(28,26,23,.2); margin-top: 40px; }
+  .lex-row {
+    display: grid; grid-template-columns: 96px 1fr 1.4fr; gap: clamp(16px, 3vw, 48px);
+    padding: 22px 0; border-bottom: 1px solid rgba(28,26,23,.12); align-items: baseline;
+  }
+  .lex-row .k { font-size: 34px; font-weight: 500; }
+  .lex-row .k.marubatsu { display: flex; align-items: baseline; gap: 4px; font-size: 20px; white-space: nowrap; }
+  .lex-row .r { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; color: var(--nibi); }
+  .lex-row .r b { color: var(--sumi); font-weight: 400; display: block; font-size: 13px; margin-bottom: 2px; }
+  .lex-row .d { font-size: 15px; color: var(--sumi); }
+  .lex-row .d code { font-family: var(--mono); font-size: 12.5px; background: var(--washi-shade); padding: 2px 7px; border-radius: 2px; }
+
+  /* ---------- palette ---------- */
+  .swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: rgba(28,26,23,.18); border: 1px solid rgba(28,26,23,.18); margin-top: 44px; }
+  .swatch { background: var(--washi); padding: 0; }
+  .swatch .chip { height: 110px; }
+  .swatch .meta { padding: 14px 16px 18px; }
+  .swatch .meta .jp-name { font-size: 20px; font-weight: 500; }
+  .swatch .meta .en { font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--nibi); display: block; margin: 4px 0 8px; }
+  .swatch .meta .hex { font-family: var(--mono); font-size: 12px; color: var(--ai); }
+  .swatch .meta .use { font-size: 12.5px; color: var(--nibi); display: block; margin-top: 6px; line-height: 1.5; }
+
+  /* ---------- marks ---------- */
+  .marks { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 1px; background: rgba(28,26,23,.18); border: 1px solid rgba(28,26,23,.18); margin-top: 44px; }
+  .mark-cell { background: var(--washi); padding: clamp(28px, 4vw, 48px); display: flex; flex-direction: column; align-items: center; text-align: center; gap: 20px; }
+  .mark-cell .art { height: 150px; display: flex; align-items: center; justify-content: center; }
+  .mark-cell h4 { font-size: 16px; font-weight: 500; }
+  .mark-cell p { font-size: 13px; color: var(--nibi); max-width: 32ch; }
+  .hanko {
+    width: 92px; height: 92px; background: var(--shu); color: var(--washi);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--seal); font-size: 54px; border-radius: 6px;
+    transform: rotate(-2.5deg);
+  }
+  .lockup { font-size: 44px; font-weight: 500; letter-spacing: -.02em; display: flex; align-items: center; gap: 14px; }
+  .lockup .seal-dot { width: 30px; height: 30px; background: var(--shu); border-radius: 4px; color: var(--washi); font-family: var(--seal); font-size: 17px; display: inline-flex; align-items: center; justify-content: center; transform: rotate(-2deg); }
+
+  /* ---------- type specimens ---------- */
+  .specimens { margin-top: 44px; }
+  .specimen {
+    display: grid; grid-template-columns: 1.3fr 1fr; gap: clamp(16px, 3vw, 48px);
+    padding: 28px 0; border-bottom: 1px solid rgba(28,26,23,.12); align-items: center;
+  }
+  .spec-sample { font-family: var(--serif); font-weight: 500; font-size: clamp(30px, 3.6vw, 44px); line-height: 1.2; }
+  .spec-sample .spec-en { font-family: var(--serif); margin-left: 14px; color: var(--nibi); }
+  .spec-sample--seal { font-family: var(--seal); font-size: clamp(40px, 4.4vw, 56px); color: var(--shu); letter-spacing: .08em; }
+  .spec-sample--mono { font-family: var(--mono); font-weight: 400; font-size: clamp(15px, 1.6vw, 18px); color: var(--ai); letter-spacing: .02em; }
+  .spec-meta { display: flex; flex-direction: column; gap: 8px; }
+  .spec-stack { font-family: var(--mono); font-size: 11.5px; color: var(--nibi); line-height: 1.6; }
+  .spec-role { font-size: 13.5px; color: var(--sumi); }
+
+  /* ---------- taglines ---------- */
+  .taglines { margin-top: 44px; }
+  .tagline {
+    padding: 26px 0; border-bottom: 1px solid rgba(28,26,23,.12);
+    display: grid; grid-template-columns: 56px 1fr; gap: 24px; align-items: baseline;
+  }
+  .tagline .no { font-family: var(--mono); font-size: 11px; color: var(--nibi); letter-spacing: .2em; }
+  .tagline .line { font-size: clamp(20px, 2.6vw, 30px); font-weight: 500; letter-spacing: -.01em; }
+  .tagline .sub { font-family: var(--mono); font-size: 11.5px; color: var(--nibi); display: block; margin-top: 6px; letter-spacing: .1em; }
+
+  /* ---------- footer ---------- */
+  footer {
+    padding: 40px clamp(24px, 6vw, 96px); border-top: 1px solid rgba(28,26,23,.2);
+    display: flex; flex-wrap: wrap; gap: 12px 40px; justify-content: space-between;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .2em; color: var(--nibi); text-transform: uppercase;
+  }
+  footer .f-shu { color: var(--shu); }
+  footer a { color: var(--nibi); text-decoration: none; border-bottom: 1px solid rgba(140,133,120,.4); }
+  footer a:hover { color: var(--sumi); }
+
+  /* ---------- reveal motion ---------- */
+  .reveal { opacity: 0; transform: translateY(22px); transition: opacity .8s cubic-bezier(0.16, 1, 0.3, 1), transform .8s cubic-bezier(0.16, 1, 0.3, 1); transition-delay: calc(var(--i, 0) * 110ms); }
+  .reveal.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+  }
+
+  /* ---------- mobile collapse ---------- */
+  @media (max-width: 767px) {
+    .marks { grid-template-columns: 1fr; }
+    .specimen { grid-template-columns: 1fr; gap: 14px; }
+    .lex-row { grid-template-columns: 64px 1fr; }
+    .lex-row .d { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <!-- ================= HEADER ================= -->
+  <section class="bk-header">
+    <span class="kicker reveal">brand kit · <b>印章</b></span>
+    <div class="lockup reveal" style="--i:1">roops<span class="seal-dot">巡</span></div>
+    <p class="lede reveal" style="--i:2">Every mark, color, type rule, and borrowed word that makes roops look like roops — the identity system, gathered on one page.</p>
+    <a class="back-link reveal" href="../" style="--i:3">back to the product page</a>
+  </section>
+
+  <!-- ================= THE MARK ================= -->
+  <section>
+    <span class="kicker reveal">01 · The mark · <b>印</b></span>
+    <h2 class="reveal">An ensō is a loop drawn with discipline.</h2>
+    <p class="lede reveal" style="--i:1">The ensō (円相) — the zen circle, one breath, one stroke — is the rare logo concept that is not a metaphor. It literally <em>is</em> a loop. Left slightly open it is a run in progress; closed, a run complete.</p>
+    <div class="marks">
+      <div class="mark-cell reveal">
+        <div class="art"><svg viewBox="0 0 200 200" width="150" aria-hidden="true">
+          <path d="M 108 22 C 62 20 24 58 24 102 C 24 148 62 182 106 180 C 148 178 178 144 177 102 C 176 66 152 38 122 28" fill="none" stroke="#1C1A17" stroke-width="10" stroke-linecap="round"/>
+          <path d="M 112 26 C 74 22 32 56 30 100 C 28 146 64 178 106 176" fill="none" stroke="#1C1A17" stroke-width="3.5" stroke-linecap="round" opacity=".35"/>
+        </svg></div>
+        <h4>Primary — the open ensō</h4>
+        <p>Brush-weighted, imperfect, gap at the top right: the loop that will run again. The whole identity in one stroke.</p>
+      </div>
+      <div class="mark-cell reveal" style="--i:1">
+        <div class="art"><div class="hanko">巡</div></div>
+        <h4>Seal — 巡 in vermillion</h4>
+        <p>The hanko form for favicons, stamps, and small sizes. 巡: to make the rounds.</p>
+      </div>
+      <div class="mark-cell reveal" style="--i:2">
+        <div class="art"><div class="lockup">roops<span class="seal-dot">巡</span></div></div>
+        <h4>Lockup — wordmark + seal</h4>
+        <p>Lowercase serif wordmark, sealed like a signed document. The seal always sits last, as a signature does.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= COLOR ================= -->
+  <section>
+    <span class="kicker reveal">02 · Color · <b>色</b></span>
+    <h2 class="reveal">Ink, paper, and one seal of vermillion.</h2>
+    <p class="lede reveal" style="--i:1">Traditional Japanese color names (nihon no iro), each with a job. Vermillion is the only accent — it appears exactly where a hanko would: on things a human decided.</p>
+    <div class="swatches reveal" style="--i:2">
+      <div class="swatch"><div class="chip" style="background:#1C1A17"></div><div class="meta"><span class="jp-name">墨</span><span class="en">sumi · ink</span><span class="hex">#1C1A17</span><span class="use">Text, marks, the ensō. Never pure black.</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#F2EDE3"></div><div class="meta"><span class="jp-name">生成</span><span class="en">kinari · raw paper</span><span class="hex">#F2EDE3</span><span class="use">The surface. Warm, faintly textured washi.</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#C73E2B"></div><div class="meta"><span class="jp-name">朱</span><span class="en">shu · vermillion</span><span class="hex">#C73E2B</span><span class="use">The seal. Alerts, acks, the one accent.</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#2E4A5B"></div><div class="meta"><span class="jp-name">藍</span><span class="en">ai · indigo</span><span class="hex">#2E4A5B</span><span class="use">Secondary ink — code, links, quiet emphasis.</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#6B7A5C"></div><div class="meta"><span class="jp-name">苔</span><span class="en">koke · moss</span><span class="hex">#6B7A5C</span><span class="use">Healthy status only. Moss grows on what is left in peace.</span></div></div>
+      <div class="swatch"><div class="chip" style="background:#8C8578"></div><div class="meta"><span class="jp-name">鈍</span><span class="en">nibi · dulled</span><span class="hex">#8C8578</span><span class="use">Metadata, timestamps, the recessive layer.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ================= TYPE & RULES ================= -->
+  <section>
+    <span class="kicker reveal">03 · Type & rules · <b>型</b></span>
+    <h2 class="reveal">Three faces, three jobs. Nothing improvised.</h2>
+    <p class="lede reveal" style="--i:1">Every character on the page is set in one of three faces, and each face has exactly one job. Reaching for a fourth — or mixing the three — is what breaks the system.</p>
+
+    <div class="specimens">
+      <div class="specimen reveal">
+        <div class="spec-sample">手入れ <span class="spec-en">roops</span></div>
+        <div class="spec-meta">
+          <span class="spec-stack">"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif</span>
+          <span class="spec-role">All reading text — headings, body copy, every lede.</span>
+        </div>
+      </div>
+      <div class="specimen reveal" style="--i:1">
+        <div class="spec-sample spec-sample--seal">済 認 休 承</div>
+        <div class="spec-meta">
+          <span class="spec-stack">"Yuji Syuku", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif</span>
+          <span class="spec-role">Stamps only, always large. Small kanji collapse into a blob in this face — it never carries body text.</span>
+        </div>
+      </div>
+      <div class="specimen reveal" style="--i:2">
+        <div class="spec-sample spec-sample--mono">last 巡 06:20 · 1m44s · $0.0042</div>
+        <div class="spec-meta">
+          <span class="spec-stack">ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace</span>
+          <span class="spec-role">Every number, label, and timestamp. Nothing else is set in it.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="lexicon">
+      <div class="lex-row reveal"><span class="k" style="color:var(--shu)">朱</span><span class="r"><b>vermillion, sparingly</b>the only accent</span><span class="d">Appears only where a hanko would sit — seals, alerts, the marks of a human decision. Nowhere else on the page.</span></div>
+      <div class="lex-row reveal" style="--i:1"><span class="k">墨</span><span class="r"><b>never pure black</b>ink, not void</span><span class="d">Text and marks sit on a warm near-black ink, never <code>#000</code>. The page stays soft, not stark.</span></div>
+      <div class="lex-row reveal" style="--i:2"><span class="k marubatsu"><span style="color:var(--koke)">〇</span><span style="color:var(--ochre)">△</span><span style="color:var(--shu)">×</span></span><span class="r"><b>no emoji</b>marubatsu, not icons</span><span class="d">Status is <span style="color:var(--koke)">〇</span> achieved, <span style="color:var(--ochre)">△</span> partial, <span style="color:var(--shu)">×</span> failed — each in its own color. Never an emoji, never a checkmark glyph.</span></div>
+      <div class="lex-row reveal" style="--i:3"><span class="k">間</span><span class="r"><b>motion breathes</b>slow, one easing</span><span class="d">Transitions run at 0.8s or slower, on a single easing curve throughout, with a reduced-motion fallback for anyone who asks for it.</span></div>
+    </div>
+  </section>
+
+  <!-- ================= WORKING VOCABULARY ================= -->
+  <section>
+    <span class="kicker reveal">04 · Working vocabulary · <b>語彙</b></span>
+    <h2 class="reveal">Words the product borrows.</h2>
+    <p class="lede reveal" style="--i:1">Not decoration — each term earns its place by naming something the harness already does. Used sparingly: one or two in the UI, the rest in docs and voice.</p>
+    <div class="lexicon">
+      <div class="lex-row reveal"><span class="k">巡</span><span class="r"><b>meguru / jun</b>to go around; a patrol</span><span class="d">A single firing of a loop. “Last 巡: 06:00.” CLI verb: <code>roops rounds</code>.</span></div>
+      <div class="lex-row reveal" style="--i:1"><span class="k">手入れ</span><span class="r"><b>teire</b>tending, upkeep</span><span class="d">The category of work Roops does — garden-keeping for repos and systems. The docs’ word for “maintenance loop.”</span></div>
+      <div class="lex-row reveal" style="--i:2"><span class="k">間</span><span class="r"><b>ma</b>meaningful interval / negative space</span><span class="d">Both meanings apply: the <em>interval</em> between runs, and the <em>empty space</em> of a healthy dashboard. One kanji, the whole product.</span></div>
+      <div class="lex-row reveal" style="--i:3"><span class="k">判</span><span class="r"><b>han</b>the seal / stamp</span><span class="d">Dispositions. To ack a finding is to stamp it. Hanko stamps as status iconography: <code>済</code> settled, <code>認</code> acknowledged, <code>休</code> snoozed — and <code>承</code> approved, the one stamp that becomes an order.</span></div>
+      <div class="lex-row reveal" style="--i:4"><span class="k">改善</span><span class="r"><b>kaizen</b>continuous improvement</span><span class="d">The philosophy of small recurring passes — the reason loops exist at all. Voice-of-brand word, not UI copy.</span></div>
+    </div>
+  </section>
+
+  <!-- ================= VOICE ================= -->
+  <section>
+    <span class="kicker reveal">05 · Voice · <b>声</b></span>
+    <h2 class="reveal">Ways to say it.</h2>
+    <div class="taglines">
+      <div class="tagline reveal"><span class="no">案 A</span><div><span class="line">Quiet rounds. Kept promises.</span><span class="sub">The bushidō read — dependability first.</span></div></div>
+      <div class="tagline reveal" style="--i:1"><span class="no">案 B</span><div><span class="line">The garden is raked every morning.</span><span class="sub">The karesansui read — the README’s opening line.</span></div></div>
+      <div class="tagline reveal" style="--i:2"><span class="no">案 C</span><div><span class="line">Tend, don’t toil.</span><span class="sub">The teire read — shortest, best on a terminal banner.</span></div></div>
+      <div class="tagline reveal" style="--i:3"><span class="no">案 D</span><div><span class="line">毎朝、庭を整える。</span><span class="sub">“Each morning, the garden is set in order.” — for the people who will ask what it means. That is the point of a tagline.</span></div></div>
+    </div>
+  </section>
+
+  <footer>
+    <span><span class="f-shu">巡</span>&nbsp; ROOPS — BRAND KIT</span>
+    <span><a href="../">THE PRODUCT PAGE</a></span>
+    <span><a href="../ui.html">THE GARDEN — UI CONCEPT</a></span>
+    <span><a href="https://github.com/ytubecoder/roops">GITHUB</a></span>
+    <span>SET IN NOTO SERIF JP / YUJI SYUKU</span>
+  </footer>
+</div>
+
+<script>
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+</script>
+</body>
+</html>

@@ -16,6 +16,9 @@ Priority: medium | Status: for-review
 ### B-07: Garden dashboard: roops design applied to generate.py (stamps, tokonoma, 巡/休 install state; §10 style+staleness amendment)
 Priority: medium | Status: for-review
 
+### B-08: Report pages (third output tier) + kagi-ban pilot loop
+Priority: medium | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1: reliable runs + manual run-everything trigger + clean schedules screen

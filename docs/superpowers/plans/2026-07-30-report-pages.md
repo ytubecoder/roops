@@ -1,5 +1,9 @@
 # Report Pages (third output tier) Implementation Plan
 
+**Status:** shipped 2026-07-30, live (`kagi-ban` installed `daily:07:40`; pages served over the
+tailnet vhost). As-built deltas + what the live gauntlet changed: `## Shipped (as built)` at the
+end of this file. Remaining decisions and follow-ups: `docs/REPORT_PAGES_FOLLOWUP_WARMSTART.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add the optional report-page output tier to the loops harness (spec: `docs/REPORT_PAGES_PLAN.md`) and prove it by shipping `kagi-ban`, the av-audit exposure loop, as the first page-enabled loop.
@@ -1777,3 +1781,53 @@ The pathway is proven if kagi-ban shipped with ZERO special-casing in the harnes
 - Spec §1.1–1.8 → Tasks 1, 4 (decisions encoded in amendment + runner). §2 contract → Tasks 2 (gate), 3 (kit), 8 (conforming renderer). §3 kit → Task 3 (+ reference page in Task 8). §4 mechanics → Tasks 1, 2, 4, 5. §5 surfaces → Tasks 6, 9. §6 loop-data/q12/import-delta → Tasks 4 (commit pattern), 7 (docs). §7 pilot → Tasks 8, 10. §8 test matrix → Tasks 2, 4, 5, 6, 8 (each case named in a test). §9 build order → task order. Appendix A → Task 9.
 - Deliberate deviation from spec §7: the copy-delta note lives in `render_page.py`'s header + `docs/REPORT_PAGES.md`, NOT in av-audit's README — the handoff forbids modifying `~/projects/av-audit/` and that rule wins over the spec's README-note sentence.
 - Type consistency: `page_envelope.check_page/read_meta/MAX_PAGE_BYTES` (Task 2) are the names Tasks 4 (CLI `check`), 6 (module), 8 (tests) use. Env names in Task 4 (`LATEST_JSON LOOP_DATA_DIR PAGEKIT PAGE_OUT`) match Tasks 8's scripts and the amendment text. Finding-id `av:<source>:<sha8>` consistent across precheck, prompt, SPEC, tests.
+
+---
+
+## Shipped (as built) — 2026-07-30
+
+Executed via subagent-driven development with external CLI agents ("peons") as implementers:
+grok for tasks 1–3, 5, 7–8; codex for the delicate runner (4) and dashboard (6) tasks; Claude
+reviewer subagents gated each task on spec + quality; tasks 9–10 done in-session. Commit range
+`d6ebceb..44e0942` on main. Suite grew 615 → 649 hermetic tests.
+
+### Deltas from the plan as written
+
+- **Task 4 fake-engine knob:** the plan guessed `FAKE_CONTRACT_INVALID`; the real one is
+  `FAKE_INVALID=1`. The runner tests also expanded from the plan's 7 cases to 19.
+- **Task 6 anchors were stale.** The garden restyle (`be381f5`, a parallel effort) moved every
+  line anchor and replaced the doc shell; `reports.html` was built in the garden idiom, not the
+  plan's dark-slate snippets. The plan's logic (queries, state dict, badge semantics, caps,
+  fallbacks) survived unchanged. `.gitignore` gained `dashboard/reports.html`.
+- **Task 7 symbol name:** `_SPEC_MD_TEMPLATE`, not the plan's `_SPEC_TEMPLATE`.
+- **Task 8 renderer gained a fifth delta** beyond the plan's four (see below).
+- **Task 9 launchd label:** the dev-tailnet runbook named `com.generalissimo.dev-tailnet.caddy`; the real
+  service is `com.generalissimo.dev-tailnet.caddy`. Runbook corrected.
+
+### What the live gauntlet changed (none of it findable hermetically)
+
+1. **Run 1 did not promote a page.** The gate worked exactly as designed: `av`'s own finding prose
+   ("plaintext access token: /Users/…") trips `bin/redact.py`'s generic KV rule, so the page failed
+   redaction-clean while the run stayed `completed` — the never-fail-the-run invariant, proven
+   live. Fixed by renderer **delta 5** (`neutralize_kv_phrases`, em-dash separator) + a regression
+   test.
+2. **`redact.py` was corrupting a finding identity.** In the redacted precheck digest,
+   `av:gh-cli-hosts-token:<sha8> | …` lost everything after the keyword; the engine received and
+   sqlite persisted `av:gh-cli-hosts-token:«redacted:secret»`. Stably corrupt, so id-stability
+   checks passed. Fixed harness-side with a `(?<![A-Za-z0-9-])` lookbehind: hyphen compounds pass,
+   underscore env-vars (`GITHUB_TOKEN=`) still redact, specific token patterns unaffected.
+3. **The audit's world-view depended on its trigger.** The launchd run saw 16 exposures where shell
+   runs saw 20, marked four real exposures resolved, and committed that as the baseline.
+   `precheck.sh` now pins the login-shell PATH. **16 (14 high, 2 medium) is the canonical count** —
+   `av` flags user-writable dirs that *precede* system paths, so the old 20 (and av-audit's own
+   baseline) was an artifact of the Claude Code harness's PATH ordering. Consecutive runs now
+   report `new=0 resolved=0`.
+4. **Corrupt scan JSON now hard-fails the precheck** instead of reading as a clean machine (a
+   deferred minor elevated after defect 3 demonstrated the "silently fewer findings" mode live).
+
+### Goal verification
+
+Zero special-casing: grepping the harness-side diff for `kagi-ban` returns only the worked-example
+prose in `docs/REPORT_PAGES.md`. Dismissal semantics confirmed live — a dismissed finding is
+suppressed from `latest.json` and greyed on the dashboard while still rendering on the snapshot
+page (§1.4).

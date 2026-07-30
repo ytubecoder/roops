@@ -198,7 +198,7 @@ reports/<name>/          # per-run markdown + atomically-promoted latest.* (supp
 dashboard/loops.html     # static: fleet view + per-loop panels + findings
 dashboard/reports.html   # static: report pages per loop, totals chips
 site/                    # roops brand · explainer + UI-concept pages · design system
-tests/run-tests.sh       # 661 hermetic tests — no network, no real engines
+tests/run-tests.sh       # 668 hermetic tests — no network, no real engines
 ```
 
 ## Docs

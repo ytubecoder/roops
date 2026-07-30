@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** shipped 2026-07-30 (commits `5365039..a95688a` on main; see `## Shipped (as built)` at the end)
+
 **Goal:** Make `loopctl set-schedule`'s dashboard regen best-effort (killing the console's false `400` for a schedule change that took effect), close INTERFACES §10's paused-staleness open question, and add a change-lifecycle routing note to CLAUDE.md.
 
 **Architecture:** Copy the existing best-effort regen idiom from `cmd_disposition` (`bin/loopctl:1064-1068`) into `cmd_set_schedule`. Everything else is documentation amendments to the frozen contract (`docs/INTERFACES.md`), shipped in the same commit as the code they describe. Ticket Takeaway ticket **B-09** tracks this work (already in WIP).
@@ -253,3 +255,33 @@ git push
 ```bash
 python3 ~/.claude/ticket-takeaway/tickets-cli.py move loops B-09 review
 ```
+
+---
+
+## Shipped (as built)
+
+Four commits on main, all pushed 2026-07-30; full hermetic suite 756/756 green after.
+
+- `5365039` — Task 1 as planned (guard + CLI test + console pin + §13/§8 amendments, one commit).
+- `e778aa4` — Task 2 as planned (§10 resolution, docs-only).
+- `4033878` — Task 3 with a controller amendment: the commit also landed this plan doc
+  (newly tracked; `docs/superpowers/plans/` is tracked by convention) and
+  `PRODUCT_BACKLOG.md` (B-09 opened + moved to review), and the ticket move ran BEFORE the
+  commit. The brief's "expect 744 tests" was a stale baseline; actual was 756 (suite had
+  grown to 754 before this plan; +2 from Task 1).
+- `a95688a` — fix wave from the final whole-branch review, beyond the plan's scope:
+  1. `_dashboard_module()` moved INSIDE the regen guard at BOTH call sites
+     (`cmd_set_schedule`, `cmd_disposition`) — a missing/broken `dashboard/generate.py`
+     was still exiting non-zero after a successful mutation, reproducing the false 400
+     the plan exists to kill.
+  2. `bin/console.py` `/schedule` now passes the loopctl child's stderr through to its own
+     stderr on exit 0, so a regen failure is never symptomless (the warning previously
+     died inside `capture_output=True`).
+  3. The console regen-failure test gained non-vacuousness assertions (regen really
+     failed; warning really surfaced).
+  4. This plan doc's `cmd_dispose` naming corrected to the real `cmd_disposition`.
+
+Parked with rulings (final review + re-review): a non-`ValueError` after the conf rewrite
+still exits non-zero — CORRECT, the mutation is genuinely half-applied there; task-block
+prose in this plan describes state as of task time (e.g. Task 1's "console code unchanged"
+predates the fix wave) — historical, not errata.

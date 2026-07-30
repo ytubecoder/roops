@@ -1,5 +1,50 @@
 # Session Log
 
+## 2026-07-30 — B-09: set-schedule regen guard + §10 paused-staleness close + OpenSpec routing rule
+
+### Summary
+- **False-400 fix shipped** (`5365039..a95688a`): `loopctl set-schedule`'s dashboard regen is
+  best-effort (the `cmd_disposition` idiom), so the console no longer 400s a schedule change
+  that took effect; INTERFACES §13/§8 amended in the same commit; §10's paused-staleness open
+  question resolved (paused loops STAY stale-visible; `set-schedule manual` is the exempt
+  off-path). 754 → 756 tests.
+- **OpenSpec re-armed**: diagnosed as adopted-then-dormant (used only for B-01; B-04..B-08
+  bypassed it) — root cause was no routing trigger in CLAUDE.md. Added "Change lifecycle
+  routing": feature-scale → OpenSpec change named after the ticket; small fixes → superpowers
+  plan + in-commit INTERFACES amendment; Ticket Takeaway ticket either way.
+- **Execution model:** subagent-driven development, all-Sonnet implementers + per-task Sonnet
+  review gates, Opus final whole-branch review, one fix wave + scoped re-review.
+
+### Lessons Learned
+- **Gotcha:** a best-effort guard must wrap the MODULE LOAD, not just the call —
+  `_dashboard_module()` outside the `try` meant a missing/broken `generate.py` still exited
+  non-zero after a successful mutation, reproducing the exact false 400 the guard was built
+  to kill. Found by the final whole-branch review at both call sites, invisible to both
+  task-scoped reviews.
+- **Gotcha:** a subprocess child's best-effort warning dies inside `capture_output=True`
+  unless the parent relays it — console `/schedule` returned 200 and discarded the regen
+  warning entirely, making a silently stale dashboard the only symptom (violating
+  `_regen_dashboard`'s own stated design). Parent now passes child stderr through on exit 0.
+- **Accepted:** hermetic regen-failure injection = a plain FILE named `dashboard` at the
+  fixture root (collides with `_atomic_write`'s makedirs). Works in both fixtures because
+  `LoopsRoot` never creates `dashboard/`; no mocking of `generate`.
+- **Accepted:** pair every failure-injection test with an assertion that the injection FIRED
+  (warning on stderr / output file absent) — the console pin originally passed vacuously
+  against its neighbor's assertions.
+- **Gotcha:** plan-doc drift is real once plans are committed artifacts — the plan said
+  `cmd_dispose` for the real `cmd_disposition`, and a fix-wave edit invalidated another plan
+  line in the same commit. Ruling: task blocks describe state as of task time; only names
+  that grep false get corrected.
+
+### Decisions
+- §10 paused-staleness: paused loops stay in stale/needs_attention — pause has no expiry
+  (unlike `snooze --until`), so exempting it creates a silent forever-off; the deliberate
+  off-path is `set-schedule manual` (plist removed → exempt). Marked settled in §10.
+- B-09 class of change (small fix) deliberately does NOT go through OpenSpec — encoded in the
+  new CLAUDE.md routing section.
+- A non-`ValueError` failure after the conf rewrite (plist write, launchctl missing) still
+  exits non-zero — kept, correct signal for a half-applied mutation.
+
 ## 2026-07-30 — Report pages shipped (third output tier) + pilot loop `kagi-ban` live
 
 ### Summary

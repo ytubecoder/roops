@@ -1,8 +1,10 @@
 # site/ — brand + UI concept pages for the "Roops" rebrand
 
-Static two-page site, no build step. Formerly its own repo with GitHub Pages hosting
-(`ytubecoder/roops`, deleted 2026-07-30 after merging here); the pages are no longer
-hosted — serve locally from `site/` to view.
+Static two-page site, no build step. Live at https://ytubecoder.github.io/roops/ —
+served from the public `ytubecoder/ytubecoder.github.io` repo (`roops/` folder). This
+`site/` directory is the source of truth; deploy = copy the two pages there and push
+(`workflows/publish.txt`). Merged here from the standalone `ytubecoder/roops` repo
+2026-07-30.
 
 **Status of the rebrand:** APPLIED at brand level 2026-07-30 — repo name, README, and
 dashboard header say roops, and `bin/roopctl` exists as an alias. Mechanical names are

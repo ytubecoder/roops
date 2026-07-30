@@ -1,11 +1,13 @@
-# Preview roops site pages
+# Publish roops site
 # Project: loops (site/)
 # Frequency: after any edit to site/index.html or site/ui.html
-# Description: Verify pages locally in a real browser, then taildrop copies to the desktop machine. (The pages are no longer hosted — the standalone roops repo and its GitHub Pages site were retired 2026-07-30.)
+# Description: Verify pages locally in a real browser, publish to https://ytubecoder.github.io/roops/ via the public ytubecoder.github.io repo, confirm live, taildrop copies to the desktop machine
 
 ## Prerequisites
 - Changes saved to ~/projects/loops/site (index.html and/or ui.html)
 - Design conformance checked against site/CLAUDE.md (tokens, seal-font rule, marubatsu, reduced-motion + 390px)
+- MOCK DATA ONLY — the publish target is public; never put internal loop names or real business data on these pages
+- ~/projects/ytubecoder.github.io cloned (public Pages host; roops/ folder serves the site)
 - Tailscale up, desktop-7dms6vl visible in `tailscale status`
 
 ## Steps
@@ -27,17 +29,27 @@
    - Expected outcome: port free (`lsof -i :8664` empty); no resident browser (browser-windows policy)
    - If fails: find and kill leftover pids before continuing
 
-4. Commit (push per the repo's normal flow)
-   - Run: cd ~/projects/loops && git add site/<changed files> && git commit
+4. Commit the source of truth
+   - Run: cd ~/projects/loops && git add site/<changed files> && git commit (push per the repo's normal flow)
    - Expected outcome: commit lands on main
    - If fails: pull/rebase, resolve, re-commit
 
-5. Taildrop copies to the desktop machine
+5. Publish to the Pages host repo
+   - Run: cp ~/projects/loops/site/index.html ~/projects/loops/site/ui.html ~/projects/ytubecoder.github.io/roops/ && cd ~/projects/ytubecoder.github.io && git add roops/ && git commit -m "publish roops site" && git push
+   - Expected outcome: push accepted; Pages legacy build starts automatically
+   - If fails: pull/rebase in the host repo, resolve, re-push
+
+6. Confirm the deploy is live
+   - Run: curl --retry 15 --retry-delay 6 --retry-all-errors -sf -o /dev/null -w "%{http_code}" "https://ytubecoder.github.io/roops/<page>.html?v=$(date +%s)"
+   - Expected outcome: HTTP 200 (build takes ~30-60s; the cache-buster query matters)
+   - If fails: check `gh api repos/ytubecoder/ytubecoder.github.io/pages/builds/latest --jq .status`
+
+7. Taildrop copies to the desktop machine
    - Run: tailscale file cp ~/projects/loops/site/index.html ~/projects/loops/site/ui.html desktop-7dms6vl:
    - Expected outcome: TAILDROP_OK-style clean exit (version-mismatch warning is harmless); files land in the desktop's Tailscale inbox/Downloads
    - If fails: `tailscale status` — confirm desktop-7dms6vl is online, retry
 
 ## Verification
-- Pages render correctly at desktop width and 390px with no console errors
+- Live URLs return 200 and render the new content (cache-busted)
 - No local server or browser left running
 - User has fresh copies on the desktop machine

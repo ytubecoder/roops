@@ -733,6 +733,19 @@ def cmd_install(args):
             print(f"  - {e}", file=sys.stderr)
         return 1
 
+    # Amendment 2 (2026-07-30): install requires a prior non-failed supervised
+    # run to already exist — makes the documented validate -> supervised run ->
+    # install gauntlet mechanical rather than advisory. Applies to ALL loops,
+    # not only imported ones. Note this checks EXISTING run rows already in
+    # the db (e.g. from `loopctl run`), independent of the post-kickstart
+    # freshness poll further down, which verifies a NEW run after this install.
+    ok_runs = [r for r in _db_query(root, "last-runs", loop=name, limit=50)
+               if r.get("runner_status") in ("completed", "skipped-precheck")]
+    if not ok_runs:
+        print(f"refusing to install {name}: no non-failed supervised run recorded — "
+              f"run 'loopctl run {name}' first", file=sys.stderr)
+        return 1
+
     label = _service_label(name)
     launchd_dir = os.path.join(root, "launchd")
     os.makedirs(launchd_dir, exist_ok=True)

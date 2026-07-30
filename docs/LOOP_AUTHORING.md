@@ -392,13 +392,17 @@ property, not a separate system:
                    the ids you expect? Contract *compliance* is verified by tooling (validate +
                    schema enforcement), but compliance isn't the same as being RIGHT — that's what
                    this step is for.
-6. Install      — `loopctl install <name>` (real loops only — never `examples/`). Generates the
-                   plist, `launchctl bootstrap`s it, then `launchctl kickstart`s it and verifies a
-                   fresh, non-failed run row actually appeared before declaring success. Refuses
-                   `schedule=manual` and refuses a loop that fails validate. Env/auth issues (e.g.
-                   codex/claude credentials under launchd's minimal environment) only ever surface
-                   in this real launchd context — that's the entire reason this step exists rather
-                   than stopping at "the plist bootstrapped OK."
+6. Install      — `loopctl install <name>` (real loops only — never `examples/`). Refuses
+                   `schedule=manual`, refuses a loop that fails validate, and (§8.1 Amendment 2)
+                   mechanically refuses to proceed at all unless step 5 already produced a run row
+                   with `runner_status` in `completed`/`skipped-precheck` — the gauntlet order above
+                   is enforced, not just documented; skip step 5 and install tells you to run
+                   `loopctl run <name>` first. Only once that's satisfied does it generate the
+                   plist, `launchctl bootstrap` it, then `launchctl kickstart` it and verify a
+                   fresh, non-failed run row actually appeared before declaring success. Env/auth
+                   issues (e.g. codex/claude credentials under launchd's minimal environment) only
+                   ever surface in this real launchd context — that's the entire reason this step
+                   exists rather than stopping at "the plist bootstrapped OK."
 ```
 
 **`loopctl new` scaffolding, exactly** (verified by running it in a throwaway root):

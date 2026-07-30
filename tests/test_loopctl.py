@@ -46,7 +46,7 @@ if log_path:
 verb = sys.argv[1] if len(sys.argv) > 1 else ""
 
 # Simulates launchd actually firing the job on kickstart: inserts a fresh
-# run row, so loopctl's post-kickstart poll (§8.1 step 4) has something real
+# run row, so loopctl's post-kickstart poll (§8.1 step 5) has something real
 # to find. Opt-in via env so failure-path tests can leave it unset and let
 # the poll time out for real.
 #
@@ -764,6 +764,12 @@ class TestPlistGeneration(LoopsRootTestCase):
         return conf_path, text
 
     def _run_install(self, name):
+        # Run-first precondition (§8.1 Amendment 2): install needs a prior
+        # non-failed supervised run recorded before it will even attempt the
+        # launchd flow these tests are actually about.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(
             LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
             LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
@@ -910,6 +916,79 @@ class TestInstall(LoopsRootTestCase):
         self.assertEqual(r.returncode, 1)
         self.assertEqual(self.fixture.launchctl_calls(), [])
 
+    def test_install_refuses_without_prior_run(self):
+        # Amendment 2 (2026-07-30): install refuses when the loop has zero
+        # runs with runner_status in (completed, skipped-precheck) already
+        # recorded — makes the validate -> supervised run -> install gauntlet
+        # mechanical. This check happens before any launchctl call.
+        name = self._valid_loop("fresh1")
+        r = run_cli(
+            ["install", name, "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("loopctl run", r.stderr)
+        self.assertEqual(self.fixture.launchctl_calls(), [])
+
+    def test_install_refuses_when_only_run_is_failed(self):
+        # A loop whose only run row is a FAILED runner_status is still
+        # refused — the precondition requires a non-failed run, not merely
+        # any run at all.
+        name = self._valid_loop("failed-only")
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-fail1",
+            name,
+            "2026-01-01T00:00:00Z",
+            runner_status="engine-failed",
+        )
+        r = run_cli(
+            ["install", name, "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("loopctl run", r.stderr)
+        self.assertEqual(self.fixture.launchctl_calls(), [])
+
+    def test_install_succeeds_after_completed_run_recorded(self):
+        # Positive case: a prior completed run row satisfies the precondition
+        # and install proceeds through the normal bootout/bootstrap/kickstart
+        # flow.
+        name = self._valid_loop("prior-run-ok")
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1",
+            name,
+            "2026-01-01T00:00:00Z",
+            runner_status="completed",
+        )
+        env = self.fixture.base_env(
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
+            LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
+            FAKE_LAUNCHCTL_INSERT_RUN="completed",
+        )
+        r = run_cli(["install", name, "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        calls = self.fixture.launchctl_calls()
+        verbs = [c.split()[0] for c in calls]
+        self.assertEqual(verbs, ["bootout", "bootstrap", "kickstart"])
+
+    def test_install_succeeds_after_skipped_precheck_run_recorded(self):
+        # skipped-precheck is the other status that satisfies the
+        # precondition, per §8.1's runner_status pair.
+        name = self._valid_loop("prior-run-skip")
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-skip1",
+            name,
+            "2026-01-01T00:00:00Z",
+            runner_status="skipped-precheck",
+        )
+        env = self.fixture.base_env(
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
+            LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
+            FAKE_LAUNCHCTL_INSERT_RUN="completed",
+        )
+        r = run_cli(["install", name, "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+
     def test_success_path_runs_bootout_bootstrap_kickstart_and_verifies(self):
         name = self._valid_loop("succeeds")
         # A pre-existing run row proves the poll requires a genuinely NEW
@@ -937,6 +1016,12 @@ class TestInstall(LoopsRootTestCase):
 
     def test_bootstrap_failure_aborts(self):
         name = self._valid_loop("bootstrap-fails")
+        # Prior completed run satisfies the run-first precondition (§8.1
+        # Amendment 2) so this test still exercises the bootstrap-failure
+        # path it's named for, rather than the earlier precondition refusal.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(FAKE_LAUNCHCTL_BOOTSTRAP_EXIT="1")
         r = run_cli(["install", name, "--root", self.root], env_overrides=env)
         self.assertEqual(r.returncode, 1)
@@ -946,6 +1031,9 @@ class TestInstall(LoopsRootTestCase):
 
     def test_kickstart_failure_aborts_and_boots_out(self):
         name = self._valid_loop("kickstart-fails")
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(FAKE_LAUNCHCTL_KICKSTART_EXIT="1")
         r = run_cli(["install", name, "--root", self.root], env_overrides=env)
         self.assertEqual(r.returncode, 1)
@@ -955,7 +1043,12 @@ class TestInstall(LoopsRootTestCase):
 
     def test_no_fresh_run_row_fails_and_boots_out(self):
         name = self._valid_loop("no-fresh-run")
-        # No run rows at all inserted -> poll must time out.
+        # A prior (stale) completed run satisfies the run-first precondition
+        # so install proceeds to the launchd flow; no FRESH run row appears
+        # after kickstart -> the post-kickstart poll must time out.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-stale1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(
             LOOPCTL_INSTALL_POLL_TIMEOUT_S="0.5", LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1"
         )
@@ -974,6 +1067,11 @@ class TestInstall(LoopsRootTestCase):
         # before install would be rejected by freshness alone and wouldn't
         # exercise the status check at all).
         name = self._valid_loop("fresh-but-failed")
+        # Prior completed run satisfies the run-first precondition so
+        # install reaches the launchd flow this test targets.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(
             LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
             LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
@@ -992,6 +1090,11 @@ class TestInstall(LoopsRootTestCase):
         # must fail loudly — a fresh-but-never-finished row is not a pass,
         # even though "started" is not in the runner-failure-status set.
         name = self._valid_loop("fresh-stuck-started")
+        # Prior completed run satisfies the run-first precondition so
+        # install reaches the launchd flow this test targets.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(
             LOOPCTL_INSTALL_POLL_TIMEOUT_S="0.5",
             LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
@@ -1736,6 +1839,10 @@ class TestLifecycleEvents(LoopsRootTestCase):
 
     def test_install_records_installed_event_on_success(self):
         name = self._valid_loop("evt-install")
+        # Run-first precondition (§8.1 Amendment 2).
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(
             LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
             LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
@@ -1749,6 +1856,11 @@ class TestLifecycleEvents(LoopsRootTestCase):
 
     def test_install_does_not_record_event_on_kickstart_failure(self):
         name = self._valid_loop("evt-install-fails")
+        # Run-first precondition (§8.1 Amendment 2) so this test still
+        # exercises the kickstart-failure path it's named for.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(FAKE_LAUNCHCTL_KICKSTART_EXIT="1")
         r = run_cli(["install", name, "--root", self.root], env_overrides=env)
         self.assertEqual(r.returncode, 1)

@@ -712,7 +712,7 @@ precheck.sh templates rather than duplicating the strings): `docs/SKILL_IMPORT.m
 **Lifecycle events (Amendment 2 — 2026-07-30):** `new`, `install`, `uninstall`, `pause`, and
 `resume` each append a `loop_events` row (via `db.py record-event`) on their success path, using
 `--actor` as the actor: `new` → `created` (detail `{"type":…, "engine":…}`); `install` → `installed`
-**only after** kickstart-verify passes (§8.1 step 4) — a failed/aborted install records nothing;
+**only after** kickstart-verify passes (§8.1 step 5) — a failed/aborted install records nothing;
 `uninstall` → `uninstalled`; `pause`/`resume` → `paused`/`resumed`, recorded even when the loop was
 never installed (no plist present) — the event records the intent to pause/resume, not launchd
 state. Recording is best-effort: a `record-event` failure is swallowed and never fails the verb
@@ -741,12 +741,22 @@ marker `[FILL: <hint>]`.
 ### 8.1 Install must self-verify
 `install` is not done when `launchctl bootstrap` returns. It must:
 1. Refuse `schedule=manual` and refuse a loop that fails `validate`.
-2. Write `launchd/com.loops.<name>.plist` with **absolute** paths, `WorkingDirectory`,
+2. **(Amendment 2 — 2026-07-30) Run-first precondition:** refuse a loop with zero runs whose
+   `runner_status` is `completed` or `skipped-precheck` already recorded (`_db_query(root,
+   "last-runs", loop=name, limit=50)`), with a message telling the user to run `loopctl run <name>`
+   first. This checks *existing* run rows already in the db — independent of, and prior to, the
+   post-kickstart freshness poll in step 5 below, which verifies a *new* run after this install.
+   Applies to ALL loops, not only imported ones: it makes the documented validate → supervised run
+   → install gauntlet mechanical rather than advisory. There is deliberately no human approval gate
+   on an agent adding a loop; this precondition is one of the two compensating controls (the other
+   is provenance/observability) — an agent can satisfy it itself by running the loop first, it is
+   not a human-in-the-loop gate.
+3. Write `launchd/com.loops.<name>.plist` with **absolute** paths, `WorkingDirectory`,
    `EnvironmentVariables` (at minimum `HOME`, `PATH`, `LOOPS_ROOT`), `StandardOutPath` /
    `StandardErrorPath` under `state/`, and the schedule from §5.1.
-3. `launchctl bootout gui/$UID/com.loops.<name>` (ignore failure) → `launchctl bootstrap
+4. `launchctl bootout gui/$UID/com.loops.<name>` (ignore failure) → `launchctl bootstrap
    gui/$UID <plist>`.
-4. `launchctl kickstart -p gui/$UID/com.loops.<name>` and then **verify a fresh run row appeared
+5. `launchctl kickstart -p gui/$UID/com.loops.<name>` and then **verify a fresh run row appeared
    with a non-failed runner_status**; if not, report failure loudly and leave the job booted out.
    Env/auth breakage only surfaces in the real launchd context — this step is the point.
 

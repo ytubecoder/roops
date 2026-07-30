@@ -11,15 +11,24 @@
 > Verified against the code as shipped through Task 10: `bin/skill_import.py`'s `parse_skill()` +
 > `analyze()`, and `bin/loopctl import <skill-path> --analyze [--json]`. `--apply` is not built yet
 > (Task 12) — every mention below is marked as such.
+>
+> If you're jumping straight to §7 or §8: read §6 first, before uncommenting any proposed precheck
+> line.
 
 ## 1. What import does and does not do
 
 `loopctl import <skill-path> --analyze` is **static, stdlib-only, and zero-token.** It never
-invokes a model. It reads `SKILL.md` (frontmatter + body) plus bundled files, runs six regexes
-over the combined text, and produces a structured gap analysis: what the skill already answers,
-what can be mechanically derived, what's missing, and what the harness genuinely can't run as
-written. That's it. `parse_skill()` and `analyze()` in `bin/skill_import.py` do not read the
-network, do not shell out, and do not import anything beyond `hashlib`, `os`, `re`.
+invokes a model. It reads `SKILL.md` (frontmatter + body) plus bundled files, then scans the
+combined text with regex. Six of those regexes (`RE_INTERACTIVITY`, `RE_MUTATION`, `RE_MCP`,
+`RE_CREDENTIALS`, `RE_ITERATION`, `RE_NETWORK`) are the *detection flags* the rest of the analysis
+is built on; two more scan the same text for narrower purposes — `RE_CLAUDE_IDIOM`
+(`mcp__`/`AskUserQuestion`/`.claude/`/`allowed-tools`) drives the `engine` recommendation, and a
+numeric-content hint (`count`/`number of`/`wc -l`/a bare digit) decides whether `q10_metrics`
+offers table/list panel options in addition to number/trend. The result is a structured gap
+analysis: what the skill already answers, what can be mechanically derived, what's missing, and
+what the harness genuinely can't run as written. That's it. `parse_skill()` and `analyze()` in
+`bin/skill_import.py` do not read the network, do not shell out, and do not import anything beyond
+`hashlib`, `os`, `re`.
 
 What this buys you: a full read of a real skill costs nothing and produces an accurate skeleton
 of the eleven-question intake interview (`docs/LOOP_AUTHORING.md` §2) before a human or a
@@ -36,8 +45,9 @@ What it explicitly does **not** buy you:
   interactivity, or mutates something, or depends on MCP — it drafts a one-sentence reshaping note
   per flag (§4 below), but turning "ask the user which environment" into a well-designed finding
   with a good `finding_id` rule is a judgment call for the supervising agent (or human), not
-  something six regexes can do. The tool guarantees mechanics (parses correctly, hashes the input,
-  classifies consistently); it does not guarantee the resulting loop is a *good* loop.
+  something six detection-flag regexes can do. The tool guarantees mechanics (parses correctly,
+  hashes the input, classifies consistently); it does not guarantee the resulting loop is a *good*
+  loop.
 - **It does not itself change any permission axis.** `analyze()` always proposes the report-only
   floor (`perm_fs_write=report_only, perm_network=none, perm_local_exec=none,
   perm_remote_mutation=none`) — see §4. Any flag the scan detects that implies the skill wants
@@ -176,8 +186,9 @@ informational note without parsing prose):
 Two things worth being precise about, verified against `bin/skill_import.py`:
 
 - **Credentials always block.** Any credential-like match (`api_key`, `oauth`, `bearer token`, a
-  `SCREAMING_SNAKE_KEY/TOKEN/SECRET`-shaped token, or the literal word `credentials`) sets
-  `blocked=true` unconditionally — there's no CLI-equivalent escape hatch the way there is for MCP.
+  `SCREAMING_SNAKE_KEY/TOKEN/SECRET`-shaped token, or `credential`/`credentials` — the regex is
+  `credentials?\b`) sets `blocked=true` unconditionally — there's no CLI-equivalent escape hatch the
+  way there is for MCP.
 - **MCP blocks unless a CLI equivalent is found in the *same file* as the MCP mention.** `curl` and
   a fixed list of known CLIs (`git`, `gh`, `aws`, `gcloud`, `kubectl`, `docker`, `npm`, `npx`,
   `yarn`, `pnpm`, `stripe`, `vercel`, `wrangler`, `psql`, `mysql`, `ssh`, `rsync`, `terraform`,
@@ -271,9 +282,14 @@ Task 12), not yet implemented:
   content — `apply` refuses stale answers if the skill changed underneath them (re-run `--analyze`
   first, don't hand-patch the hash).
 - `answers` maps `question_id` → the chosen value: a selected `options[].id` where the question
-  offered options, free text where it's open. Omitted ids fall back to the analyzer's derived
-  default where one exists, and otherwise stay `[FILL:]` in the scaffold so `loopctl validate`
-  catches them — `apply` never invents an answer silently.
+  offered options, free text where it's open. There is no fallback default for an omitted
+  `answers_needed` id — every rubric item that's actually `missing` (§3) is a bare `{"bucket":
+  "missing"}` with no `value` to fall back to. An omitted id simply stays `[FILL: ...]` in the
+  scaffold, and `loopctl validate` hard-fails while any `[FILL:` marker remains
+  (`docs/LOOP_AUTHORING.md` §7) — `apply` never invents an answer. Rubric items already in the
+  `answered`/`derived` buckets need no `answers.json` entry at all: `apply` fills those straight
+  from the rubric's own `value` (§3), not from `answers` — `answers.json` only ever needs to cover
+  what `answers_needed` actually asked for.
 - `provenance` is optional, per-answer, `"user"` or `"agent"` — it lands in the `imported` sqlite
   event's detail, so it's visible later which answers a human actually chose versus which ones the
   supervising agent proposed on its own (e.g. `q5_scope` when `suggested_answerer` was `"agent"`).
@@ -307,10 +323,11 @@ abfdf21dc02cf0bae24104e0a5158d40f71e18e5ecc3b083a6248d68c939901c`:
 
 Once Task 12 ships, this scaffolds `loops.d/repo-hygiene-check/` fully pre-filled — `SPEC.md` with
 all eleven sections answered, `prompt.md` (reshaped skill body + contract sections + `## Finding
-identity` from `q8_finding_identity`), `loop.conf` (floor axes, tags), the template `precheck.sh`
-with the commented proposals from §6, and `dashboard.json` built from the `q10_metrics` answer —
-then records an `imported` sqlite event and prints the next steps: `loopctl validate` → `loopctl
-run` → `loopctl install`. It never installs by itself.
+identity` from `q8_finding_identity`), `loop.conf` (floor axes and tags, plus `schedule` from
+`q4_cadence`, `engine`/`model`/`retry_transient`/`timeout_s` from `q11_budget`), the template
+`precheck.sh` with the commented proposals from §6, and `dashboard.json` built from the
+`q10_metrics` answer — then records an `imported` sqlite event and prints the next steps: `loopctl
+validate` → `loopctl run` → `loopctl install`. It never installs by itself.
 
 ## 8. The manual recipe — doing this without the tool
 

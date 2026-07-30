@@ -122,3 +122,34 @@ No `bin/loopctl run kagi-ban` against a real machine (Task 10 territory). Hermet
 
 - None for product behavior of kagi-ban itself.
 - Foreman: please import the branch tip (command above) then review/merge; consider un-sandboxing Grok peons so linked-worktree commits work natively.
+
+---
+
+## Fix report (reviewer revision)
+
+**Finding fixed:** `loops.d/kagi-ban/prompt.md` lacked the repo-standard `## Output contract` section (present on hello-loop, hello-watchdog, ads-*, loop-sensei). That section is defense-in-depth against hard `contract-violation` (final message must be schema JSON; `run_id` must match `## RUN CONTEXT`).
+
+**Change:** Appended only `## Output contract` to `prompt.md` (24 lines). Modeled on `loops.d/loop-sensei/prompt.md` / `examples/hello-loop/prompt.md` (pure interpretation loops — no ads brace-rule note). Adapted bullets to kagi-ban’s already-documented tier-1 fields (`status` / `status_reason` / `headline` / precheck-verbatim `metrics` under `av.*` / CURRENT EXPOSURES findings / report_markdown). No other edits to `prompt.md`.
+
+**Diff summary:**
+
+```text
+ loops.d/kagi-ban/prompt.md | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+```
+
+**Commands after fix:**
+
+```text
+$ LOOPS_ROOT="$(pwd)" bin/loopctl validate kagi-ban
+OK kagi-ban
+
+$ python3 -m unittest tests.test_kagi_ban -v
+test_first_run_labels_everything_new ... ok
+test_unchanged_world_is_all_ongoing_and_ids_stable ... ok
+test_renderer_passes_the_gate ... ok
+Ran 3 tests in 0.747s
+OK
+```
+
+**Status after revision:** still DONE_WITH_CONCERNS solely for the prior git-sandbox / branch-tip import note; the Important prompt finding is resolved.

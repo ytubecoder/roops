@@ -32,3 +32,27 @@ Findings prompt-contract rules (harness-wide):
 2. Do not re-argue a DISMISSED finding unless the situation materially changed; if it
    has, say what changed.
 3. Still emit SNOOZED findings if true — suppression is the runner's job, not yours.
+
+## Output contract
+
+Your final message MUST be a single JSON object conforming exactly to
+`contract/contract.schema.json` — schema_version, run_id, status,
+status_reason, headline, report_markdown, metrics, findings. No prose
+outside that JSON object.
+
+- `run_id` MUST equal the value from the `## RUN CONTEXT` block the runner
+  appends to this prompt — copy it exactly; never invent your own.
+- `status`: `ok` when the current-exposure list is empty; otherwise leave
+  findings to drive effective status (INTERFACES §4.5) as described above.
+- `status_reason`: short category, e.g. `exposures_present`, `new_exposures`,
+  `clean`.
+- `headline`: one line — totals plus what changed (see above).
+- `metrics` MUST be a JSON **string** containing a serialized JSON object
+  (e.g. `"{\"av\": {\"total\": 20, \"high\": 18, \"medium\": 2, \"new\": 1, \"resolved\": 2}}"`)
+  — not a nested JSON object. Copy the precheck `counts:` numbers verbatim
+  under `av.*`; never recompute.
+- `findings` is required but MAY be an empty array (a clean scan). When
+  non-empty, re-emit every CURRENT EXPOSURES line with the precheck
+  `finding_id` verbatim; do not emit RESOLVED lines as findings.
+- `report_markdown`: brief narrative — what is new, what resolved, what
+  remains; the full inventory lives on the report page, not here.

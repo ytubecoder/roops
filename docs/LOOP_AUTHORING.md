@@ -382,6 +382,8 @@ property, not a separate system:
 1. Spec        — walk the eleven-question intake interview (§2) with generalissimo (or self-interview).
 2. Scaffold     — `loopctl new <name> --type agent|watchdog --engine codex|claude`
                    (add `--from examples` if this is a pilot/regression fixture, not a real loop).
+                   (or: `loopctl import <skill-path> --analyze / --apply` — see
+                   `docs/SKILL_IMPORT.md` — when converting an existing Agent Skill)
 3. Fill         — loop.conf, precheck.sh, prompt.md, dashboard.json, SPEC.md. No [FILL:] left.
 4. Validate     — `loopctl validate <name> [--from examples]` — exit 0 required before anything else.
 5. Supervised run — `loopctl run <name> [--from examples]` (foreground, streams progress). Read

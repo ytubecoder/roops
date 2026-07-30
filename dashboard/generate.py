@@ -721,7 +721,7 @@ main { padding: 0 0 8px; }
 .run-meta a { font-size: 10px; letter-spacing: .06em; }
 
 /* schedule state — 巡 loaded / 休 not loaded or paused / 手 manual */
-.sw-cell { display: flex; justify-content: flex-end; }
+.sw-cell { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .sw {
   width: 24px; height: 24px; border-radius: 3px; font-family: var(--serif); font-size: 13px;
   display: inline-flex; align-items: center; justify-content: center; flex: none;
@@ -884,26 +884,19 @@ footer {
   text-transform: uppercase; line-height: 2;
 }
 
-@media (max-width: 767px) {
-  .head-stats { margin-left: 0; width: 100%; }
-  /* sw-cell's third track grows past its 30px floor when console controls are unhidden
-     (Task 4) -- minmax(0, 1fr) on the loop-name track can always shrink to absorb it, so
-     the row never forces the page into horizontal scroll at narrow widths. */
-  .loop-row { grid-template-columns: 44px minmax(0, 1fr) minmax(30px, auto); gap: 10px 12px; min-width: 0; padding: 14px; }
-  .loop-row > .stamp-cell { grid-column: 1; grid-row: 1; }
-  .loop-row > .loop-name { grid-column: 2; grid-row: 1; }
-  .loop-row > .sw-cell { grid-column: 3; grid-row: 1; }
-  .loop-row > .toko { grid-column: 1 / -1; grid-row: 2; }
-  .loop-row > .run-meta { grid-column: 1 / -1; grid-row: 3; align-items: flex-start; text-align: left; }
-  .loop-name { overflow-wrap: anywhere; }
-  .garden { overflow-x: visible; }
-}
-
 /* ---------- console controls (Task 4) — rounds switch + schedule picker ----------
    Hidden by default (see data-console-controls in dashboard/generate.py); unhidden only
    by the page's own hydration script once fetch('api/state') succeeds. Tokens reused
-   verbatim from :root above -- no new hex/rgba literals introduced by this block. */
-.con-cell { display: inline-flex; align-items: center; gap: 8px; }
+   verbatim from :root above -- no new hex/rgba literals introduced by this block.
+   All rules in this section are unconditional (apply at every width); the mobile
+   @media (max-width: 767px) block at the very end of this stylesheet -- the file's one
+   existing mobile breakpoint, kept as the single last-word block by convention so its
+   overrides reliably win on source order at equal specificity -- is where the two
+   width-specific overrides for this section live (.con-sched's tighter max-width and
+   html.console-active .loop-row's tighter track cap). Declaring either override here
+   instead, ahead of that block, would make it dead code: identical specificity, later
+   unconditional rule wins the cascade regardless of a match media query elsewhere. */
+.con-cell { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .con-sw { background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; border-radius: 9px; }
 .con-sw:focus-visible { outline: 1px solid var(--shu); outline-offset: 3px; }
 .con-sw[disabled] { opacity: .35; cursor: default; }
@@ -921,6 +914,7 @@ footer {
 .con-sched {
   font-family: var(--mono); font-size: 11px; background: none; cursor: pointer;
   border: 1px solid var(--hair2); border-radius: 3px; padding: 3px 8px; color: inherit;
+  max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .con-sched:hover { border-color: var(--shu); }
 .sched-panel {
@@ -940,6 +934,46 @@ footer {
    block existed to extend, so this is that block, going forward. */
 @media (prefers-reduced-motion: reduce) {
   .con-track, .con-knob { transition: none; }
+}
+
+/* Each .loop-row is its own independent grid (no shared parent grid across rows), so every
+   row must keep IDENTICAL grid-template-columns to stay column-aligned -- a content-sized
+   track (auto/fit-content) would size differently per row depending on that row's own
+   schedule-string length, breaking alignment. A definite (non-fr) max like minmax(30px,
+   214px) also does NOT behave like a plain 30px column when idle: CSS Grid grows
+   non-flexible tracks up to their fixed max using free space BEFORE flexible (fr) tracks
+   get a share, so widening the base `.loop-row` rule's third track directly (the first
+   attempt at this fix) would have widened every row's sw-cell column even with controls
+   hidden -- confirmed live by measuring swCellWidth == 214px in a hidden-controls render,
+   a real regression against "keep the collapsed state visually unchanged". So the base
+   `.loop-row` rule (near the top of this stylesheet) is untouched (bare 30px, byte-identical
+   to pre-Task-4), and the wider column applies ONLY once the hydration script (in
+   _CONSOLE_CONTROLS_HTML below) confirms api/state is live and stamps `console-active` on
+   <html> in the same success branch that unhides the controls -- so the widen and the
+   reveal always happen together, and a plain-file/no-console load sees neither. Widths
+   below are measured, not guessed (see Task 4 fix report): a worst-realistic-case schedule
+   chip ("weekly:mon:08:00" / "monthly:01:09:00", the longest §5.1 grammar strings) renders
+   con-cell at ~166px; 24px sw + 8px gap + 166px leaves headroom under 214px desktop /
+   clears 160px mobile (the mobile block's tighter .con-sched max-width keeps the chip
+   itself from ever exceeding the mobile budget). */
+html.console-active .loop-row { grid-template-columns: 44px 1.1fr 1.5fr 190px minmax(30px, 214px); }
+
+@media (max-width: 767px) {
+  .head-stats { margin-left: 0; width: 100%; }
+  .loop-row { grid-template-columns: 44px minmax(0, 1fr) 30px; gap: 10px 12px; min-width: 0; padding: 14px; }
+  .loop-row > .stamp-cell { grid-column: 1; grid-row: 1; }
+  .loop-row > .loop-name { grid-column: 2; grid-row: 1; }
+  .loop-row > .sw-cell { grid-column: 3; grid-row: 1; }
+  .loop-row > .toko { grid-column: 1 / -1; grid-row: 2; }
+  .loop-row > .run-meta { grid-column: 1 / -1; grid-row: 3; align-items: flex-start; text-align: left; }
+  .loop-name { overflow-wrap: anywhere; }
+  .garden { overflow-x: visible; }
+  /* tighter cap than desktop's 130px, so a long schedule spec ellipsizes instead of
+     pushing the row past the 390px viewport. This block is the last word in the
+     stylesheet (by convention -- see the note above .con-cell) so it reliably wins
+     over the unconditional .con-sched rule at equal specificity. */
+  .con-sched { max-width: 84px; }
+  html.console-active .loop-row { grid-template-columns: 44px minmax(0, 1fr) minmax(30px, 160px); }
 }
 """
 
@@ -1895,6 +1929,7 @@ _CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
   'use strict';
   fetch('api/state').then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(){
     document.querySelectorAll('[data-console-controls]').forEach(function(c){ c.hidden=false; });
+    document.documentElement.classList.add('console-active');
   }).catch(function(){ /* static file mode -- controls stay hidden */ });
   function post(path, body){
     return fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})

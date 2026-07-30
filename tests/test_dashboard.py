@@ -1737,6 +1737,24 @@ class ConsoleControlsTests(unittest.TestCase):
         html = self.render_with(name="alpha", plist=True)
         self.assertIn('data-loop="alpha"', html)
 
+    def test_desktop_control_track_widens_only_when_console_active(self):
+        # Reviewer fix: the base `.loop-row` rule must stay pinned at a bare 30px third
+        # track -- pixel-identical to the pre-console page -- because CSS Grid grows a
+        # *definite* minmax(..., <px>) max using free space before flexible (fr) tracks,
+        # regardless of that row's own content; widening the base rule directly (the
+        # first attempt at this fix) was verified live (Playwright) to silently expand
+        # every row's sw-cell to 214px even with controls hidden -- a real regression
+        # against "keep the collapsed state visually unchanged". The wider track for the
+        # unhidden state must instead live in a rule gated on a `console-active` class
+        # that the hydration script only adds in the same fetch('api/state') success
+        # branch that unhides the controls, so the widen and the reveal always happen
+        # together and a plain-file/no-console load sees neither.
+        html = self.render_default()
+        self.assertIn("grid-template-columns: 44px 1.1fr 1.5fr 190px 30px;", html)
+        self.assertIn("html.console-active .loop-row", html)
+        self.assertIn("minmax(30px, 214px)", html)
+        self.assertIn("document.documentElement.classList.add('console-active')", html)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -978,8 +978,8 @@ def cmd_set_schedule(args):
         print(f"set-schedule failed: {exc}", file=sys.stderr)
         return 1
 
-    dash = _dashboard_module()
     try:
+        dash = _dashboard_module()
         dash.generate(root=args.root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
     except Exception as e:  # noqa: BLE001 — dashboard regen is best-effort; the schedule change itself succeeded
         print(f"warning: dashboard regen failed: {e}", file=sys.stderr)
@@ -1061,8 +1061,8 @@ def cmd_disposition(args, action):
             print(r.stderr.strip(), file=sys.stderr)
         return 1
 
-    dash = _dashboard_module()
     try:
+        dash = _dashboard_module()
         dash.generate(root=root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
     except Exception as e:  # noqa: BLE001 — dashboard regen is best-effort; disposition itself succeeded
         print(f"warning: dashboard regen failed: {e}", file=sys.stderr)

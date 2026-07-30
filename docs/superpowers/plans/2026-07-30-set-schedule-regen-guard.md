@@ -4,7 +4,7 @@
 
 **Goal:** Make `loopctl set-schedule`'s dashboard regen best-effort (killing the console's false `400` for a schedule change that took effect), close INTERFACES §10's paused-staleness open question, and add a change-lifecycle routing note to CLAUDE.md.
 
-**Architecture:** Copy the existing best-effort regen idiom from `cmd_dispose` (`bin/loopctl:1061-1066`) into `cmd_set_schedule`. Everything else is documentation amendments to the frozen contract (`docs/INTERFACES.md`), shipped in the same commit as the code they describe. Ticket Takeaway ticket **B-09** tracks this work (already in WIP).
+**Architecture:** Copy the existing best-effort regen idiom from `cmd_disposition` (`bin/loopctl:1064-1068`) into `cmd_set_schedule`. Everything else is documentation amendments to the frozen contract (`docs/INTERFACES.md`), shipped in the same commit as the code they describe. Ticket Takeaway ticket **B-09** tracks this work (already in WIP).
 
 **Tech Stack:** Python 3 stdlib only + bash. Tests are hermetic `unittest` (no network, fake launchctl seam). macOS — no GNU-only flags.
 
@@ -30,7 +30,7 @@
 - Modify: `docs/INTERFACES.md` (§13 paragraph at lines 905-911; §8 CLI table line 652)
 
 **Interfaces:**
-- Consumes: `_apply_schedule(root, from_dir, name, spec) -> (old_spec, new_spec)` (unchanged); `_dashboard_module()`; the guarded-regen idiom already present in `cmd_dispose` at `bin/loopctl:1061-1066`.
+- Consumes: `_apply_schedule(root, from_dir, name, spec) -> (old_spec, new_spec)` (unchanged); `_dashboard_module()`; the guarded-regen idiom already present in `cmd_disposition` at `bin/loopctl:1064-1068`.
 - Produces: `loopctl set-schedule` exits 0 with `warning: dashboard regen failed: <err>` on stderr when the mutation succeeded but regen raised. Console `POST /api/loops/<name>/schedule` consequently returns 200 in that case (console code unchanged — it keys off the exit code at `bin/console.py:299-302`).
 
 - [ ] **Step 1: Write the failing CLI test**
@@ -67,7 +67,7 @@ In `bin/loopctl`, replace the two unguarded lines in `cmd_set_schedule`:
     dash.generate(root=args.root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
 ```
 
-with the `cmd_dispose` idiom (match its comment style exactly):
+with the `cmd_disposition` idiom (match its comment style exactly):
 
 ```python
     dash = _dashboard_module()

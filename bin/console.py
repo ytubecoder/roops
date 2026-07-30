@@ -299,6 +299,8 @@ def handle_request(root, method, path, body_bytes):
         r = _loopctl(root, ["set-schedule", name, spec])
         if r.returncode != 0:
             return _json(400, {"error": r.stderr.strip() or "invalid schedule"})
+        if r.stderr.strip():
+            sys.stderr.write(r.stderr if r.stderr.endswith("\n") else r.stderr + "\n")
         return _json(200, {"ok": True, "state": _state(root)})
 
     return _json(404, {"error": "not found"})

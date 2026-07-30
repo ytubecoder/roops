@@ -12,7 +12,9 @@ through via plain subprocess env inheritance (mock.patch.dict(os.environ,
 ...) around the call, no explicit env= passed anywhere).
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import unittest
@@ -141,11 +143,26 @@ class TestConsoleApi(ConsoleTestCase):
         # previously this surfaced as a false `400 invalid schedule`.
         with open(os.path.join(self.root, "dashboard"), "w") as f:
             f.write("in the way")
-        status, _payload, _ = call(
-            self.fixture, "POST", "/api/loops/alpha/schedule", {"spec": "interval:30m"}
-        )
+        captured_stderr = io.StringIO()
+        with contextlib.redirect_stderr(captured_stderr):
+            status, _payload, _ = call(
+                self.fixture,
+                "POST",
+                "/api/loops/alpha/schedule",
+                {"spec": "interval:30m"},
+            )
         self.assertEqual(status, 200)
         self.assertIn("schedule=interval:30m", _read(self.conf_path("alpha")))
+        # The regen really failed (dashboard/ is a file, not a dir, so no
+        # loops.html could have been written) — proves this isn't vacuously
+        # passing if the injection stops injecting.
+        self.assertFalse(
+            os.path.isfile(os.path.join(self.root, "dashboard", "loops.html"))
+        )
+        # The console layer (Fix 2) passes the child loopctl's warning through
+        # to its own stderr — not just captured inside subprocess.run's
+        # result, which _loopctl already swallows into r.stderr.
+        self.assertIn("warning: dashboard regen failed", captured_stderr.getvalue())
 
     def test_unknown_loop_404_and_unknown_path_404(self):
         status, _, _ = call(

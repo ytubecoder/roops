@@ -91,6 +91,8 @@ A loop has three lanes with very different power, and it's worth knowing which i
 
 So the invariant is not "loops don't change things." It's **deterministic code you wrote gets full power; the model gets a sandbox.** `loops.d/ads-google/precheck.sh` curls four HTTP endpoints on every run — that's the design, not a leak. What's contained is the part you didn't write line by line.
 
+The browser-facing console (`bin/console.py`, `loopctl serve`) doesn't add a fourth lane — it's deterministic harness code with the same full power as `loopctl`, because every mutation it serves *is* a `loopctl` subprocess call, the same one the terminal would run. The model is never in that path, from the browser or anywhere else. What the browser can trigger is narrower than the full CLI, though: pause/resume rounds and change a schedule, never install or uninstall — those stay CLI-only behind `loopctl`'s own supervised verification (§8.1 in `docs/INTERFACES.md`).
+
 ### The four axes
 
 Set per loop in `loop.conf`; semantics in [`docs/INTERFACES.md`](docs/INTERFACES.md) §5.2.

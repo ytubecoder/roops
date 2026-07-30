@@ -649,7 +649,9 @@ loopctl status [<name>]                                              # last run,
 loopctl install <name>                                               # generate plist → bootstrap → kickstart-verify (§8.1)
 loopctl uninstall <name>                                             # bootout + remove plist
 loopctl pause <name> / resume <name>                                 # sets enabled= and bootout/bootstrap
+loopctl set-schedule <name> <spec>                                   # §5.1-validate; rewrite conf; re-render+reload plist iff installed; NEVER kickstart
 loopctl dashboard                                                    # regenerate + print path
+loopctl serve [--port PORT]                                          # local console (§13), default port 8929
 loopctl findings <loop>                                              # open findings: id, severity, age, times_seen, disposition
 loopctl ack <loop> <finding_id> [--note …]                           # Amendment 1 disposition verbs —
 loopctl dismiss <loop> <finding_id> --note …                         #   note REQUIRED (audit trail)
@@ -775,6 +777,12 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   not count toward `needs_attention` on schedule grounds; its status still counts as before.
   Rationale: a supervised-only fleet rendered wall-to-wall `stale`, and fake next-run
   estimates ("in 4m" for a loop that will never fire) made the column meaningless.
+  **(Console amendment, §13):** the same file-presence + conf-parse check is now three-way, still
+  without a `launchctl` subprocess: plist present and `enabled=true` → 巡 "schedule loaded"
+  (staleness applies, next-run shown); plist present and `enabled=false` → 休 "paused" (rounds
+  toggled off via console/`loopctl pause`; staleness-exempt, `next` reads "paused"); no plist →
+  休 "no schedule loaded" (supervised-only, as above). Only the first state counts toward
+  `needs_attention` on schedule grounds.
 - **Died-run detection (§4.6):** a run row with `finished_at IS NULL` older than
   `timeout_s + 120s` renders as `died` (red, harness-problem marker) and counts toward
   `needs_attention`.
@@ -863,3 +871,58 @@ block; JSON parses; `meta.loop`, `meta.run_id`, `meta.generated_at` (`%Y-%m-%dT%
 the full page text must be a no-op). `meta`: prints the parsed `meta` object as JSON to
 stdout (exit 1 + reasons if extraction fails). Importable: `check_page(path, expect_run_id=None,
 expect_loop=None) -> list[str]` (empty = pass) and `read_meta(path) -> dict | None`.
+
+## 13. Console (`loopctl serve`)
+
+Local control surface for the dashboard. `bin/console.py`, started by `loopctl serve
+[--port PORT]` (default 8929), binds 127.0.0.1 ONLY. Trusted unsandboxed harness code:
+MAY shell out (`launchctl print` for live load state; `bin/loopctl` subprocesses for all
+mutations — one code path for CLI and console). §10's hermeticity binds dashboard/generate.py,
+never this module. No daemon mode, no LaunchAgent in v1.
+
+| endpoint | effect |
+|---|---|
+| `GET /` `/loops.html` `/reports.html` | serve generated pages (loops.html regenerated if missing) |
+| `GET /api/state` | `{loops:[{name, schedule, enabled, plist_present, loaded}]}` |
+| `POST /api/loops/<name>/rounds {on}` | resume/pause (sets `enabled=` + bootstrap/bootout). `on` must be a real JSON boolean, else 400. 409 if no plist — install/uninstall stay CLI-only (supervised verification gate, §8.1). |
+| `POST /api/loops/<name>/schedule {spec}` | `set-schedule`: §5.1-validate, rewrite conf, re-render plist, bootout+bootstrap iff loaded. NEVER kickstart. 400 on bad grammar. |
+
+Every mutation regenerates the dashboard before responding. A malformed or non-object JSON
+body is 400 uniformly (never an unhandled exception). `<name>`/`spec` positionals reach
+`bin/loopctl` after a `--` separator, so a `spec` of `--help` is passed through as the literal
+positional value instead of being consumed by argparse as `-h/--help` — the latter would exit 0
+with no mutation and no error, a false "success" for a schedule that never took effect.
+
+### 13.1 Request-origin gate (fail-closed, applies to every request)
+
+Every request — GET or POST, page or API — is rejected `403` unless the `Host` header is
+exactly `127.0.0.1:<port>` or `localhost:<port>`; every POST must additionally carry
+`Content-Type: application/json`. Rationale: binding to `127.0.0.1` stops packets arriving from
+off-box, but not a browser on this same machine tricked into firing a request here — a plain
+cross-origin `<form method="POST" action="http://127.0.0.1:PORT/...">` still reaches the
+socket, and DNS rebinding defeats an Origin-only check. The exact-match `Host` check closes
+both; the `Content-Type` requirement additionally closes the forms vector (a bare `<form>` can
+only send `application/x-www-form-urlencoded`/`multipart/form-data`/`text/plain`, never
+`application/json`) and forces a CORS preflight (`OPTIONS`) for any cross-origin JSON `fetch()`
+— this server implements no `OPTIONS` handler, so the preflight fails closed.
+
+**Standing rule:** the console MUST NEVER emit `Access-Control-Allow-Origin` or any other
+`Access-Control-*` header. `/api/state`'s confidentiality (fleet names, schedules, enabled
+state) rests entirely on the browser's same-origin default; adding such a header would leak
+fleet state to any page the user's browser happens to visit.
+
+**Exposure note:** the `Host` check hard-codes the loopback literals above, so fronting the
+console with Caddy, `tailscale serve`, or rebinding the listener to `0.0.0.0` will 403 every
+request. That is deliberate for a launchd-mutating API — document it here so it isn't
+debugged the hard way. (Explicit exception to the machine-global "bind dev servers to
+`0.0.0.0`" habit: this server binds loopback-only on purpose.)
+
+### 13.2 Page hydration
+
+The generated dashboard's console controls (`data-console-controls`) render `hidden` and
+unhide only once a **relative** `fetch('api/state')` succeeds; that same success branch stamps
+a `console-active` class on `<html>`, which widens the schedule/rounds column via CSS. Opened
+as a plain `file://` page (no console running), the fetch fails, the controls stay hidden, and
+the page is byte-identical in behavior to the pre-console dashboard. §10's hermeticity binds
+`dashboard/generate.py` only; the console itself is trusted harness code and is not subject to
+that rule.

@@ -314,7 +314,9 @@ verdict to trust.
   - `tags`: a list of strings, filtered through `loop.conf`'s tag grammar
     (`^[a-z][a-z0-9:_-]{1,40}$`, deduped, max 8, `docs/INTERFACES.md` §5) — anything that doesn't fit
     is silently dropped rather than failing the whole `apply`.
-  - `model`: a non-empty string, written verbatim as `loop.conf`'s `model=`.
+  - `model`: a single token with no whitespace and no double-quote character (`loop.conf` writes
+    `model=` BARE/unquoted, and that grammar can represent neither) — refused outright (exit 1) if
+    either shows up, never truncated, quoted, or otherwise coerced into something that fits.
   - `timeout_s`: an integer in `30`-`7200` (`bin/loopconf.py`'s own range) — out of range, wrong
     type, or a JSON boolean is refused outright (exit 1), never silently clamped or coerced.
   - `retry_transient`: an integer in `0`-`3`, same refuse-don't-coerce rule.
@@ -325,6 +327,12 @@ verdict to trust.
     30 minutes" produced `model=unless` and `timeout_s=30` (60× too small) — both passing
     `loopctl validate` silently. If a loop needs a non-default `model`/`timeout_s`/`retry_transient`,
     say so via these three top-level keys, not by phrasing `q11_budget`'s prose a particular way.
+  - `q4_cadence`'s resolved answer (inside `answers.answers`, not a top-level key — §2) is likewise
+    validated, but against `bin/schedule.py`'s real grammar rather than a range: free text like
+    `"daily at 07:30"` is refused outright (exit 1, naming every accepted form — `manual |
+    interval:<N>m|h | daily:HH:MM | times:HH:MM[,...] | weekly:<day>:HH:MM | monthly:<DD>:HH:MM`)
+    rather than being written through to `schedule=` and only failing later, opaquely, inside
+    `loopctl validate`.
 
 **Filled example**, against the `clean-check` fixture (`tests/fixtures/skills/clean-check`) —
 `--analyze --json` on that fixture reports `skill_sha256:

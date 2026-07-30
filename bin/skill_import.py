@@ -1391,7 +1391,15 @@ _RETRY_TRANSIENT_MIN, _RETRY_TRANSIENT_MAX = 0, 3
 # injects a bogus extra KEY=value-shaped line. Round-2 review: refuse loudly
 # rather than truncate/quote — a model id with whitespace in it is a mistake,
 # not a value worth preserving.
-_MODEL_SHAPE_RE = re.compile(r"\S+")
+#
+# Round-3 review: whitespace alone isn't enough — a BARE value's grammar also
+# has no way to represent a literal double-quote (unlike the QUOTED-value
+# grammar `_quote_conf_value` guards, which escapes `"` as `\"`), so a
+# `model` containing `"` slipped past `\S+` and made `loopconf.parse()` fail
+# with "unterminated quoted value" downstream. Excluding `"` too closes that.
+# A bare backslash is genuinely fine, though — the bare-value grammar has no
+# backslash-escaping rule at all, so nothing needs guarding there.
+_MODEL_SHAPE_RE = re.compile(r'[^\s"]+')
 
 
 def _quote_conf_value(text: str, field_name: str = "value") -> str:

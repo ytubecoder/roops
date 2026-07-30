@@ -2732,6 +2732,63 @@ class TestImportApply(LoopsRootTestCase):
         events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
         self.assertEqual(events, [])
 
+    def test_apply_model_with_double_quote_refused(self):
+        # Round-3 review: the round-2 regex (^\S+$) excluded whitespace but
+        # not the double-quote character — a `model` containing `"` slipped
+        # through and was written bare into loop.conf, where loopconf.parse()
+        # then broke with "unterminated quoted value".
+        root = self._scaffold_root()
+        for bad in ('"weird-model', 'weird"model', 'model"', 'a"b"c', '"'):
+            answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+            answers["model"] = bad
+            self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+            r = self._loopctl(
+                root,
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--apply",
+                "--answers",
+                os.path.join(root, "answers.json"),
+                "--actor",
+                "claude/t",
+            )
+            self.assertEqual(r.returncode, 1, msg=f"bad={bad!r}: {r.stdout + r.stderr}")
+            self.assertFalse(
+                os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check")),
+                msg=f"bad={bad!r}",
+            )
+            events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+            self.assertEqual(events, [], msg=f"bad={bad!r}")
+
+    def test_apply_legitimate_model_ids_still_accepted(self):
+        root = self._scaffold_root()
+        for good in ("claude-sonnet-5", "gpt-5.5", "foo\\bar"):
+            answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+            answers["model"] = good
+            self._write_answers(
+                root, f"answers-{hash(good)}.json", answers, fixture="clean-check"
+            )
+
+            r = self._loopctl(
+                root,
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--apply",
+                "--answers",
+                os.path.join(root, f"answers-{hash(good)}.json"),
+                "--overwrite",
+                "--actor",
+                "claude/t",
+            )
+            self.assertEqual(
+                r.returncode, 0, msg=f"good={good!r}: {r.stdout + r.stderr}"
+            )
+            conf = _read(
+                os.path.join(root, "loops.d", "repo-hygiene-check", "loop.conf")
+            )
+            self.assertIn(f"model={good}", conf, msg=f"good={good!r}")
+
     def test_apply_free_text_cadence_refused(self):
         # Same "silently unparseable loop.conf" shape as the model bug: a
         # free-text q4_cadence answer must be refused, not written through

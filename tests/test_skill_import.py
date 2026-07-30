@@ -689,6 +689,24 @@ class TestApply(unittest.TestCase):
                 skill_import.apply(skill, analysis, answers, loop_dir)
             self.assertFalse(os.path.exists(loop_dir), msg=f"bad={bad!r}")
 
+    def test_model_with_double_quote_refused(self):
+        # Round-3 review: the round-2 regex (^\S+$) excluded whitespace but
+        # NOT the double-quote character — a `model` containing a literal
+        # `"` slipped through validation and was then written bare into
+        # loop.conf, where loopconf.parse() breaks with "unterminated
+        # quoted value" (loop.conf's grammar has no way to escape a quote
+        # inside a BARE/unquoted value the way it does for a quoted one).
+        # Each of these landed a directory pre-fix, then caused a spurious
+        # "already exists" on the corrected retry.
+        skill, analysis = self._skill_and_analysis()
+        for bad in ('"weird-model', 'weird"model', 'model"', 'a"b"c', '"'):
+            answers = self._answers(analysis, model=bad)
+            dest = self._tmpdir()
+            loop_dir = os.path.join(dest, "x")
+            with self.assertRaises(skill_import.SkillApplyError, msg=f"bad={bad!r}"):
+                skill_import.apply(skill, analysis, answers, loop_dir)
+            self.assertFalse(os.path.exists(loop_dir), msg=f"bad={bad!r}")
+
     def test_model_single_token_accepted(self):
         skill, analysis = self._skill_and_analysis()
         answers = self._answers(analysis, model="gpt-4-turbo")
@@ -696,6 +714,19 @@ class TestApply(unittest.TestCase):
         skill_import.apply(skill, analysis, answers, loop_dir)
         conf = _read(os.path.join(loop_dir, "loop.conf"))
         self.assertIn("model=gpt-4-turbo", conf)
+
+    def test_legitimate_model_ids_still_accepted(self):
+        # Must NOT over-reject: real model ids, and a backslash-bearing
+        # value — loop.conf's bare-value grammar has no backslash-escaping
+        # rule at all (unlike the quoted-value grammar `_quote_conf_value`
+        # guards), so a bare backslash is genuinely fine here.
+        skill, analysis = self._skill_and_analysis()
+        for good in ("claude-sonnet-5", "gpt-5.5", "foo\\bar"):
+            answers = self._answers(analysis, model=good)
+            loop_dir = os.path.join(self._tmpdir(), "repo-hygiene-check")
+            skill_import.apply(skill, analysis, answers, loop_dir)
+            conf = _read(os.path.join(loop_dir, "loop.conf"))
+            self.assertIn(f"model={good}", conf, msg=f"good={good!r}")
 
     def test_free_text_cadence_not_matching_schedule_grammar_refused(self):
         # Identical shape to the model bug: free-text cadence like "daily at

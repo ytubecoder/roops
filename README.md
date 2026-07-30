@@ -2,7 +2,7 @@
 
 ![Python 3](https://img.shields.io/badge/python-3-blue)
 ![Platform: macOS / launchd](https://img.shields.io/badge/platform-macOS%20%2F%20launchd-lightgrey)
-![Tests: 593 passing](https://img.shields.io/badge/tests-593%20passing-brightgreen)
+![Tests: 661 passing](https://img.shields.io/badge/tests-661%20passing-brightgreen)
 ![Works with Codex CLI](https://img.shields.io/badge/works%20with-Codex%20CLI-orange)
 ![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-blueviolet)
 
@@ -27,7 +27,7 @@ Capability is **per-loop and opt-in**. The default floor gives the model no file
 
 Findings keep the same ID across runs, so the same problem is the same row tomorrow. When you dismiss one, the **runner** stops showing it — the model is never trusted to remember it dropped the subject.
 
-**Status: harness built and live-verified (2026-07-22).** Real launchd firing, both engines, findings memory and dispositions, enforcement denial, and the full dashboard state matrix have all been proven on this machine. Eight loops are defined and every one of them sits at or near the report-only floor; `loop-sensei` — the fleet examiner that diagnoses failed loops — is the first installed to launchd, the rest run supervised-only.
+**Status: harness built and live-verified (2026-07-22).** Real launchd firing, both engines, findings memory and dispositions, enforcement denial, and the full dashboard state matrix have all been proven on this machine. Nine loops are defined and every one of them sits at or near the report-only floor. Two are installed to launchd: `loop-sensei` — the fleet examiner that diagnoses failed loops — and `kagi-ban` — a CLI-secrets exposure audit and the first page-enabled loop (see [report pages](#report-pages)). The rest run supervised-only.
 
 ## Install
 
@@ -70,7 +70,7 @@ Authoring guide: [`docs/LOOP_AUTHORING.md`](docs/LOOP_AUTHORING.md)
 | **3. Inject** | Prior findings and run context are composed into the prompt, so the model knows what it already told you. | — |
 | **4. Run** | The engine runs headless under the loop's four permission axes. Whatever the model can and can't do is a property of the sandbox, not the prompt. | Engine-level denial |
 | **5. Validate** | Output must satisfy the contract in `docs/INTERFACES.md`. Malformed output fails the run rather than silently reporting nothing. | Schema + finding-identity check |
-| **6. Promote** | Findings upsert by stable ID, dispositions apply, reports promote atomically, dashboard regenerates, old runs retire. | Suppression filter |
+| **6. Promote** | Findings upsert by stable ID, dispositions apply, reports promote atomically, dashboard regenerates, old runs retire. Page-enabled loops then render their report page, behind its own gate. | Suppression filter |
 
 **Stage change** = the runner's job. **Disposition change** = yours, via `loopctl`. The model never does either.
 
@@ -118,7 +118,7 @@ That last row matters most in practice. "Stop nagging me about this" is enforced
 
 ## What Lands on the Dashboard
 
-`dashboard/loops.html` is a single static self-contained file (inline CSS/JS, no network, opened as `file://`), rewritten via tmp-file + rename after every run. Since 2026-07-30 it renders in the roops garden style — hanko status stamps (済 ok · 注 warn · 警 alert · 未 no data) over the same precedence rules, a per-loop tokonoma alcove on each fleet row, and a 巡/休/手 column showing whether a schedule is actually loaded. A loop feeds it through four channels:
+`dashboard/loops.html` is a single static self-contained file (inline CSS/JS, no network, opened as `file://`), rewritten via tmp-file + rename after every run. Since 2026-07-30 it renders in the roops garden style — hanko status stamps (済 ok · 注 warn · 警 alert · 未 no data) over the same precedence rules, a per-loop tokonoma alcove on each fleet row, and a 巡/休/手 column showing whether a schedule is actually loaded. A second static screen, `dashboard/reports.html`, lists every page-enabled loop's report pages with totals chips; fleet rows cross-link to it. A loop feeds the garden through four channels:
 
 | Channel | Contract field | Rendered as |
 |---|---|---|
@@ -130,6 +130,18 @@ That last row matters most in practice. "Stop nagging me about this" is enforced
 Undeclared metrics are **never hidden** — they render in a capped raw-fallback panel, so a loop can start emitting something new without a dashboard change. The page also carries fleet counts, a `needs_attention` roll-up, 7-day token spend, stale-loop detection (installed loops only — a supervised-only loop shows 休 "no schedule loaded" instead), died-run detection, and a recent-runs table per loop.
 
 One gotcha worth internalizing before you write a loop that wants to show red: **a non-empty `findings` array discards the declared `status`** and the light becomes the max severity of the unsuppressed findings (§4.5). A run that must surface red emits zero findings.
+
+## Report Pages
+
+Some loops capture more structured world state than a fleet row and a markdown report can carry — inventories, per-item remediation, grouped scan results. Those loops can publish a **report page**: one self-contained HTML file per run, rendered by a deterministic `render.sh` you write (no model calls, no network, no randomness), listed on `dashboard/reports.html`. Added 2026-07-30 as INTERFACES Amendment 2.
+
+- **An executable `loops.d/<name>/render.sh` is what page-enables a loop.** Adding one is deliberate, under the same trust rule as the precheck: your code, run unsandboxed. `loopctl validate` fails a render.sh that exists but isn't executable.
+- The renderer runs **after** contract promotion, and a broken renderer never fails the run — the reports screen shows the last good page with a `stale` badge until a render succeeds again. Debug via `state/runs/<id>/page-render.log`.
+- Publication is gated by `bin/page_envelope.py check`: valid single-envelope page, ≤ 8 MiB, no external-fetch markup, and **redaction-clean** — if `bin/redact.py` would change the page, it does not publish. Paths and names are fine; secret values never are.
+- Two page classes: `snapshot` (a full audit document — dismissing a finding silences the nag channel, not the document) and `findings` (anything presented *as* findings must come from the suppression-filtered `latest.json`, never raw `contract.json`).
+- Loops keep bounded private state (baselines, one previous snapshot) in `$LOOP_DATA_DIR`; updates are committed only when the run promotes, so a failed run never consumes state.
+
+`loops.d/kagi-ban/` — the exposure-audit pilot — is the reference implementation. Authoring guide: [`docs/REPORT_PAGES.md`](docs/REPORT_PAGES.md).
 
 ## Commands
 
@@ -175,18 +187,22 @@ bin/run-loop.sh          # the runner: lock → precheck → inject → engine �
 bin/loopctl              # the CLI you actually use
 engines/                 # codex · claude · fake
 loops.d/<name>/          # loop.conf · precheck.sh · prompt.md · dashboard.json · SPEC.md
+                         #   + render.sh (executable = page-enabled)
+pagekit/                 # kit.css · envelope snippet · reference page for report pages
 examples/                # hello-loop (daily agent) · hello-watchdog (15m interval)
 state/loops.sqlite       # runs · heartbeats · metrics · findings · dispositions (WAL)
 reports/<name>/          # per-run markdown + atomically-promoted latest.* (suppression-filtered)
 dashboard/loops.html     # static: fleet view + per-loop panels + findings
-tests/run-tests.sh       # 593 hermetic tests — no network, no real engines
+dashboard/reports.html   # static: report pages per loop, totals chips
+tests/run-tests.sh       # 661 hermetic tests — no network, no real engines
 ```
 
 ## Docs
 
 | File | Purpose |
 |---|---|
-| [`docs/LOOP_AUTHORING.md`](docs/LOOP_AUTHORING.md) | **Start here to build a loop** — intake interview, contract, worked example |
+| [`docs/LOOP_AUTHORING.md`](docs/LOOP_AUTHORING.md) | **Start here to build a loop** — twelve-question intake interview, contract, worked example |
+| [`docs/REPORT_PAGES.md`](docs/REPORT_PAGES.md) | Build a report page — when to add one, render.sh contract, the publication gate |
 | [`docs/INTERFACES.md`](docs/INTERFACES.md) | Frozen mechanical contract every component implements |
 | [`docs/HARNESS_PLAN.md`](docs/HARNESS_PLAN.md) | Finalized harness design (plan-checked 3× with codex) |
 | [`docs/HARNESS_PLAN_AMENDMENT_1.md`](docs/HARNESS_PLAN_AMENDMENT_1.md) | Findings memory / human-in-the-loop amendment |

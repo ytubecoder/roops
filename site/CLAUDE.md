@@ -1,8 +1,10 @@
 # site/ — brand + UI concept pages for the "Roops" rebrand
 
-Static two-page site, no build step. Live at https://ytubecoder.github.io/roops/ —
+Static three-page site, no build step. `brandkit/index.html` is the public brand kit
+(marks, color, type rules, vocabulary, voice); `index.html` is the product page;
+`ui.html` the interface concept. Live at https://ytubecoder.github.io/roops/ —
 served from the public `ytubecoder/ytubecoder.github.io` repo (`roops/` folder). This
-`site/` directory is the source of truth; deploy = copy the two pages there and push
+`site/` directory is the source of truth; deploy = copy the pages there and push
 (`workflows/publish.txt`). Merged here from the standalone `ytubecoder/roops` repo
 2026-07-30.
 

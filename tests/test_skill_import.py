@@ -1,9 +1,11 @@
 import os
+import shutil
 import sys
 import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bin"))
+import loopconf
 import skill_import
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures", "skills")
@@ -357,6 +359,11 @@ class TestApply(unittest.TestCase):
         base.update(overrides)
         return base
 
+    def _tmpdir(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        return d
+
     def test_explicit_answer_wins_over_already_derived_rubric_value(self):
         # q2_pattern is "derived" for clean-check (never in answers_needed) —
         # ruling 1 says an explicit answers["answers"] entry for it still
@@ -366,7 +373,7 @@ class TestApply(unittest.TestCase):
         answers = self._answers(
             analysis, answers={"q2_pattern": "custom pattern override"}
         )
-        dest = tempfile.mkdtemp()
+        dest = self._tmpdir()
         skill_import.apply(
             skill, analysis, answers, os.path.join(dest, "repo-hygiene-check")
         )
@@ -384,7 +391,7 @@ class TestApply(unittest.TestCase):
         answers = self._answers(
             analysis, answers={"q1_purpose": "a totally different purpose"}
         )
-        dest = tempfile.mkdtemp()
+        dest = self._tmpdir()
         skill_import.apply(
             skill, analysis, answers, os.path.join(dest, "repo-hygiene-check")
         )
@@ -396,7 +403,7 @@ class TestApply(unittest.TestCase):
         # "missing" in the rubric AND absent from answers must stay [FILL:.
         skill, analysis = self._skill_and_analysis()
         answers = self._answers(analysis)  # no answers at all
-        dest = tempfile.mkdtemp()
+        dest = self._tmpdir()
         skill_import.apply(
             skill, analysis, answers, os.path.join(dest, "repo-hygiene-check")
         )
@@ -406,7 +413,7 @@ class TestApply(unittest.TestCase):
     def test_apply_returns_the_written_paths(self):
         skill, analysis = self._skill_and_analysis()
         answers = self._answers(analysis)
-        dest = os.path.join(tempfile.mkdtemp(), "repo-hygiene-check")
+        dest = os.path.join(self._tmpdir(), "repo-hygiene-check")
         written = skill_import.apply(skill, analysis, answers, dest)
         self.assertEqual(
             sorted(os.path.basename(p) for p in written),
@@ -415,17 +422,24 @@ class TestApply(unittest.TestCase):
         for p in written:
             self.assertTrue(os.path.isfile(p))
 
+    def test_apply_precheck_is_executable(self):
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(analysis)
+        loop_dir = os.path.join(self._tmpdir(), "repo-hygiene-check")
+        skill_import.apply(skill, analysis, answers, loop_dir)
+        self.assertTrue(os.access(os.path.join(loop_dir, "precheck.sh"), os.X_OK))
+
     def test_apply_raises_on_stale_sha256(self):
         skill, analysis = self._skill_and_analysis()
         answers = self._answers(analysis, skill_sha256="0" * 64)
-        dest = tempfile.mkdtemp()
+        dest = self._tmpdir()
         with self.assertRaises(skill_import.SkillApplyError):
             skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
 
     def test_apply_raises_on_analyzer_version_mismatch(self):
         skill, analysis = self._skill_and_analysis()
         answers = self._answers(analysis, analyzer_version="999")
-        dest = tempfile.mkdtemp()
+        dest = self._tmpdir()
         with self.assertRaises(skill_import.SkillApplyError):
             skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
 
@@ -433,7 +447,17 @@ class TestApply(unittest.TestCase):
         skill, analysis = self._skill_and_analysis("needs-creds")
         self.assertTrue(analysis["blocked"])
         answers = self._answers(analysis)  # acknowledge_blocked defaults False
-        dest = tempfile.mkdtemp()
+        dest = self._tmpdir()
+        with self.assertRaises(skill_import.SkillApplyError):
+            skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
+
+    def test_acknowledge_blocked_string_false_does_not_acknowledge(self):
+        # Round-1 review minor: acknowledge_blocked must be checked `is
+        # True`, not `bool(...)` — the JSON string "false" is truthy in
+        # Python and must NOT be treated as acknowledgement.
+        skill, analysis = self._skill_and_analysis("needs-creds")
+        answers = self._answers(analysis, acknowledge_blocked="false")
+        dest = self._tmpdir()
         with self.assertRaises(skill_import.SkillApplyError):
             skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
 
@@ -444,13 +468,209 @@ class TestApply(unittest.TestCase):
             answers={"q4_cadence": "daily:07:30"},  # would NOT be manual otherwise
             acknowledge_blocked=True,
         )
-        dest = tempfile.mkdtemp()
+        dest = self._tmpdir()
         loop_dir = os.path.join(dest, "stripe-failed-charges")
         skill_import.apply(skill, analysis, answers, loop_dir)
         conf = _read(os.path.join(loop_dir, "loop.conf"))
         self.assertIn("schedule=manual", conf)
         spec = _read(os.path.join(loop_dir, "SPEC.md"))
         self.assertIn("## BLOCKED — read before scheduling", spec)
+
+    # --- round-1 review defect #1: prompt.md truncation --------------------
+
+    def test_prompt_body_with_finding_identity_heading_does_not_truncate_contract(
+        self,
+    ):
+        # Reviewer-reported defect: _render_prompt_md spliced the skill body
+        # in BEFORE locating "## Finding identity" in the text, so a skill
+        # body that itself contains that heading made text.index() find the
+        # BODY's copy — truncating everything after it, including the
+        # Output contract and Findings prompt contract sections.
+        # `loopctl validate` did not catch this (it only greps for the
+        # heading's presence, never what follows it).
+        skill, analysis = self._skill_and_analysis()
+        skill["body"] = (
+            skill["body"] + "\n\n## Finding identity\n\n"
+            "The skill's OWN (irrelevant) heading, not the loop's contract "
+            "section.\n"
+        )
+        answers = self._answers(analysis, answers={"q8_finding_identity": "x:y"})
+        dest = self._tmpdir()
+        loop_dir = os.path.join(dest, "repo-hygiene-check")
+        skill_import.apply(skill, analysis, answers, loop_dir)
+        prompt = _read(os.path.join(loop_dir, "prompt.md"))
+        self.assertIn("## Output contract", prompt)
+        self.assertIn("`metrics` MUST be a JSON **string**", prompt)
+        self.assertIn("## Findings prompt contract", prompt)
+        self.assertIn("Re-emit a still-true finding", prompt)
+        self.assertIn("Do not re-argue a `DISMISSED` finding", prompt)
+        self.assertIn("Still emit `SNOOZED` findings", prompt)
+        # Both headings survive (the skill's own in-body one + the
+        # template's real one) and the loop's OWN Finding identity content
+        # (from q8, not the skill's in-body text) is what actually fills it.
+        self.assertEqual(prompt.count("## Finding identity"), 2)
+        self.assertIn("x:y", prompt)
+
+    # --- round-1 review defect #2: free-text budget scraping ---------------
+
+    def test_structured_budget_keys_land_in_loop_conf(self):
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(
+            analysis,
+            answers={
+                "q11_budget": "engine default model; ~1k tokens; retry 1; timeout 300"
+            },
+            model="claude-sonnet-5",
+            timeout_s=600,
+            retry_transient=2,
+        )
+        loop_dir = os.path.join(self._tmpdir(), "repo-hygiene-check")
+        skill_import.apply(skill, analysis, answers, loop_dir)
+        conf = _read(os.path.join(loop_dir, "loop.conf"))
+        self.assertIn("model=claude-sonnet-5", conf)
+        self.assertIn("timeout_s=600", conf)
+        self.assertIn("retry_transient=2", conf)
+
+    def test_free_text_budget_prose_never_becomes_config(self):
+        # The reviewer's own reproducer strings: regex-scraping q11_budget's
+        # free text invented config values from unrelated prose. q11_budget
+        # is SPEC.md §11 prose ONLY now — it must never set loop.conf keys.
+        cases = [
+            ("codex, no model override needed; timeout 900", ["model=override"]),
+            (
+                "use the default model unless cost spikes; timeout 30 minutes",
+                ["model=unless", "timeout_s=30"],
+            ),
+            ("Model is whatever the engine defaults to.", ["model=is"]),
+        ]
+        for prose, forbidden in cases:
+            skill, analysis = self._skill_and_analysis()
+            answers = self._answers(analysis, answers={"q11_budget": prose})
+            loop_dir = os.path.join(self._tmpdir(), "repo-hygiene-check")
+            skill_import.apply(skill, analysis, answers, loop_dir)
+            conf = _read(os.path.join(loop_dir, "loop.conf"))
+            for bad in forbidden:
+                self.assertNotIn(bad, conf, msg=f"prose={prose!r}")
+            # No structured key was given at all — neither line should exist.
+            self.assertNotIn("model=", conf, msg=f"prose={prose!r}")
+            self.assertNotIn("timeout_s=", conf, msg=f"prose={prose!r}")
+
+    def test_invalid_timeout_s_refused(self):
+        skill, analysis = self._skill_and_analysis()
+        for bad in (10, 99999, "300", 30.5, True):
+            answers = self._answers(analysis, timeout_s=bad)
+            dest = self._tmpdir()
+            with self.assertRaises(skill_import.SkillApplyError, msg=f"bad={bad!r}"):
+                skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
+
+    def test_invalid_retry_transient_refused(self):
+        skill, analysis = self._skill_and_analysis()
+        for bad in (-1, 4, "1", 1.5):
+            answers = self._answers(analysis, retry_transient=bad)
+            dest = self._tmpdir()
+            with self.assertRaises(skill_import.SkillApplyError, msg=f"bad={bad!r}"):
+                skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
+
+    def test_invalid_model_refused(self):
+        skill, analysis = self._skill_and_analysis()
+        for bad in ("", "   ", 123):
+            answers = self._answers(analysis, model=bad)
+            dest = self._tmpdir()
+            with self.assertRaises(skill_import.SkillApplyError, msg=f"bad={bad!r}"):
+                skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
+
+    def test_valid_timeout_s_boundaries_accepted(self):
+        skill, analysis = self._skill_and_analysis()
+        for good in (30, 7200):
+            answers = self._answers(analysis, timeout_s=good)
+            loop_dir = os.path.join(self._tmpdir(), "repo-hygiene-check")
+            skill_import.apply(skill, analysis, answers, loop_dir)
+            conf = _read(os.path.join(loop_dir, "loop.conf"))
+            self.assertIn(f"timeout_s={good}", conf)
+
+    # --- round-1 review minors ----------------------------------------------
+
+    def test_malformed_answers_field_shape_refused_before_any_write(self):
+        # {"answers": ["q1_purpose"]} (a list, not an object) must refuse
+        # loudly and leave NOTHING behind — a half-written loops.d/<name>/
+        # would make the next, correct attempt fail with a spurious
+        # "already exists".
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(analysis, answers=["q1_purpose"])
+        dest = self._tmpdir()
+        loop_dir = os.path.join(dest, "repo-hygiene-check")
+        with self.assertRaises(skill_import.SkillApplyError):
+            skill_import.apply(skill, analysis, answers, loop_dir)
+        self.assertFalse(os.path.exists(loop_dir))
+
+    def test_malformed_provenance_shape_refused(self):
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(analysis, provenance=["user"])
+        dest = self._tmpdir()
+        with self.assertRaises(skill_import.SkillApplyError):
+            skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
+
+    def test_whitespace_only_answer_falls_back_to_fill(self):
+        # A whitespace-only answer must not count as "provided" — it would
+        # otherwise blank out a SPEC section with no [FILL: marker left to
+        # trip loopctl validate's safety net. Isolate section 8 specifically
+        # (other sections stay unanswered too, so a bare "[FILL: anywhere in
+        # the doc" check would pass even with the bug — the bug blanks out
+        # exactly the ONE section whose answer was whitespace-only).
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(analysis, answers={"q8_finding_identity": "   "})
+        loop_dir = os.path.join(self._tmpdir(), "repo-hygiene-check")
+        skill_import.apply(skill, analysis, answers, loop_dir)
+        spec = _read(os.path.join(loop_dir, "SPEC.md"))
+        section_8 = spec.split("8. Finding identity", 1)[1].split(
+            "9. Tier-1 semantics", 1
+        )[0]
+        self.assertIn("[FILL:", section_8)
+
+    def test_answer_ending_in_backslash_refused(self):
+        # loop.conf's KEY=value grammar (bin/loopconf.py's _parse_value)
+        # recognizes ONLY the two-character sequence backslash+quote as an
+        # escape — there is no separate backslash-escaping rule. A run of
+        # one-or-more literal backslashes immediately before the closing
+        # quote is THEREFORE ALWAYS misread as escaping that closing quote
+        # itself, no matter how the backslash is encoded (verified
+        # empirically against loopconf._parse_value for N=1..5 trailing
+        # backslashes, with and without doubling) — there is no valid
+        # encoding. Refuse loudly rather than emit a scaffold
+        # `loopconf.parse()` will itself (correctly, but unhelpfully)
+        # reject as "unterminated quoted value".
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(
+            analysis, answers={"q1_purpose": "ends with a backslash\\"}
+        )
+        dest = self._tmpdir()
+        with self.assertRaises(skill_import.SkillApplyError):
+            skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
+
+    def test_answer_with_interior_backslash_quote_still_roundtrips(self):
+        # The interior case (a literal backslash immediately before a
+        # literal quote WITHIN the content, not at the very end) IS
+        # representable under loopconf's grammar and must keep round-
+        # tripping correctly.
+        skill, analysis = self._skill_and_analysis()
+        value = 'back\\"slash-quote-adjacent'
+        answers = self._answers(analysis, answers={"q1_purpose": value})
+        loop_dir = os.path.join(self._tmpdir(), "repo-hygiene-check")
+        skill_import.apply(skill, analysis, answers, loop_dir)
+        conf, errors = loopconf.parse(os.path.join(loop_dir, "loop.conf"))
+        self.assertEqual(errors, [])
+        self.assertEqual(conf["description"], value)
+
+    def test_spec_template_section_count_drift_raises_not_asserts(self):
+        # `assert` vanishes under `python -O` — the section-count invariant
+        # must raise a real exception instead.
+        original_template = skill_import._SPEC_MD_TEMPLATE
+        skill_import._SPEC_MD_TEMPLATE = (
+            "# __NAME__ — x\n\n1. only one section\n[FILL: x]\n"
+        )
+        self.addCleanup(setattr, skill_import, "_SPEC_MD_TEMPLATE", original_template)
+        with self.assertRaises(RuntimeError):
+            skill_import._render_spec_md("x", {}, {})
 
 
 if __name__ == "__main__":

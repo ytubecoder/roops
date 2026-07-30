@@ -275,7 +275,11 @@ verdict to trust.
   "provenance": {
     "question_id": "user | agent"
   },
-  "acknowledge_blocked": false
+  "acknowledge_blocked": false,
+  "tags": ["imported", "skill:repo-hygiene-check"],
+  "model": "claude-sonnet-5",
+  "timeout_s": 600,
+  "retry_transient": 2
 }
 ```
 
@@ -295,12 +299,32 @@ verdict to trust.
   rubric item that's actually `missing` (§3) is a bare `{"bucket": "missing"}` with no `value` to
   fall back to, and no derived-default synthesis exists to fill the gap either. That id simply stays
   `[FILL: ...]` in the scaffold, and `loopctl validate` hard-fails while any `[FILL:` marker remains
-  (`docs/LOOP_AUTHORING.md` §7) — `apply` never invents an answer.
+  (`docs/LOOP_AUTHORING.md` §7) — `apply` never invents an answer. `answers["answers"]`, if present,
+  must be a JSON object — a list or any other shape is refused outright (exit 1) before anything is
+  rendered or written.
 - `provenance` is optional, per-answer, `"user"` or `"agent"` — it lands in the `imported` sqlite
   event's detail, so it's visible later which answers a human actually chose versus which ones the
-  supervising agent proposed on its own (e.g. `q5_scope` when `suggested_answerer` was `"agent"`).
+  supervising agent proposed on its own (e.g. `q5_scope` when `suggested_answerer` was `"agent"`). If
+  present it must also be a JSON object.
 - `acknowledge_blocked` (default `false`) is required `true` to `apply` a skill whose analysis came
-  back `blocked` (§5) — without it, apply refuses outright.
+  back `blocked` (§5) — without it, apply refuses outright. Checked with `is True`, not truthiness —
+  a JSON value of `"false"` (a string, not a boolean) does **not** acknowledge.
+- `tags`, `model`, `timeout_s`, `retry_transient` are OPTIONAL top-level keys (siblings of `answers`,
+  not nested inside it) that map straight onto the matching `loop.conf` fields:
+  - `tags`: a list of strings, filtered through `loop.conf`'s tag grammar
+    (`^[a-z][a-z0-9:_-]{1,40}$`, deduped, max 8, `docs/INTERFACES.md` §5) — anything that doesn't fit
+    is silently dropped rather than failing the whole `apply`.
+  - `model`: a non-empty string, written verbatim as `loop.conf`'s `model=`.
+  - `timeout_s`: an integer in `30`-`7200` (`bin/loopconf.py`'s own range) — out of range, wrong
+    type, or a JSON boolean is refused outright (exit 1), never silently clamped or coerced.
+  - `retry_transient`: an integer in `0`-`3`, same refuse-don't-coerce rule.
+  - **`q11_budget`'s free text does NOT set any of `model`/`timeout_s`/`retry_transient`.** It is
+    SPEC.md §11 prose only. An earlier draft of `apply()` regex-scraped these three keys out of
+    `q11_budget`'s free text and shipped real bugs from it — "codex, no model override needed;
+    timeout 900" produced `model=override`, and "use the default model unless cost spikes; timeout
+    30 minutes" produced `model=unless` and `timeout_s=30` (60× too small) — both passing
+    `loopctl validate` silently. If a loop needs a non-default `model`/`timeout_s`/`retry_transient`,
+    say so via these three top-level keys, not by phrasing `q11_budget`'s prose a particular way.
 
 **Filled example**, against the `clean-check` fixture (`tests/fixtures/skills/clean-check`) —
 `--analyze --json` on that fixture reports `skill_sha256:
@@ -330,11 +354,12 @@ abfdf21dc02cf0bae24104e0a5158d40f71e18e5ecc3b083a6248d68c939901c`:
 `loopctl import tests/fixtures/skills/clean-check --apply --answers <that file> --root <root>`
 scaffolds `loops.d/repo-hygiene-check/` fully pre-filled — `SPEC.md` with all eleven sections
 answered, `prompt.md` (reshaped skill body + contract sections + `## Finding identity` from
-`q8_finding_identity`), `loop.conf` (floor axes and tags, plus `schedule` from `q4_cadence`,
-`model`/`timeout_s`/`retry_transient` best-effort-extracted from `q11_budget`'s free text), the
-template `precheck.sh` with the commented proposals from §6, and `dashboard.json` built from the
-`q10_metrics` answer — then records an `imported` sqlite event and prints the next steps: `loopctl
-validate` → `loopctl run` → `loopctl install`. It never installs by itself.
+`q8_finding_identity`), `loop.conf` (floor axes, `schedule` from `q4_cadence`, and `tags`/`model`/
+`timeout_s`/`retry_transient` from the optional structured top-level keys above — never from
+`q11_budget`'s prose), the template `precheck.sh` with the commented proposals from §6, and
+`dashboard.json` built from the `q10_metrics` answer — then records an `imported` sqlite event and
+prints the next steps: `loopctl validate` → `loopctl run` → `loopctl install`. It never installs by
+itself.
 
 ## 8. The manual recipe — doing this without the tool
 

@@ -1080,7 +1080,7 @@ def _cmd_import_apply(args):
         "imported",
         args.actor,
         detail={
-            "source_skill": args.skill_path,
+            "source_skill": os.path.abspath(args.skill_path),
             "skill_sha256": skill["sha256"],
             "answers_provenance": answers.get("provenance") or {},
             "overwrite": bool(args.overwrite),

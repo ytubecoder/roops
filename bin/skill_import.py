@@ -1230,11 +1230,17 @@ def _resolved(rubric: dict, answers: dict, rubric_id: str):
     `missing` and `answers` has nothing either). The caller must leave that
     section as an unresolved `[FILL: ...]` placeholder in that case, which is
     the intended safety net: `loopctl validate` hard-fails on any remaining
-    `[FILL:` in SPEC.md."""
+    `[FILL:` in SPEC.md.
+
+    Round-1 review fix: the emptiness test is `str(value).strip()`, not
+    `value not in (None, "")` — a whitespace-only answer (`"   "`) is
+    neither `None` nor `""`, so the old check treated it as "provided" and
+    blanked out the SPEC section (no `[FILL:` marker left), defeating the
+    safety net above."""
     answers_map = (answers or {}).get("answers") or {}
     if rubric_id in answers_map:
         value = answers_map[rubric_id]
-        if value not in (None, ""):
+        if value is not None and str(value).strip():
             return str(value)
     item = (rubric or {}).get(rubric_id) or {}
     if "value" in item:
@@ -1261,7 +1267,14 @@ def _render_spec_md(name: str, rubric: dict, answers: dict) -> str:
     template = _SPEC_MD_TEMPLATE.replace("__NAME__", name)
     header_line, _, _ = template.partition("\n\n")
     sections = _spec_template_sections(template)
-    assert len(sections) == len(RUBRIC_IDS), "SPEC.md template section count drifted"
+    if len(sections) != len(RUBRIC_IDS):
+        # `assert` vanishes under `python -O` — this invariant (the template
+        # has exactly RUBRIC_IDS-many sections) must not silently stop being
+        # checked in an optimized run.
+        raise RuntimeError(
+            f"SPEC.md template section count drifted: got {len(sections)} "
+            f"sections, expected {len(RUBRIC_IDS)} (RUBRIC_IDS)"
+        )
 
     rendered = []
     for rubric_id, (header, placeholder) in zip(RUBRIC_IDS, sections):
@@ -1302,8 +1315,25 @@ def _render_prompt_md(name: str, skill: dict, rubric: dict, answers: dict) -> st
     contract, `## Finding identity` heading — all reused verbatim, byte-for-
     byte, from `_PROMPT_MD_TEMPLATE`) with the skill's own body spliced into
     the task section, and the `## Finding identity` placeholder filled from
-    `q8_finding_identity` when resolved."""
-    text = _PROMPT_MD_TEMPLATE.replace("__NAME__", name)
+    `q8_finding_identity` when resolved.
+
+    Round-1 review fix: the `## Finding identity` split MUST be computed on
+    the TEMPLATE, before the skill body is ever spliced in. A skill body
+    that itself contains a `## Finding identity` heading (plausible — it's
+    an ordinary-looking markdown heading) would otherwise make
+    `text.index()` find the BODY's copy once the two were concatenated,
+    truncating everything after it — the Output contract and Findings
+    prompt contract sections included. `loopctl validate` does not catch
+    this: it only greps for the heading's presence, never what follows it.
+    Splitting the template FIRST into `head`/`tail` and only ever splicing
+    the body into `head` (which by construction of the template always
+    precedes the real heading) makes this positionally impossible regardless
+    of what the body contains."""
+    template = _PROMPT_MD_TEMPLATE.replace("__NAME__", name)
+
+    heading = "## Finding identity\n\n"
+    idx = template.index(heading)
+    head, tail = template[: idx + len(heading)], template[idx + len(heading) :]
 
     todo_line = (
         "TODO: describe what this loop should investigate/monitor and report on."
@@ -1312,31 +1342,54 @@ def _render_prompt_md(name: str, skill: dict, rubric: dict, answers: dict) -> st
     task_text = (
         body if body else "[FILL: no task description found in the source skill]"
     )
-    text = text.replace(todo_line, task_text, 1)
+    head = head.replace(todo_line, task_text, 1)
 
-    heading = "## Finding identity\n\n"
-    idx = text.index(heading)
     q8 = _resolved(rubric, answers, "q8_finding_identity")
     if q8:
-        text = text[: idx + len(heading)] + q8.strip() + "\n"
-    return text
+        tail = q8.strip() + "\n"
+
+    return head + tail
 
 
-# Loose free-text hints inside a q11_budget answer (e.g. "engine default
-# model; ~1k tokens; retry 1; timeout 300", the brief's own example) — best-
-# effort extraction only; nothing here ever invents a value the text didn't
-# actually contain (ruling 2 — no derived-default fallback exists).
-_BUDGET_RETRY_RE = re.compile(r"\bretry[:\s]+(\d+)", re.IGNORECASE)
-_BUDGET_TIMEOUT_RE = re.compile(r"\btimeout[:\s]+(\d+)", re.IGNORECASE)
-_BUDGET_MODEL_RE = re.compile(r"\bmodel[:\s]+([A-Za-z0-9._-]+)", re.IGNORECASE)
 _APPLY_TAG_RE = re.compile(r"^[a-z][a-z0-9:_-]{1,40}$")
 
+# loopconf.py's own FIELDS ranges for timeout_s/retry_transient (bin/loopconf.py
+# §5) — duplicated here as plain constants (not imported; loopconf.py is a
+# frozen single-parser module loaded independently by bin/loopctl, and these
+# two bounds are simple enough that re-stating them is safer than reaching
+# into loopconf.FIELDS's internal shape from here) so a bad structured answer
+# is refused at apply()-time with a clear message, before ever being written.
+_TIMEOUT_S_MIN, _TIMEOUT_S_MAX = 30, 7200
+_RETRY_TRANSIENT_MIN, _RETRY_TRANSIENT_MAX = 0, 3
 
-def _quote_conf_value(text: str) -> str:
+
+def _quote_conf_value(text: str, field_name: str = "value") -> str:
     """loop.conf's KEY=value grammar (§5.0) is strictly line-based — flatten
     any embedded newlines/repeated whitespace to single spaces and escape
-    embedded double quotes before wrapping in a quoted value."""
+    embedded double quotes before wrapping in a quoted value.
+
+    Round-1 review: a trailing literal backslash is refused outright
+    (`SkillApplyError`) rather than silently emitting a value
+    `loopconf.parse()` will itself reject as "unterminated quoted value".
+    `bin/loopconf.py`'s `_parse_value` recognizes ONLY the two-character
+    sequence backslash+quote as an escape — there is no separate
+    backslash-escaping rule. Verified empirically (against the real parser,
+    for N=1..5 trailing backslashes, both with and without doubling the
+    backslash first) that a run of one-or-more literal backslashes
+    immediately before the closing quote is ALWAYS misread as escaping that
+    closing quote itself, regardless of how many backslashes precede it or
+    how they're encoded — there is no valid encoding of this grammar for a
+    trailing backslash. An INTERIOR backslash immediately before a literal
+    quote (not at the very end of the value) IS representable and already
+    round-trips correctly with the escaping below — only the trailing case
+    is refused."""
     flat = " ".join((text or "").split())
+    if flat.endswith("\\"):
+        raise SkillApplyError(
+            f"cannot scaffold: the {field_name} answer ends with a literal "
+            "backslash, which loop.conf's KEY=value grammar cannot represent "
+            "— edit the answer so it does not end in '\\'"
+        )
     return '"' + flat.replace('"', '\\"') + '"'
 
 
@@ -1357,6 +1410,66 @@ def _sanitize_tags(raw_tags) -> list:
     return out
 
 
+def _validate_structured_answers(answers: dict) -> None:
+    """Fail fast, before any rendering or writing, on a malformed
+    `answers.json` shape or an out-of-range structured budget key — "better
+    a loud refusal than an invented number" (round-1 review). Two classes of
+    check:
+
+    1. Shape: `answers["answers"]`/`answers["provenance"]`, if present, must
+       be objects (dicts) — `{"answers": ["q1_purpose"]}` (a list) used to
+       traceback deep inside `_resolved()` (list indexing by string), which
+       both crashed the CLI AND (before the render-before-write restructure)
+       left a half-written `loops.d/<name>/` behind that made the next,
+       correct attempt fail with a spurious "already exists".
+    2. Structured budget keys — the ONLY source of `model`/`timeout_s`/
+       `retry_transient` in loop.conf now (round-1 review defect #2: q11_budget
+       free text is SPEC.md §11 prose ONLY, never config; see
+       `_render_loop_conf`). Validated against loopconf.py's own ranges."""
+    answers_field = answers.get("answers")
+    if answers_field is not None and not isinstance(answers_field, dict):
+        raise SkillApplyError(
+            "invalid answers.json: 'answers' must be an object mapping "
+            f"question_id -> value, got {type(answers_field).__name__}"
+        )
+
+    provenance_field = answers.get("provenance")
+    if provenance_field is not None and not isinstance(provenance_field, dict):
+        raise SkillApplyError(
+            "invalid answers.json: 'provenance' must be an object, got "
+            f"{type(provenance_field).__name__}"
+        )
+
+    model = answers.get("model")
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise SkillApplyError(
+            f"invalid answers.json: 'model' must be a non-empty string, got {model!r}"
+        )
+
+    timeout_s = answers.get("timeout_s")
+    if timeout_s is not None and (
+        isinstance(timeout_s, bool)
+        or not isinstance(timeout_s, int)
+        or not (_TIMEOUT_S_MIN <= timeout_s <= _TIMEOUT_S_MAX)
+    ):
+        raise SkillApplyError(
+            "invalid answers.json: 'timeout_s' must be an integer in "
+            f"{_TIMEOUT_S_MIN}-{_TIMEOUT_S_MAX}, got {timeout_s!r}"
+        )
+
+    retry_transient = answers.get("retry_transient")
+    if retry_transient is not None and (
+        isinstance(retry_transient, bool)
+        or not isinstance(retry_transient, int)
+        or not (_RETRY_TRANSIENT_MIN <= retry_transient <= _RETRY_TRANSIENT_MAX)
+    ):
+        raise SkillApplyError(
+            "invalid answers.json: 'retry_transient' must be an integer "
+            f"in {_RETRY_TRANSIENT_MIN}-{_RETRY_TRANSIENT_MAX}, got "
+            f"{retry_transient!r}"
+        )
+
+
 def _render_loop_conf(
     name: str,
     analysis: dict,
@@ -1366,12 +1479,20 @@ def _render_loop_conf(
     acknowledge_blocked: bool,
 ) -> str:
     """loop.conf: name/description/type/engine from analysis+rubric,
-    schedule/model/timeout_s/retry_transient from answers (q4_cadence /
-    q11_budget), tags from the optional top-level `answers["tags"]`, and the
-    permission axes ALWAYS at the report-only floor `analysis["axes"]` — import
-    never raises an axis itself (docs/SKILL_IMPORT.md §1), same as `analyze()`.
-    Ruling 3: a blocked-but-acknowledged skill forces `schedule=manual`
-    regardless of what `q4_cadence` says."""
+    schedule from `q4_cadence`, tags from the optional top-level
+    `answers["tags"]`, and the permission axes ALWAYS at the report-only
+    floor `analysis["axes"]` — import never raises an axis itself
+    (docs/SKILL_IMPORT.md §1), same as `analyze()`. Ruling 3: a blocked-but-
+    acknowledged skill forces `schedule=manual` regardless of what
+    `q4_cadence` says.
+
+    Round-1 review defect #2: `model`/`timeout_s`/`retry_transient` come
+    ONLY from the optional top-level structured `answers["model"]`/
+    `["timeout_s"]`/`["retry_transient"]` keys (validated in
+    `_validate_structured_answers`, called before this function ever runs) —
+    NEVER scraped from `q11_budget`'s free text. That prose is SPEC.md §11
+    documentation only; regex-scraping it previously invented config values
+    from unrelated words ("...no model override needed..." -> `model=override`)."""
     description = _resolved(rubric, answers, "q1_purpose") or (
         "TODO: one-line description of what this loop does"
     )
@@ -1382,8 +1503,6 @@ def _render_loop_conf(
         schedule_value = "manual"
     else:
         schedule_value = _resolved(rubric, answers, "q4_cadence") or "manual"
-
-    budget_text = _resolved(rubric, answers, "q11_budget") or ""
 
     header_comment = (
         "# Scaffolded by `loopctl import --apply` "
@@ -1397,24 +1516,24 @@ def _render_loop_conf(
         "# the report-only floor and were never raised by import — raise them",
         "# deliberately if this loop genuinely needs more (docs/LOOP_AUTHORING.md §4).",
         f"name={name}",
-        f"description={_quote_conf_value(description)}",
+        f"description={_quote_conf_value(description, 'q1_purpose')}",
         f"type={loop_type}",
         f"engine={engine}",
     ]
 
-    model_match = _BUDGET_MODEL_RE.search(budget_text)
-    if model_match:
-        lines.append(f"model={model_match.group(1)}")
+    model = (answers or {}).get("model")
+    if model:
+        lines.append(f"model={model}")
 
     lines.append(f"schedule={schedule_value}")
 
-    timeout_match = _BUDGET_TIMEOUT_RE.search(budget_text)
-    if timeout_match:
-        lines.append(f"timeout_s={timeout_match.group(1)}")
+    timeout_s = (answers or {}).get("timeout_s")
+    if timeout_s is not None:
+        lines.append(f"timeout_s={timeout_s}")
 
-    retry_match = _BUDGET_RETRY_RE.search(budget_text)
-    if retry_match:
-        lines.append(f"retry_transient={retry_match.group(1)}")
+    retry_transient = (answers or {}).get("retry_transient")
+    if retry_transient is not None:
+        lines.append(f"retry_transient={retry_transient}")
 
     axes = analysis.get("axes") or {}
     for axis_key in (
@@ -1487,8 +1606,18 @@ def apply(skill: dict, analysis: dict, answers: dict, dest_dir: str) -> list:
     Raises `SkillApplyError` (message is user-facing) for every refusal case:
     stale `answers` (analyzer_version or skill_sha256 mismatch against the
     freshly re-parsed `skill`/`analysis` the caller passes in — re-run
-    --analyze rather than hand-patching the hash), or a `blocked` analysis
-    without `acknowledge_blocked: true`.
+    --analyze rather than hand-patching the hash), a malformed `answers.json`
+    shape or an out-of-range structured budget key (`_validate_structured_
+    answers`), or a `blocked` analysis without `acknowledge_blocked: true`
+    (checked `is True` — round-1 review: a truthy-but-wrong JSON value like
+    the string `"false"` must never acknowledge).
+
+    Round-1 review (defense in depth): every file's content is fully
+    RENDERED into local variables before `dest_dir` is ever created or
+    anything is written — a genuinely unexpected rendering failure (bad
+    input this function doesn't specifically validate for) must never leave
+    a half-written `dest_dir` behind that would make a corrected retry fail
+    with a spurious "already exists".
 
     The pre-existing-`dest_dir` collision check (refuse unless `--overwrite`)
     is deliberately NOT here — it's a CLI/`--overwrite` concern the caller
@@ -1505,8 +1634,10 @@ def apply(skill: dict, analysis: dict, answers: dict, dest_dir: str) -> list:
     if answers.get("skill_sha256") != skill.get("sha256"):
         raise SkillApplyError("stale answers — re-run --analyze")
 
+    _validate_structured_answers(answers)
+
     blocked = bool(analysis.get("blocked"))
-    acknowledge_blocked = bool(answers.get("acknowledge_blocked"))
+    acknowledge_blocked = answers.get("acknowledge_blocked") is True
     if blocked and not acknowledge_blocked:
         reasons = (
             "; ".join(analysis.get("blocked_reasons") or []) or "(no reasons recorded)"
@@ -1521,8 +1652,8 @@ def apply(skill: dict, analysis: dict, answers: dict, dest_dir: str) -> list:
     rubric = analysis.get("rubric") or {}
     name = os.path.basename(os.path.normpath(dest_dir))
 
-    os.makedirs(dest_dir, exist_ok=True)
-
+    # Render everything FIRST (see docstring) — nothing touches the
+    # filesystem until every piece of content has been computed successfully.
     spec_text = _render_spec_md(name, rubric, answers)
     if blocked and acknowledge_blocked:
         spec_text += "\n" + _blocked_spec_section(analysis)
@@ -1540,6 +1671,8 @@ def apply(skill: dict, analysis: dict, answers: dict, dest_dir: str) -> list:
         ("precheck.sh", _render_precheck_sh(name, analysis), True),
         ("dashboard.json", _render_dashboard_json(rubric, answers), False),
     ]
+
+    os.makedirs(dest_dir, exist_ok=True)
 
     written = []
     for fname, content, executable in contents:

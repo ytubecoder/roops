@@ -2153,6 +2153,7 @@ class TestImportApply(LoopsRootTestCase):
         self._write_answers(
             root, "answers.json", self.CLEAN_ANSWERS, fixture="clean-check"
         )
+        analysis = self._analyze_json(root, "clean-check")
 
         r = self._loopctl(
             root,
@@ -2172,12 +2173,18 @@ class TestImportApply(LoopsRootTestCase):
         events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
         self.assertEqual(events[0]["event"], "imported")
 
-        pre = _read(os.path.join(root, "loops.d", "repo-hygiene-check", "precheck.sh"))
-        for line in pre.splitlines():
-            if "git " in line:
-                self.assertTrue(
-                    line.lstrip().startswith("#")
-                )  # proposals stay commented
+        precheck_path = os.path.join(
+            root, "loops.d", "repo-hygiene-check", "precheck.sh"
+        )
+        self.assertTrue(os.access(precheck_path, os.X_OK))
+        pre = _read(precheck_path)
+        # Every line of the injected proposal block (analysis["precheck_proposal"])
+        # must survive verbatim, still commented — not "any line containing
+        # 'git '", which would miss a proposal line apply() silently mangled
+        # as long as it didn't happen to say "git ".
+        for line in analysis["precheck_proposal"]:
+            self.assertTrue(line.startswith("#"))
+            self.assertIn(line, pre)
 
     # --- stale hash ---------------------------------------------------------
 
@@ -2204,6 +2211,8 @@ class TestImportApply(LoopsRootTestCase):
         self.assertFalse(
             os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
         )
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events, [])
 
     # --- collision / --overwrite --------------------------------------------
 
@@ -2299,6 +2308,8 @@ class TestImportApply(LoopsRootTestCase):
         self.assertFalse(
             os.path.isdir(os.path.join(root, "loops.d", "stripe-failed-charges"))
         )
+        events = self._db_query_json(root, "loop-events", loop="stripe-failed-charges")
+        self.assertEqual(events, [])
 
         answers["acknowledge_blocked"] = True
         with open(answers_path, "w") as f:
@@ -2357,6 +2368,136 @@ class TestImportApply(LoopsRootTestCase):
 
         rc = self._loopctl_rc(root, "validate", "repo-hygiene-check")
         self.assertEqual(rc, 1)
+
+    # --- round-1 review: malformed answers.json leaves no dir behind --------
+
+    def test_apply_malformed_answers_shape_leaves_no_directory_and_retry_succeeds(
+        self,
+    ):
+        # Reviewer-reported defect: {"answers": ["q1_purpose"]} (a list, not
+        # an object) previously tracebacked out of the CLI AND left an empty
+        # loops.d/<name>/ behind, making the next, CORRECT attempt fail with
+        # a spurious "already exists".
+        root = self._scaffold_root()
+        analysis = self._analyze_json(root, "clean-check")
+        answers = {
+            "analyzer_version": "1",
+            "skill_sha256": analysis["skill_sha256"],
+            "answers": ["q1_purpose"],  # malformed: list instead of object
+            "acknowledge_blocked": False,
+        }
+        answers_path = os.path.join(root, "answers.json")
+        with open(answers_path, "w") as f:
+            json.dump(answers, f)
+
+        r1 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r1.returncode, 1)
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
+        )
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events, [])
+
+        # A CORRECT retry must succeed — no spurious "already exists" from a
+        # half-written directory the first (malformed) attempt might have
+        # left behind.
+        self._write_answers(
+            root, "answers2.json", self.CLEAN_ANSWERS, fixture="clean-check"
+        )
+        r2 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers2.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r2.returncode, 0, msg=r2.stdout + r2.stderr)
+
+    # --- round-1 review: free-text budget prose must never become config ----
+
+    def test_apply_free_text_budget_prose_never_becomes_config(self):
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        # The reviewer's own reproducer: prose that would have tricked the
+        # old regex scraper into inventing model=unless / timeout_s=30.
+        answers["answers"]["q11_budget"] = (
+            "use the default model unless cost spikes; timeout 30 minutes"
+        )
+        self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        conf = _read(os.path.join(root, "loops.d", "repo-hygiene-check", "loop.conf"))
+        self.assertNotIn("model=unless", conf)
+        self.assertNotIn("timeout_s=30", conf)
+        self.assertNotIn("model=", conf)
+        self.assertNotIn("timeout_s=", conf)
+
+    def test_apply_structured_budget_keys_honored(self):
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        answers["model"] = "claude-sonnet-5"
+        answers["timeout_s"] = 600
+        answers["retry_transient"] = 2
+        self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        conf = _read(os.path.join(root, "loops.d", "repo-hygiene-check", "loop.conf"))
+        self.assertIn("model=claude-sonnet-5", conf)
+        self.assertIn("timeout_s=600", conf)
+        self.assertIn("retry_transient=2", conf)
+
+    def test_apply_invalid_structured_timeout_s_refused(self):
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        answers["timeout_s"] = 99999  # out of loopconf's 30-7200 range
+        self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
+        )
 
 
 if __name__ == "__main__":

@@ -111,6 +111,58 @@ READ_ONLY_GIT_SUBCOMMANDS = frozenset({"status", "log", "diff"})
 # mistaken for the subcommand) — `-C <repo>` is the common one in practice.
 _GIT_VALUE_FLAGS = frozenset({"-C", "-c"})
 
+# Binaries a precheck candidate's leading token must plausibly be (fix-round-1
+# #b): keeps bare words like `metrics` or lone paths pulled out of inline
+# backticks from ever being emitted as a precheck line at all.
+KNOWN_COMMAND_TOKENS = (
+    READ_ONLY_SIMPLE_COMMANDS
+    | frozenset(KNOWN_CLIS)
+    | frozenset(
+        {
+            "rm",
+            "mv",
+            "cp",
+            "kill",
+            "xargs",
+            "echo",
+            "touch",
+            "mkdir",
+            "chmod",
+            "chown",
+            "sed",
+            "awk",
+            "tar",
+            "zip",
+            "unzip",
+            "brew",
+            "pip",
+            "pip3",
+            "python",
+            "python3",
+            "node",
+            "make",
+            "cargo",
+            "go",
+        }
+    )
+)
+
+# fenced-code-block languages that count as shell for precheck extraction
+# (fix-round-1 minor a): ```bash, ```sh, ```shell, tolerating info-string
+# suffixes like ```bash icon.
+_SHELL_FENCE_LANGS = frozenset({"bash", "sh", "shell"})
+
+# Redirect forms tolerated as "not dangerous" for the read-only check: stderr
+# to /dev/null or to stdout, both common in read-only diagnostic one-liners
+# (e.g. the clean-check fixture's `2>/dev/null`). Anything else involving
+# `>`/`>>` is treated as a write.
+_SAFE_REDIRECTS_RE = re.compile(r"[12]?>&[12]|[12]?>\s*/dev/null")
+
+# `<repo>`/`<p>`/`<target>`-style doc placeholders — these fixtures' own
+# convention (e.g. `git -C <repo> status`) — contain a literal `>` that must
+# not be mistaken for shell redirection by the dangerous-redirect check.
+_PLACEHOLDER_RE = re.compile(r"<[^<>\s]+>")
+
 RUBRIC_IDS = (
     "q1_purpose",
     "q2_pattern",
@@ -124,6 +176,22 @@ RUBRIC_IDS = (
     "q10_metrics",
     "q11_budget",
 )
+RUBRIC_BUCKETS = ("answered", "derived", "missing", "incompatible")
+# answers_needed question_ids for the per-axis raise questions — outside the
+# q1..q11 rubric namespace on purpose (they aren't intake-rubric answers,
+# they're axis-raise proposals gated on the mutation/network flags).
+AXIS_RAISE_IDS = ("raise_perm_network", "raise_perm_remote_mutation")
+
+# Headings that count as an actual scope/exclusions statement for q5_scope
+# (fix-round-1 #6) — a bare document title (e.g. "# Repo hygiene check") does
+# NOT count; the heading itself must look like it's declaring scope.
+_SCOPE_HEADING_RE = re.compile(
+    r"\bscope\b|\bexclusions?\b|out of scope|what this does not do", re.IGNORECASE
+)
+
+# Numeric-content hint shared by q10's options and context text (fix-round-1
+# minor c — was duplicated inline in both).
+_Q10_NUMERIC_HINT_RE = re.compile(r"\bcount\b|\bnumber of\b|wc -l|\d+", re.IGNORECASE)
 
 # Rubric ids whose bucket flips to "incompatible" when the paired flag fires,
 # with a drafted reshaping note (docs/SKILL_IMPORT.md Task 11 transcribes the
@@ -357,10 +425,79 @@ def _detect_flags(text: str) -> dict:
     }
 
 
-def _has_cli_equivalent(text: str) -> bool:
-    """mcp-without-cli-equivalent heuristic: does `text` also name curl or a
-    known CLI (KNOWN_CLIS) anywhere?"""
-    return bool(_CLI_TOKEN_RE.search(text))
+def _first_match_location(regex, skill: dict):
+    """Find `regex`'s first match across the skill's sources, body first then
+    bundled files in their existing order. Returns (matched_text, location)
+    where location is "SKILL.md" or a bundled file's relpath, or (None, None)
+    if nothing matches anywhere."""
+    body = skill.get("body", "") or ""
+    m = regex.search(body)
+    if m:
+        return m.group(0), "SKILL.md"
+    for f in skill.get("files", []) or []:
+        m = regex.search(f.get("text", "") or "")
+        if m:
+            return m.group(0), f.get("relpath", "<file>")
+    return None, None
+
+
+def _find_cli_equivalent_same_file(skill: dict, location):
+    """mcp-without-cli-equivalent heuristic, fix-round-1 #3: the CLI token
+    must appear in the SAME source as the mcp mention (`location`, from
+    `_first_match_location`), not merely anywhere in the bundle — a stray
+    `git`/`curl` mention in an unrelated bundled file doesn't excuse an MCP
+    dependency actually used in SKILL.md. Returns (matched_text, location) or
+    (None, None)."""
+    if location is None:
+        return None, None
+    if location == "SKILL.md":
+        text = skill.get("body", "") or ""
+    else:
+        text = None
+        for f in skill.get("files", []) or []:
+            if f.get("relpath") == location:
+                text = f.get("text", "") or ""
+                break
+        if text is None:
+            return None, None
+    m = _CLI_TOKEN_RE.search(text)
+    if m:
+        return m.group(0), location
+    return None, None
+
+
+def _build_blocked_info(skill: dict, flags: dict) -> tuple:
+    """Decide `blocked` and build `blocked_reasons` (fix-round-1 #2/#3):
+    credentials always blocks; mcp blocks unless a CLI equivalent is found in
+    the SAME source as the mcp mention. Every applicable check appends a
+    reason — including an informational, non-blocking one when mcp has a CLI
+    equivalent — so the mcp decision is always visible, not just when it
+    blocks."""
+    blocked = False
+    reasons = []
+
+    if flags.get("credentials"):
+        blocked = True
+        matched, location = _first_match_location(RE_CREDENTIALS, skill)
+        if matched:
+            reasons.append(f"credentials: matched {matched!r} in {location}")
+        else:
+            reasons.append("credentials: matched credential-like text in the skill")
+
+    if flags.get("mcp"):
+        mcp_matched, mcp_location = _first_match_location(RE_MCP, skill)
+        cli_matched, cli_location = _find_cli_equivalent_same_file(skill, mcp_location)
+        if cli_matched:
+            reasons.append(
+                f"mcp: CLI equivalent {cli_matched!r} found in {cli_location} — not blocked"
+            )
+        else:
+            blocked = True
+            label = mcp_matched or "mcp__*"
+            loc = mcp_location or "the skill"
+            reasons.append(f"mcp: {label!r} with no CLI equivalent in {loc}")
+
+    return blocked, reasons
 
 
 def _body_headings(body: str) -> list:
@@ -370,61 +507,143 @@ def _body_headings(body: str) -> list:
     ]
 
 
+def _looks_like_command(candidate: str) -> bool:
+    """fix-round-1 minor #b: filter for inline-backtick candidates only —
+    is `candidate` plausibly a shell command rather than a bare word/path
+    someone happened to backtick-quote (e.g. `metrics`, `~/projects/foo`)?
+    True when the leading token is a known binary, or a later token looks
+    like a flag (`-x`/`--long`)."""
+    tokens = candidate.split()
+    if not tokens:
+        return False
+    if tokens[0] in KNOWN_COMMAND_TOKENS:
+        return True
+    return any(t.startswith("-") for t in tokens[1:])
+
+
 def _extract_candidate_commands(body: str) -> list:
     """Candidate shell snippets for the precheck proposal: backtick-quoted
-    inline spans and lines inside fenced ```bash blocks, in document order.
-    Only `body` is scanned (not bundled files) — precheck candidates come
-    from what the skill's own instructions literally tell the engine to run.
-    """
+    inline spans (filtered to command-looking spans, see _looks_like_command)
+    and every line inside a fenced ```bash/```sh/```shell block (info-string
+    suffixes tolerated), in document order. Only `body` is scanned (not
+    bundled files) — precheck candidates come from what the skill's own
+    instructions literally tell the engine to run."""
     candidates = []
     in_fence = False
-    in_bash_fence = False
+    in_shell_fence = False
     for line in body.split("\n"):
         stripped = line.strip()
         if stripped.startswith("```"):
             if not in_fence:
                 in_fence = True
-                lang = stripped[3:].strip().lower()
-                in_bash_fence = lang == "bash"
+                info = stripped[3:].strip().lower()
+                lang = info.split()[0] if info.split() else ""
+                in_shell_fence = lang in _SHELL_FENCE_LANGS
             else:
                 in_fence = False
-                in_bash_fence = False
+                in_shell_fence = False
             continue
         if in_fence:
-            if in_bash_fence and stripped:
+            if in_shell_fence and stripped:
                 candidates.append(stripped)
             continue
         for m in re.finditer(r"`([^`\n]+)`", line):
             content = m.group(1).strip()
-            if content:
+            if content and _looks_like_command(content):
                 candidates.append(content)
     # Preserve order, drop exact duplicates.
     return list(dict.fromkeys(candidates))
 
 
-def _is_read_only_command(cmd_line: str) -> bool:
-    """Is `cmd_line` a scoped-read form per the brief's read-only table? Only
-    the leading command (before any pipe/`;`/`&&`) decides the class — a
-    read-only lead into e.g. `| wc -l` is still read-only overall."""
-    head = re.split(r"\||;|&&", cmd_line, maxsplit=1)[0].strip()
-    tokens = head.split()
+def _git_subcommand(tokens: list):
+    """Given a token list starting with `git`, walk past `-C <value>`-style
+    flags to find the actual subcommand (or None if there isn't one)."""
+    i = 1
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in _GIT_VALUE_FLAGS:
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        return tok
+    return None
+
+
+def _xargs_subcommand(tokens_after_xargs: list):
+    """Given the tokens that follow `xargs`, skip xargs's own flags
+    (`-I{}`, `-n1`, `-0`, ...) to find the command it actually invokes (or
+    None if there isn't one)."""
+    for tok in tokens_after_xargs:
+        if not tok.startswith("-"):
+            return tok
+    return None
+
+
+def _segment_is_read_only(segment: str) -> bool:
+    """Classify a single `|`/`;`/`&&`/`||`-delimited segment by its leading
+    command per the brief's scoped-read-forms table. `xargs` is resolved to
+    the command it actually invokes rather than being treated as opaque."""
+    tokens = segment.split()
     if not tokens:
+        return True  # an empty segment (trailing separator) contributes nothing
+    head = tokens[0]
+    if head == "git":
+        return _git_subcommand(tokens) in READ_ONLY_GIT_SUBCOMMANDS
+    if head == "xargs":
+        sub = _xargs_subcommand(tokens[1:])
+        return sub in READ_ONLY_SIMPLE_COMMANDS
+    return head in READ_ONLY_SIMPLE_COMMANDS
+
+
+def _has_full_line_danger(cmd_line: str) -> bool:
+    """fix-round-1 #1: signals that override a read-only-looking head token
+    because precheck.sh runs UNSANDBOXED and this annotation is the only
+    safety signal a human has. Checked over the FULL line, not per segment:
+    a dangerous redirect/flag anywhere in a compound command taints all of
+    it. Covers exactly the reviewer's six escapes: `>`/`>>` writes (except
+    the tolerated `2>/dev/null`/`>&1` forms), `find -delete`, `find -exec`,
+    `curl -X <non-GET>`, `tail -f`/`--follow` (never terminates), and
+    `xargs <a command that isn't itself read-only>`."""
+    # `<repo>`/`<p>`-style doc placeholders (both fixtures use this convention,
+    # e.g. `git -C <repo> status`) contain a literal `>` that isn't a shell
+    # redirection — strip those spans before scanning for real ones.
+    without_placeholders = _PLACEHOLDER_RE.sub("", cmd_line)
+    stripped_redirects = _SAFE_REDIRECTS_RE.sub("", without_placeholders)
+    if ">" in stripped_redirects:
+        return True
+    if re.search(r"-delete\b", cmd_line):
+        return True
+    if re.search(r"-exec\b", cmd_line):
+        return True
+    m = re.search(r"-X\s*(\S+)", cmd_line)
+    if m and m.group(1).strip("'\"").upper() != "GET":
+        return True
+    if re.search(r"\btail\b", cmd_line) and re.search(
+        r"(?:^|\s)(-f\b|--follow\b)", cmd_line
+    ):
+        return True
+    m = re.search(r"\bxargs\b\s*(.*)$", cmd_line)
+    if m:
+        sub = _xargs_subcommand(m.group(1).split())
+        if sub not in READ_ONLY_SIMPLE_COMMANDS:
+            return True
+    return False
+
+
+_SEGMENT_SPLIT_RE = re.compile(r"\|\||&&|\||;")
+
+
+def _is_read_only_command(cmd_line: str) -> bool:
+    """Is `cmd_line` a scoped-read form per the brief's read-only table?
+    False (MUTATING) if any full-line danger signal fires (_has_full_line_
+    danger), OR if any `|`/`;`/`&&`/`||`-delimited segment fails its own
+    read-only check — every segment must be read-only, not just the head."""
+    if _has_full_line_danger(cmd_line):
         return False
-    if tokens[0] == "git":
-        subcmd = None
-        i = 1
-        while i < len(tokens):
-            tok = tokens[i]
-            if tok in _GIT_VALUE_FLAGS:
-                i += 2
-                continue
-            if tok.startswith("-"):
-                i += 1
-                continue
-            subcmd = tok
-            break
-        return subcmd in READ_ONLY_GIT_SUBCOMMANDS
-    return tokens[0] in READ_ONLY_SIMPLE_COMMANDS
+    segments = _SEGMENT_SPLIT_RE.split(cmd_line)
+    return all(_segment_is_read_only(seg.strip()) for seg in segments)
 
 
 def _propose_precheck(body: str) -> list:
@@ -466,8 +685,9 @@ def _sanitize_name(raw: str) -> str:
     return s
 
 
-def _flags_summary(flags: dict) -> str:
-    return ", ".join(f"{k}={v}" for k, v in flags.items())
+def _kv_summary(d: dict) -> str:
+    """ "k=v, k=v" summary — used for both `flags` and `axes`."""
+    return ", ".join(f"{k}={v}" for k, v in d.items())
 
 
 def _q10_options(text: str) -> list:
@@ -478,7 +698,7 @@ def _q10_options(text: str) -> list:
         {"id": "number", "label": "number (single current value)"},
         {"id": "trend", "label": "trend (history over window_days)"},
     ]
-    if re.search(r"\bcount\b|\bnumber of\b|wc -l|\d+", text, re.IGNORECASE):
+    if _Q10_NUMERIC_HINT_RE.search(text):
         return generic + [
             {"id": "table", "label": "table (array of objects, stable columns)"},
             {"id": "list", "label": "list (array of scalars)"},
@@ -487,7 +707,7 @@ def _q10_options(text: str) -> list:
 
 
 def _q10_context(text: str) -> str:
-    if re.search(r"\bcount\b|\bnumber of\b|wc -l|\d+", text, re.IGNORECASE):
+    if _Q10_NUMERIC_HINT_RE.search(text):
         return (
             "the skill's checks mention counts/numbers, so table/list panels "
             "may fit in addition to a single number."
@@ -498,10 +718,11 @@ def _q10_context(text: str) -> str:
 def _build_rubric(frontmatter: dict, body: str, flags: dict, axes: dict) -> dict:
     """Classify all eleven intake-rubric questions (docs/LOOP_AUTHORING.md §2,
     ids q1_purpose..q11_budget) into a bucket, per the task-9 ambiguity
-    resolution:
+    resolution (fix-round-1 #6 tightened q5_scope; #4 made q7_axes's value
+    a plain string):
       - q1_purpose: answered, value = frontmatter description (else missing)
-      - q5_scope: answered (partial, heuristic) from body headings if any
-        present, else missing
+      - q5_scope: answered only when a body heading actually looks like a
+        scope/exclusions statement (_SCOPE_HEADING_RE); else missing
       - q2_pattern / q3_type: derived (agentic pattern + script/agent
         precheck split)
       - q6_guardrails / q7_axes: derived (report-only floor + detected flags)
@@ -537,8 +758,9 @@ def _build_rubric(frontmatter: dict, body: str, flags: dict, axes: dict) -> dict
     rubric["q4_cadence"] = {"bucket": "missing"}
 
     headings = _body_headings(body)
-    if headings:
-        rubric["q5_scope"] = {"bucket": "answered", "value": "; ".join(headings)}
+    scope_headings = [h for h in headings if _SCOPE_HEADING_RE.search(h)]
+    if scope_headings:
+        rubric["q5_scope"] = {"bucket": "answered", "value": "; ".join(scope_headings)}
     else:
         rubric["q5_scope"] = {"bucket": "missing"}
 
@@ -547,10 +769,17 @@ def _build_rubric(frontmatter: dict, body: str, flags: dict, axes: dict) -> dict
         "value": (
             "report-only floor (perm_fs_write=report_only, perm_network=none, "
             "perm_local_exec=none, perm_remote_mutation=none); detected flags: "
-            + _flags_summary(flags)
+            + _kv_summary(flags)
         ),
     }
-    rubric["q7_axes"] = {"bucket": "derived", "value": dict(axes)}
+    # value is a plain string here on purpose (fix-round-1 #4) — the axes
+    # dict itself is already the sibling top-level "axes" key, and
+    # INCOMPATIBLE_RUBRIC_MAP overwrites this same field with a string when
+    # mutation/credentials fire, so the type must be stable either way.
+    rubric["q7_axes"] = {
+        "bucket": "derived",
+        "value": "floor (see top-level 'axes'): " + _kv_summary(axes),
+    }
 
     rubric["q8_finding_identity"] = {"bucket": "missing"}
     rubric["q9_semantics"] = {"bucket": "missing"}
@@ -565,9 +794,43 @@ def _build_rubric(frontmatter: dict, body: str, flags: dict, axes: dict) -> dict
     return rubric
 
 
-def _build_answers_needed(flags: dict, text: str) -> list:
-    """The always-missing questions (never statically answerable), plus a
-    per-axis raise question for each of network/mutation that fired."""
+def _detected_phrases(regex, text: str, limit: int = 5) -> list:
+    """Distinct matched substrings for `regex` over `text`, in first-seen
+    order, capped at `limit` — used to draft a from-the-text justification
+    sentence for axis-raise questions (fix-round-1 #5) instead of a generic
+    one."""
+    seen = []
+    seen_lower = set()
+    for m in regex.finditer(text):
+        s = m.group(0).strip()
+        if s and s.lower() not in seen_lower:
+            seen.append(s)
+            seen_lower.add(s.lower())
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def _draft_axis_justification(axis: str, regex, text: str, default_verb: str) -> str:
+    """fix-round-1 #5: one sentence built from the detected verbs, e.g. for
+    mutation: 'Draft justification: "This loop needs perm_remote_mutation to
+    <verb list> as the skill describes; scoped to <target>. EDIT BEFORE
+    ACCEPTING."' `<target>` is left as a literal placeholder for the human/
+    agent to fill in — this is a draft, not a finished justification."""
+    verbs = _detected_phrases(regex, text)
+    verb_list = ", ".join(verbs) if verbs else default_verb
+    return (
+        f'Draft justification: "This loop needs {axis} to {verb_list} as the '
+        f'skill describes; scoped to <target>. EDIT BEFORE ACCEPTING."'
+    )
+
+
+def _build_answers_needed(flags: dict, text: str, q5_missing: bool) -> list:
+    """The always-missing questions (never statically answerable), plus
+    q5_scope when it wasn't answered by a real scope heading (fix-round-1
+    #6, suggested_answerer "agent" — the supervising agent usually has
+    enough project context to propose scope without asking the user), plus
+    a per-axis raise question for each of network/mutation that fired."""
     items = [
         {
             "question_id": "q4_cadence",
@@ -636,6 +899,26 @@ def _build_answers_needed(flags: dict, text: str) -> list:
         },
     ]
 
+    if q5_missing:
+        items.append(
+            {
+                "question_id": "q5_scope",
+                "prompt": (
+                    "What's explicitly in scope for this loop, and what's "
+                    "explicitly excluded?"
+                ),
+                "context": (
+                    "No scope/exclusions-looking heading (Scope / Exclusions / "
+                    "Out of scope / What this does not do) was found in the "
+                    "skill body. The supervising agent usually has enough "
+                    "project context to propose scope + exclusions without "
+                    "asking the user."
+                ),
+                "options": [],
+                "suggested_answerer": "agent",
+            }
+        )
+
     if flags.get("network"):
         items.append(
             {
@@ -648,7 +931,10 @@ def _build_answers_needed(flags: dict, text: str) -> list:
                 "context": (
                     "Floor is perm_network=none. Raising to 'full' permits "
                     "outbound network for the engine (docs/LOOP_AUTHORING.md §4); "
-                    "this does not by itself grant remote-mutation rights."
+                    "this does not by itself grant remote-mutation rights. "
+                    + _draft_axis_justification(
+                        "perm_network", RE_NETWORK, text, "make network calls"
+                    )
                 ),
                 "options": [
                     {
@@ -675,7 +961,13 @@ def _build_answers_needed(flags: dict, text: str) -> list:
                     "non-empty remote_mutation_justification "
                     "(docs/LOOP_AUTHORING.md §4, dangerous combo 2); until "
                     "answered, the mutating command stays a commented precheck "
-                    "line that must be uncommented deliberately."
+                    "line that must be uncommented deliberately. "
+                    + _draft_axis_justification(
+                        "perm_remote_mutation",
+                        RE_MUTATION,
+                        text,
+                        "perform a mutating action",
+                    )
                 ),
                 "options": [
                     {
@@ -715,9 +1007,10 @@ def analyze(skill: dict) -> dict:
         "perm_remote_mutation": "none",
     }
 
-    blocked = bool(flags["credentials"]) or (
-        bool(flags["mcp"]) and not _has_cli_equivalent(text)
-    )
+    # fix-round-1 #2/#3: blocked is decided (and explained) by
+    # _build_blocked_info, which also records the mcp CLI-equivalent
+    # decision even when it doesn't end up blocking.
+    blocked, blocked_reasons = _build_blocked_info(skill, flags)
 
     raw_name = (
         frontmatter.get("name")
@@ -728,7 +1021,9 @@ def analyze(skill: dict) -> dict:
 
     precheck_proposal = _propose_precheck(body)
     rubric = _build_rubric(frontmatter, body, flags, axes)
-    answers_needed = _build_answers_needed(flags, text)
+    answers_needed = _build_answers_needed(
+        flags, text, q5_missing=rubric["q5_scope"]["bucket"] == "missing"
+    )
 
     notes = list(skill.get("notes", []) or [])
     notes.append(
@@ -736,12 +1031,6 @@ def analyze(skill: dict) -> dict:
         "classification is not attempted by the static analyzer — reassess "
         "manually if this looks like a single-probe health check."
     )
-    if rubric["q5_scope"]["bucket"] == "answered":
-        notes.append(
-            "q5_scope's 'answered' value is a coarse heuristic (body "
-            "headings), not a real scope/exclusions statement — confirm "
-            "with the user before relying on it."
-        )
 
     return {
         "analyzer_version": ANALYZER_VERSION,
@@ -752,6 +1041,7 @@ def analyze(skill: dict) -> dict:
         "axes": axes,
         "flags": flags,
         "blocked": blocked,
+        "blocked_reasons": blocked_reasons,
         "rubric": rubric,
         "precheck_proposal": precheck_proposal,
         "answers_needed": answers_needed,

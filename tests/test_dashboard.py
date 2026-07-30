@@ -1616,15 +1616,40 @@ class RunTrichotomyTests(unittest.TestCase):
             return f.read()
 
     def test_run_states_trichotomy(self):
+        # Fix round 1: the original assertIn("running"/"overdue"/"died", html) forms were
+        # vacuous -- the page's static .badge.running/.badge.overdue/.badge.died CSS rules
+        # (emitted unconditionally, regardless of wiring) already contain those literal
+        # words, so all three passed even against a stub that never emits the badges.
+        # Assert the exact rendered badge markup instead (matches the .badge.stale/.died
+        # precedent elsewhere in this file), and pin both boundaries the spec defines with
+        # <=: age == timeout_s is still "running" (not yet overdue), and age ==
+        # timeout_s+120 is still "overdue" (not yet died) -- the ages most likely to flip
+        # silently under a future off-by-one refactor.
         root = self._root_with_loop("l1", conf_extra="timeout_s=60")
-        self._insert_unfinished_run(root, "l1", started_secs_ago=10)
-        self.assertIn("running", self._generate(root))
+
+        self._insert_unfinished_run(root, "l1", started_secs_ago=60)  # == timeout_s
+        html = self._generate(root)
+        self.assertIn('<span class="badge running">running</span>', html)
+        self.assertNotIn('<span class="badge overdue">overdue</span>', html)
+        self.assertNotIn('<span class="badge died">died</span>', html)
+
         self._reset_runs(root)
-        self._insert_unfinished_run(root, "l1", started_secs_ago=90)
-        self.assertIn("overdue", self._generate(root))
+        self._insert_unfinished_run(
+            root, "l1", started_secs_ago=180
+        )  # == timeout_s+120
+        html = self._generate(root)
+        self.assertIn('<span class="badge overdue">overdue</span>', html)
+        self.assertNotIn('<span class="badge running">running</span>', html)
+        self.assertNotIn('<span class="badge died">died</span>', html)
+
         self._reset_runs(root)
-        self._insert_unfinished_run(root, "l1", started_secs_ago=300)
-        self.assertIn("died", self._generate(root))
+        self._insert_unfinished_run(
+            root, "l1", started_secs_ago=181
+        )  # == timeout_s+120+1
+        html = self._generate(root)
+        self.assertIn('<span class="badge died">died</span>', html)
+        self.assertNotIn('<span class="badge running">running</span>', html)
+        self.assertNotIn('<span class="badge overdue">overdue</span>', html)
 
     def test_running_badge_exact_markup_and_not_needs_attention(self):
         root = self._root_with_loop("l2", conf_extra="timeout_s=60")

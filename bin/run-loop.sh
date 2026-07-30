@@ -411,8 +411,11 @@ chmod 700 "$OUT_DIR"
 
 db_start_run
 
-# (Amendment 2) best-effort "running now" regen — NEVER blocks or fails the run
-"$PY" "$ROOT/bin/lock.py" check --name _dashboard >/dev/null 2>&1 && \
+# (Amendment 2) best-effort "running now" regen — NEVER blocks or fails the run.
+# check-then-generate is advisory (TOCTOU: the lock could be taken between the check and
+# the generate call) — safe only because generate.py always writes via a unique tmp file +
+# atomic os.rename, so a racing writer can never corrupt or interleave with another's output.
+"$PY" "$ROOT/bin/lock.py" check --name _dashboard --root "$ROOT" >/dev/null 2>&1 && \
   "$PY" "$ROOT/dashboard/generate.py" --root "$ROOT" >/dev/null 2>&1 || true
 
 # finish_run <runner_status> <loop_status> <effective_status> <attempts> \

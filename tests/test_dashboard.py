@@ -490,7 +490,10 @@ class GenerateIntegrationTests(unittest.TestCase):
         with open(out) as f:
             html = f.read()
         self.assertIn("</html>", html.lower())
-        leftover_tmp = [p for p in glob.glob(os.path.join(out_dir, "*")) if p != out]
+        reports_out = os.path.join(out_dir, "reports.html")
+        leftover_tmp = [
+            p for p in glob.glob(os.path.join(out_dir, "*")) if p not in (out, reports_out)
+        ]
         self.assertEqual(leftover_tmp, [], f"leftover tmp files: {leftover_tmp}")
 
     def test_precedence_in_full_pipeline_completed_alert_renders_red(self):
@@ -1371,6 +1374,166 @@ class FailureSurfacingTests(unittest.TestCase):
         conn.close()
         html = self._generate()
         self.assertNotIn('class="report-drawer"', html)
+
+
+def _fixture_page(loop, run_id, title="Fixture page"):
+    import json as _json
+
+    meta = {
+        "loop": loop,
+        "run_id": run_id,
+        "generated_at": "2026-07-30T00:00:01Z",
+        "title": title,
+        "page_class": "snapshot",
+        "totals": {"findings": 5},
+    }
+    env = _json.dumps({"meta": meta, "data": {}}).replace("</", "<\\/")
+    return (
+        "<!DOCTYPE html><html><body>"
+        f'<script type="application/json" id="report-data">{env}</script>'
+        "</body></html>"
+    )
+
+
+class ReportPagesDashboardTests(unittest.TestCase):
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+        self._install_page_envelope()
+        self.conn = self.fx.init_db()
+
+    def _install_page_envelope(self):
+        src = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin"
+        )
+        dst = os.path.join(self.fx.root, "bin")
+        os.makedirs(dst, exist_ok=True)
+        for name in ("page_envelope.py", "redact.py"):
+            shutil.copyfile(os.path.join(src, name), os.path.join(dst, name))
+
+    def _promoted_run(self, name, run_id, started):
+        self.fx.add_run(
+            self.conn,
+            run_id,
+            name,
+            started,
+            finished_at=started,
+            runner_status="completed",
+            loop_status="ok",
+            effective_status="ok",
+            headline="h",
+        )
+        self.conn.execute(
+            "UPDATE runs SET contract_path=? WHERE run_id=?",
+            (f"state/runs/{run_id}/contract.json", run_id),
+        )
+        self.conn.commit()
+
+    def _write_page(self, name, content):
+        d = os.path.join(self.fx.root, "reports", name)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "latest.html"), "w") as f:
+            f.write(content)
+
+    def _enable_page(self, name):
+        d = os.path.join(self.fx.root, "loops.d", name)
+        os.makedirs(d, exist_ok=True)
+        render = os.path.join(d, "render.sh")
+        with open(render, "w") as f:
+            f.write("#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(render, 0o755)
+
+    def test_row_links_page_when_fresh(self):
+        self.fx.add_loop("pgl")
+        self._enable_page("pgl")
+        self._promoted_run("pgl", "20260730T000000Z-pgl-abc123", iso(NOW))
+        self.fx.write_latest_json("pgl", {"findings": [], "report_markdown": ""})
+        self._write_page("pgl", _fixture_page("pgl", "20260730T000000Z-pgl-abc123"))
+        html = generate.generate(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("../reports/pgl/latest.html", html)
+        self.assertNotIn("page-stale", html)
+
+    def test_row_page_gets_stale_badge_on_run_id_mismatch(self):
+        self.fx.add_loop("pgl")
+        self._enable_page("pgl")
+        self._promoted_run("pgl", "20260730T000000Z-pgl-abc123", iso(NOW))
+        self.fx.write_latest_json("pgl", {"findings": [], "report_markdown": ""})
+        self._write_page("pgl", _fixture_page("pgl", "OLD-RUN-ID"))
+        html = generate.generate(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("page-stale", html)
+
+    def test_reports_page_lists_entry_with_chips_and_history(self):
+        self.fx.add_loop("pgl")
+        self._promoted_run("pgl", "20260730T000000Z-pgl-abc123", iso(NOW))
+        self._write_page("pgl", _fixture_page("pgl", "20260730T000000Z-pgl-abc123"))
+        d = os.path.join(self.fx.root, "reports", "pgl")
+        for stamp in ("2026-07-28-0100", "2026-07-29-0100"):
+            with open(os.path.join(d, f"{stamp}.html"), "w") as f:
+                f.write("x")
+        reports_html = generate.generate_reports(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("Fixture page", reports_html)
+        self.assertIn("findings", reports_html)
+        self.assertIn("2026-07-29-0100.html", reports_html)
+
+    def test_reports_page_marks_page_enabled_loop_with_no_page(self):
+        d = self.fx.add_loop("bare")
+        render = os.path.join(d, "render.sh")
+        with open(render, "w") as f:
+            f.write("#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(render, 0o755)
+        reports_html = generate.generate_reports(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("no page yet", reports_html)
+
+    def test_reports_page_no_meta_fallback(self):
+        self.fx.add_loop("bad")
+        self._write_page("bad", "<html><body>not a real page</body></html>")
+        reports_html = generate.generate_reports(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("no meta", reports_html)
+
+    def test_generate_writes_both_files_atomically(self):
+        self.fx.add_loop("pgl")
+        generate.generate(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+        )
+        self.assertTrue(
+            os.path.isfile(os.path.join(self.fx.root, "dashboard", "loops.html"))
+        )
+        self.assertTrue(
+            os.path.isfile(os.path.join(self.fx.root, "dashboard", "reports.html"))
+        )
 
 
 if __name__ == "__main__":

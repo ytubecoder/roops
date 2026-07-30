@@ -50,8 +50,7 @@
 
 7. Taildrop copies to the desktop machine
    - Run: tailscale file cp ~/projects/loops/site/index.html ~/projects/loops/site/ui.html ~/projects/loops/site/brandkit/index.html desktop-7dms6vl:
-   - Note: Taildrop's inbox is flat — brandkit/index.html arrives as a second index.html (receiver renames); mention this in the caption when sending
-   - Expected outcome: TAILDROP_OK-style clean exit (version-mismatch warning is harmless); files land in the desktop's Tailscale inbox/Downloads
+   - Expected outcome: TAILDROP_OK-style clean exit (version-mismatch warning is harmless); files land in the desktop's Tailscale inbox/Downloads (the brandkit file arrives as a second flat index.html — receiver renames; say so in the caption when sending)
    - If fails: `tailscale status` — confirm desktop-7dms6vl is online, retry
 
 ## Verification

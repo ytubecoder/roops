@@ -1408,13 +1408,34 @@ class TagsProvenanceEventsTests(unittest.TestCase):
         html = self._generate(root)
         self.assertNotIn('class="provenance', html)
 
-    def test_no_tags_no_chip_and_no_data_tags_attribute(self):
+    def test_no_tags_no_chip_but_data_tags_attribute_present_empty(self):
+        # Fix round 1: an untagged loop must still carry `data-tags=""` (not omit the
+        # attribute) -- the client-side filter only touches `[data-tags]` elements, so an
+        # element missing the attribute entirely would stay visible under every tag
+        # selection instead of being correctly hidden. No visible chips either way.
         root = self._root_with_loop("untagged")
         html = self._generate(root)
         self.assertNotIn('class="tag"', html)
-        # the filter JS's `[data-tags]` selector is expected boilerplate; only the
-        # actual HTML attribute (with its opening quote) is what must be absent
-        self.assertNotIn('data-tags="', html)
+        self.assertIn('<tr data-tags="">', html)
+        self.assertIn('id="loop-untagged" data-tags=""', html)
+
+    def test_tag_filter_hides_untagged_loops_structural_precondition(self):
+        # Selecting a tag must show ONLY loops carrying that tag (matches loopctl's
+        # `list --tag` exact-match contract) -- an untagged loop must never leak through.
+        # We can't run the browser-side JS in this test, so we assert the structural
+        # precondition the JS logic depends on: every loop row/section carries a
+        # `data-tags` attribute (queryable via `[data-tags]`), empty for the untagged
+        # loop, so `''.split(' ')` -> `['']` never matches a real tag and the JS hides it.
+        root = self._root_with_loop("tagged", tags=["project:x"])
+        self.fx.add_loop("untagged")
+        html = self._generate(root)
+        self.assertIn('<tr data-tags="project:x">', html)
+        self.assertIn('<tr data-tags="">', html)
+        self.assertIn('id="loop-tagged" data-tags="project:x"', html)
+        self.assertIn('id="loop-untagged" data-tags=""', html)
+        # the JS must match tags exactly against the split list, not treat a missing
+        # attribute as "always visible"
+        self.assertIn("querySelectorAll('[data-tags]')", html)
 
     def test_tag_filter_select_only_rendered_when_tags_exist(self):
         root = self._root_with_loop("untagged")
@@ -1450,6 +1471,21 @@ class TagsProvenanceEventsTests(unittest.TestCase):
         html = self._generate(root)
         self.assertIn('id="recent-events"', html)
         self.assertIn("no lifecycle events yet", html)
+
+    def test_survives_pre_amendment_2_sqlite_missing_loop_events_table(self):
+        # Fix round 1: a state/loops.sqlite created before this branch has no loop_events
+        # table until something re-runs db.py init. generate() must degrade gracefully
+        # (empty events strip, no provenance line) rather than crashing with
+        # sqlite3.OperationalError: no such table: loop_events.
+        root = self._root_with_loop("l1")
+        conn = sqlite3.connect(self.fx.db_path)
+        conn.execute("DROP TABLE loop_events")
+        conn.commit()
+        conn.close()
+        html = self._generate(root)
+        self.assertIn('id="recent-events"', html)
+        self.assertIn("no lifecycle events yet", html)
+        self.assertNotIn('class="provenance', html)
 
     def test_recent_events_strip_limited_to_15_fleet_wide(self):
         root = self._root_with_loop("l1")

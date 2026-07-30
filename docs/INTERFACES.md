@@ -809,20 +809,26 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   with a truncation marker; the `latest.md` link is retained alongside.
 - **Tags + provenance + recent-events strip (Amendment 2 — 2026-07-30):** rendered from
   `loop.conf`'s `tags=` and the `loop_events` table (§3) — never re-derived from markdown.
-  Loop rows and sections carry `data-tags="a b c"` (space-separated, omitted when a loop has
-  no tags); tag chips (`<span class="tag">`) render next to the loop name in both the fleet
-  row and its per-loop section. A `<select id="tag-filter">` is rendered only when at least
-  one tag exists fleet-wide, populated from the union of every loop's tags; its `onchange`
-  runs inline vanilla JS that toggles `display:none` on non-matching `[data-tags]` elements —
-  **client-side only**, no server round-trip, no query-string state. Each per-loop section
-  shows a provenance line for the loop's most recent `created`/`imported` event (found by
-  filtering `event IN ('created','imported')` in SQL before any `LIMIT`, so the founding event
-  is never lost behind later `paused`/`resumed`/etc. rows): `<event> from <source> by <actor>,
-  <date>` when that event's `detail` JSON carries a `source_skill`, else `<event> by <actor>,
-  <date>`; no such event ⇒ no line rendered. A fleet-wide `<section id="recent-events">` lists
-  the last 15 `loop_events` rows (newest first, `load_loop_events(conn, limit=15)`); zero
-  events still renders the section, with a literal "no lifecycle events yet" line rather than
-  omitting it.
+  Every loop row and section carries `data-tags="a b c"` (space-separated; `data-tags=""`,
+  present but empty, when the loop has no tags — the attribute is never omitted, so the
+  filter's `[data-tags]` selector reaches every loop and an untagged one is correctly hidden
+  rather than defaulting to always-visible); tag chips (`<span class="tag">`) render next to
+  the loop name in both the fleet row and its per-loop section, but only when the loop has
+  tags. A `<select id="tag-filter">` is rendered only when at least one tag exists fleet-wide,
+  populated from the union of every loop's tags; its `onchange` runs inline vanilla JS that
+  exact-matches the selected tag against each element's split `data-tags` list and toggles
+  `display:none` on non-matching `[data-tags]` elements — **client-side only**, no server
+  round-trip, no query-string state; selecting a tag shows ONLY loops carrying it (same
+  semantics as `loopctl list --tag`, §8). Each per-loop section shows a provenance line for
+  the loop's most recent `created`/`imported` event (found by filtering
+  `event IN ('created','imported')` in SQL before any `LIMIT`, so the founding event is never
+  lost behind later `paused`/`resumed`/etc. rows): `<event> from <source> by <actor>, <date>`
+  when that event's `detail` JSON carries a `source_skill`, else `<event> by <actor>, <date>`;
+  no such event ⇒ no line rendered. A fleet-wide `<section id="recent-events">` lists the last
+  15 `loop_events` rows (newest first, `load_loop_events(conn, limit=15)`); zero events still
+  renders the section, with a literal "no lifecycle events yet" line rather than omitting it.
+  Both `load_loop_events` and the per-loop provenance lookup degrade to `[]`/`None` (not a
+  crash) against a pre-Amendment-2 sqlite whose `loop_events` table doesn't exist yet.
 - Style: bold and distinctive, not generic corporate; dark-friendly; function first, dense over
   airy. It is a status board read at a glance, not a marketing page.
 

@@ -480,27 +480,36 @@ def _latest_heartbeat(conn, loop_name):
 
 def load_loop_events(conn, limit=15):
     """Fleet-wide most-recent lifecycle events (§3 `loop_events`), newest first.
-    Powers the `<section id="recent-events">` strip."""
+    Powers the `<section id="recent-events">` strip. A `state/loops.sqlite` created before
+    Amendment 2 has no `loop_events` table until something re-runs `db.py init` -- degrade to
+    an empty list rather than crashing the whole page (fix round 1, 2026-07-30)."""
     if conn is None:
         return []
-    rows = conn.execute(
-        "SELECT * FROM loop_events ORDER BY ts DESC, id DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM loop_events ORDER BY ts DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
     return [dict(r) for r in rows]
 
 
 def _loop_provenance(conn, loop_name):
     """Most recent created/imported event for a loop (Amendment 2). The `event IN (...)`
     filter runs in SQL before the LIMIT so the founding event is never lost behind a run of
-    later paused/resumed/etc. rows — same fix as loopctl's `status --json` provenance lookup."""
+    later paused/resumed/etc. rows — same fix as loopctl's `status --json` provenance lookup.
+    Same missing-table degradation as load_loop_events (fix round 1, 2026-07-30)."""
     if conn is None:
         return None
-    row = conn.execute(
-        "SELECT * FROM loop_events WHERE loop_name=? AND event IN ('created','imported') "
-        "ORDER BY ts DESC, id DESC LIMIT 1",
-        (loop_name,),
-    ).fetchone()
+    try:
+        row = conn.execute(
+            "SELECT * FROM loop_events WHERE loop_name=? AND event IN ('created','imported') "
+            "ORDER BY ts DESC, id DESC LIMIT 1",
+            (loop_name,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
     return dict(row) if row else None
 
 
@@ -661,9 +670,11 @@ def _render_tag_chips(tags):
 
 
 def _data_tags_attr(tags):
-    if not tags:
-        return ""
-    return f' data-tags="{e(" ".join(tags))}"'
+    """Always emits `data-tags="..."` (empty string when the loop has no tags) -- fix round
+    1, 2026-07-30. The client-side filter only ever touches `[data-tags]` elements; a loop
+    row/section that omitted the attribute entirely would stay visible under every tag
+    selection instead of correctly being hidden alongside every other non-matching loop."""
+    return f' data-tags="{e(" ".join(tags or []))}"'
 
 
 def _event_source_skill(detail):

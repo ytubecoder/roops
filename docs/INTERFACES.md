@@ -779,10 +779,14 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   estimates ("in 4m" for a loop that will never fire) made the column meaningless.
   **(Console amendment, §13):** the same file-presence + conf-parse check is now three-way, still
   without a `launchctl` subprocess: plist present and `enabled=true` → 巡 "schedule loaded"
-  (staleness applies, next-run shown); plist present and `enabled=false` → 休 "paused" (rounds
-  toggled off via console/`loopctl pause`; staleness-exempt, `next` reads "paused"); no plist →
-  休 "no schedule loaded" (supervised-only, as above). Only the first state counts toward
-  `needs_attention` on schedule grounds.
+  (next-run shown); plist present and `enabled=false` → 休 "paused" (rounds toggled off via
+  console/`loopctl pause`; `next` reads "paused"); no plist → 休 "no schedule loaded"
+  (supervised-only, as above). **Staleness and `needs_attention` are `enabled`-blind**: pausing
+  a loop does NOT exempt it from either — `stale` keys on `installed` (plist presence) alone,
+  so a paused loop whose last run is overdue still renders `stale` and still counts toward
+  `needs_attention`. Only the no-plist state is staleness-exempt (the pre-existing 2026-07-30
+  amendment above). Open question, deliberately unresolved: whether a paused loop *should* be
+  staleness-exempt — today it is not.
 - **Died-run detection (§4.6):** a run row with `finished_at IS NULL` older than
   `timeout_s + 120s` renders as `died` (red, harness-problem marker) and counts toward
   `needs_attention`.

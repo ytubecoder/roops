@@ -475,129 +475,19 @@ def _write_file(path, content):
 
 # ---------------------------------------------------------------------------
 # Scaffold templates (§8 "loopctl new scaffolding")
+#
+# The template text itself lives in bin/skill_import.py (Amendment 2,
+# 2026-07-30) — `skill_import.apply()` needs the exact same SPEC.md/prompt.md/
+# precheck.sh frame `loopctl new` uses, so the strings have a single home and
+# both call sites reference it rather than drifting apart. These names are
+# kept as local aliases purely so `cmd_new` below doesn't need touching.
 # ---------------------------------------------------------------------------
 
-_LOOP_CONF_TEMPLATE = """\
-# Scaffolded by `loopctl new __NAME__` on __DATE__.
-# TODO before installing: pick a real `schedule` (see docs/INTERFACES.md §5.1)
-# and fill in `description`. Optional keys below are commented with their
-# permissive defaults — uncomment and edit only what this loop needs.
-name=__NAME__
-description="TODO: one-line description of what this loop does"
-type=__TYPE__
-engine=__ENGINE__
-# model=
-schedule=manual
-# workdir=$LOOPS_ROOT
-# timeout_s=900
-# enabled=true
-# retention_days=30
-# retry_transient=1
-# perm_fs_write=report_only
-# perm_network=none
-# perm_local_exec=none
-# perm_remote_mutation=none
-# exec_allowlist=
-# credential_env=
-# remote_mutation_justification=
-# notes=
-"""
-
-_PROMPT_MD_TEMPLATE = """\
-# __NAME__ — prompt
-
-TODO: describe what this loop should investigate/monitor and report on.
-
-## Output contract
-
-Your final message MUST be a single JSON object conforming exactly to
-`contract/contract.schema.json` — schema_version, run_id, status,
-status_reason, headline, report_markdown, metrics, findings. No prose
-outside that JSON object.
-
-- `run_id` MUST equal the value from the `## RUN CONTEXT` block the runner
-  appends to this prompt — copy it exactly; never invent your own.
-- `metrics` MUST be a JSON **string** containing a serialized JSON object
-  (e.g. the string `"{}"` when there is nothing to report) — not a nested
-  JSON object.
-- `findings` is required but MAY be an empty array.
-
-## Findings prompt contract
-
-1. Re-emit a still-true finding with its **same `finding_id`** — never
-   invent a new id for a recurring condition.
-2. Do not re-argue a `DISMISSED` finding unless the underlying situation has
-   **materially changed**; if it has, say what changed.
-3. Still emit `SNOOZED` findings if true — suppression is the runner's job,
-   not the model's.
-
-## Finding identity
-
-[FILL: derivation rule — how finding_id is derived from the durable identity
-of the condition being reported, e.g. `<subject>:<condition>`. Must be
-deterministic and stable across runs for the same real-world condition, and
-must NOT embed volatile data (timestamps, run ids, counts, shifting line
-numbers).]
-"""
-
-_SPEC_MD_TEMPLATE = """\
-# __NAME__ — intake spec
-
-1. Purpose & stop condition
-[FILL: what this loop exists to catch/report, and what "done" looks like]
-
-2. Agentic pattern
-[FILL: note — every v1 loop is outer-shape Human-in-the-loop; iterate-across-invocations
-is v2 — record the aspiration here, but ship single-shot for v1]
-
-3. Type & data flow (precheck gathers vs engine interprets)
-[FILL: what precheck.sh deterministically gathers vs what the engine is asked to interpret]
-
-4. Cadence
-[FILL: schedule and why]
-
-5. Scope & exclusions
-[FILL: what's in scope, what's explicitly excluded]
-
-6. Guardrails
-[FILL: verbatim guardrails this loop must respect]
-
-7. Permission axes + justification
-[FILL: perm_fs_write / perm_network / perm_local_exec / perm_remote_mutation values and why]
-
-8. Finding identity (what a finding IS + finding_id derivation rule)
-[FILL: same derivation rule as prompt.md's ## Finding identity section]
-
-9. Tier-1 semantics (ok/warn/alert meaning)
-[FILL: what ok / warn / alert mean for this loop]
-
-10. Tier-2 metrics + panels
-[FILL: metrics this loop emits and how dashboard.json renders them]
-
-11. Engine/model + budget
-[FILL: engine, model, expected tokens/run, retry_transient, timeout_s]
-"""
-
-_PRECHECK_SH_TEMPLATE = """\
-#!/usr/bin/env bash
-# __NAME__/precheck.sh — deterministic gathering step (script->agent pattern,
-# docs/INTERFACES.md §4.1/§6.2): this script does cheap, deterministic data
-# gathering; its stdout is injected into the engine's prompt as ground truth.
-# It must be idempotent and side-effect-free beyond read-only inspection. For
-# type=watchdog loops, THIS SCRIPT IS THE JOB — a non-zero exit or a
-# failure-shaped result escalates to the engine for diagnosis (§4.1).
-set -euo pipefail
-
-# TODO: gather deterministic signal here and print it to stdout.
-echo "TODO: implement precheck for __NAME__"
-"""
-
-
-def _render_template(template, name, **extra):
-    out = template.replace("__NAME__", name)
-    for key, value in extra.items():
-        out = out.replace(f"__{key.upper()}__", str(value))
-    return out
+_LOOP_CONF_TEMPLATE = skill_import._LOOP_CONF_TEMPLATE
+_PROMPT_MD_TEMPLATE = skill_import._PROMPT_MD_TEMPLATE
+_SPEC_MD_TEMPLATE = skill_import._SPEC_MD_TEMPLATE
+_PRECHECK_SH_TEMPLATE = skill_import._PRECHECK_SH_TEMPLATE
+_render_template = skill_import._render_template
 
 
 # ---------------------------------------------------------------------------
@@ -1104,8 +994,7 @@ def _print_import_analysis(skill_path, analysis):
 
 def cmd_import(args):
     if args.apply:
-        print("--apply: not implemented yet (Task 12)", file=sys.stderr)
-        return 2
+        return _cmd_import_apply(args)
 
     try:
         skill = skill_import.parse_skill(args.skill_path)
@@ -1119,6 +1008,91 @@ def cmd_import(args):
         print(json.dumps(analysis))
     else:
         _print_import_analysis(args.skill_path, analysis)
+    return 0
+
+
+def _cmd_import_apply(args):
+    """`loopctl import <skill-path> --apply --answers <path>` (Task 12 —
+    Amendment 2, 2026-07-30, docs/INTERFACES.md §8). Collision handling
+    (existing `loops.d/<name>` dir) lives HERE rather than in
+    `skill_import.apply()` — it's a `--overwrite` CLI concern, not something
+    `apply()` itself needs to know about."""
+    if not args.answers:
+        print("--apply requires --answers <path to answers.json>", file=sys.stderr)
+        return 2
+
+    try:
+        with open(args.answers, "r") as f:
+            answers = json.load(f)
+    except OSError as e:
+        print(f"cannot read answers file {args.answers!r}: {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:  # json.JSONDecodeError is a ValueError subclass
+        print(f"invalid JSON in answers file {args.answers!r}: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        skill = skill_import.parse_skill(args.skill_path)
+    except skill_import.SkillParseError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    analysis = skill_import.analyze(skill)
+
+    name = args.name or analysis["proposed_name"]
+    if not loopconf.NAME_RE.match(name):
+        print(
+            f"invalid loop name {name!r}: must match ^[a-z][a-z0-9-]{{1,40}}$",
+            file=sys.stderr,
+        )
+        return 2
+
+    dest_dir = os.path.join(args.root, args.from_dir, name)
+    if os.path.exists(dest_dir) and not args.overwrite:
+        print(
+            f"refusing to scaffold {name}: {dest_dir} already exists (use --overwrite)",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        written = skill_import.apply(skill, analysis, answers, dest_dir)
+    except skill_import.SkillApplyError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    _record_event(
+        args.root,
+        name,
+        "imported",
+        args.actor,
+        detail={
+            "source_skill": args.skill_path,
+            "skill_sha256": skill["sha256"],
+            "answers_provenance": answers.get("provenance") or {},
+            "overwrite": bool(args.overwrite),
+        },
+    )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "name": name,
+                    "dir": dest_dir,
+                    "files": [os.path.basename(p) for p in written],
+                }
+            )
+        )
+    else:
+        print(f"imported {name} -> {dest_dir}")
+        for p in written:
+            print(f"  wrote {os.path.relpath(p, args.root)}")
+        print()
+        print("Next steps (import never installs by itself):")
+        print(f"  loopctl validate {name}")
+        print(f"  loopctl run {name}       # read the report against ground truth")
+        print(f"  loopctl install {name}")
     return 0
 
 

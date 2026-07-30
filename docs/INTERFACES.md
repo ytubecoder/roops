@@ -671,19 +671,43 @@ Global flags: `--root R` (default `$LOOPS_ROOT`), `--json` (machine-readable out
 2026-07-30). Exit codes: `0` ok · `1` operation failed · `2` usage.
 
 **`loopctl import` (Amendment 2 — 2026-07-30):** wraps `bin/skill_import.py`'s `parse_skill()` /
-`analyze()` (and, once Task 12 lands, `apply()`) to convert an existing Agent Skill directory into a
-gap-analysis report or a scaffolded loop. `--analyze` is static and zero-token: it prints (or, with
-`--json`, emits verbatim) the `analyze()` dict — proposed name, type, engine, the permission-axes
-floor, detected flags, the eleven-question intake rubric (`q1_purpose`..`q11_budget`, each bucketed
+`analyze()` / `apply()` to convert an existing Agent Skill directory into a gap-analysis report or a
+scaffolded loop. `--analyze` is static and zero-token: it prints (or, with `--json`, emits verbatim)
+the `analyze()` dict — proposed name, type, engine, the permission-axes floor, detected flags, the
+eleven-question intake rubric (`q1_purpose`..`q11_budget`, each bucketed
 `answered`/`derived`/`missing`/`incompatible`), a precheck proposal whose every line is COMMENTED
 (never live code — `[read-only?]` is a heuristic hint requiring human review, not a guarantee), and
 the answers still needed to finish the intake. A blocked skill (credentials found, or an MCP
 dependency with no CLI equivalent in the same file) still analyzes successfully — `blocked` is a
 field in the output, never a CLI failure; only a missing/unparseable `SKILL.md`
 (`skill_import.SkillParseError`) exits 1. `--analyze` and `--apply` form a required mutually exclusive
-group (neither given, or both given, is a usage error — exit 2); `--apply` is accepted by the parser
-now but not yet implemented (Task 12) — it prints a placeholder message and exits 2. Full design,
-the rubric-id-to-`LOOP_AUTHORING.md`-§2 mapping, and the reshaping rules: `docs/SKILL_IMPORT.md`.
+group (neither given, or both given, is a usage error — exit 2). Full design, the
+rubric-id-to-`LOOP_AUTHORING.md`-§2 mapping, and the reshaping rules: `docs/SKILL_IMPORT.md`.
+
+**`loopctl import --apply` semantics (Amendment 2 — 2026-07-30):** `--apply` requires `--answers
+<path to answers.json>` (missing it is a usage error — exit 2); the file's shape is
+`docs/SKILL_IMPORT.md` §7. `cmd_import` re-parses the skill and re-runs `analyze()` on every
+invocation (never trusts a cached analysis), then calls `skill_import.apply(skill, analysis,
+answers, dest_dir)`, which raises `skill_import.SkillApplyError` (message printed to stderr, exit 1)
+for every refusal:
+- **Stale answers:** `answers["skill_sha256"]` not equal to the freshly re-parsed skill's `sha256`,
+  or `answers["analyzer_version"]` not equal to `analysis["analyzer_version"]` — re-run `--analyze`
+  rather than hand-patching either value.
+- **Blocked without acknowledgement:** `analysis["blocked"]` true and
+  `answers["acknowledge_blocked"]` not true — the message names the blocking reasons.
+- With `acknowledge_blocked: true`, a blocked skill scaffolds anyway, but `apply()` forces
+  `schedule=manual` regardless of any `q4_cadence` answer and appends a
+  `## BLOCKED — read before scheduling` section to `SPEC.md` naming the blockers.
+
+**Collision handling is `cmd_import`'s, not `apply()`'s:** an existing `loops.d/<name>/` (`--name`
+if given, else `analysis["proposed_name"]`) refuses with exit 1 unless `--overwrite` is passed; with
+`--overwrite`, `apply()` runs and overwrites the five scaffold files in place, and the recorded
+`imported` event's detail carries `"overwrite": true`. On success (never installs — same downstream
+gates as any other loop: `validate` → `run` → `install`), `cmd_import` records the `imported` event
+(`db.py record-event`) with detail `{"source_skill", "skill_sha256", "answers_provenance",
+"overwrite"}`. Answer-precedence and template-reuse rules (an explicit `answers` entry always wins
+over the rubric's own value, and `apply()` reuses `loopctl new`'s exact SPEC.md/prompt.md/
+precheck.sh templates rather than duplicating the strings): `docs/SKILL_IMPORT.md` §7.
 
 **Lifecycle events (Amendment 2 — 2026-07-30):** `new`, `install`, `uninstall`, `pause`, and
 `resume` each append a `loop_events` row (via `db.py record-event`) on their success path, using

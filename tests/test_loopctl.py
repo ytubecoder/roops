@@ -24,6 +24,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import ClassVar
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOOPCTL = REPO_ROOT / "bin" / "loopctl"
@@ -1919,12 +1920,13 @@ class TestImport(LoopsRootTestCase):
         )
         self.assertEqual(r.returncode, 2)
 
-    def test_import_apply_not_implemented_yet(self):
+    def test_import_apply_requires_answers(self):
+        # Task 12: --apply is implemented now, but still needs --answers.
         r = run_cli(
             ["import", os.path.join(FIX, "clean-check"), "--apply", "--root", self.root]
         )
         self.assertEqual(r.returncode, 2)
-        self.assertIn("not implemented", (r.stdout + r.stderr).lower())
+        self.assertIn("--answers", r.stdout + r.stderr)
 
     def test_import_analyze_human_form_shows_header_rubric_and_safety_framing(self):
         r = run_cli(
@@ -1954,6 +1956,295 @@ class TestImport(LoopsRootTestCase):
         self.assertIn("heuristic", out.lower())
         # answers needed, numbered
         self.assertIn("q4_cadence", out)
+
+
+# ---------------------------------------------------------------------------
+# loopctl import --apply (Task 12)
+# ---------------------------------------------------------------------------
+
+
+class TestImportApply(LoopsRootTestCase):
+    # The brief's own filled example (docs/SKILL_IMPORT.md §7), against the
+    # clean-check fixture — skill_sha256 is filled in per-test by
+    # _write_answers() from a live --analyze, never hardcoded here.
+    CLEAN_ANSWERS: ClassVar[dict] = {
+        "analyzer_version": "1",
+        "skill_sha256": None,
+        "answers": {
+            "q1_purpose": (
+                "Report dirty/unpushed repos; done per-firing = report written; "
+                "cross-run done = repo becomes clean"
+            ),
+            "q4_cadence": "daily:07:30",
+            "q5_scope": "~/projects only; exclude maguyva",
+            "q8_finding_identity": (
+                "<repo-dir-name>:<condition> where condition is dirty|unpushed"
+            ),
+            "q9_semantics": "ok=all clean; warn=any dirty/unpushed; alert=never",
+            "q10_metrics": (
+                '{"panels":[{"title":"Dirty","metric":"repos.dirty","type":"number"}]}'
+            ),
+            "q11_budget": "engine default model; ~1k tokens; retry 1; timeout 300",
+        },
+        "provenance": {"q4_cadence": "user"},
+        "acknowledge_blocked": False,
+    }
+
+    def _scaffold_root(self):
+        return self.root
+
+    def _analyze_json(self, root, fixture):
+        r = run_cli(
+            [
+                "import",
+                os.path.join(FIX, fixture),
+                "--analyze",
+                "--json",
+                "--root",
+                root,
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        return json.loads(r.stdout)
+
+    def _write_answers(self, root, filename, answers, fixture=None):
+        """Deep-copies `answers` (tests must never mutate the shared class
+        constant) and, if `skill_sha256` is falsy, fills it in from a live
+        `--analyze` against `fixture` — never hardcoded, so this always
+        tracks whatever the analyzer currently produces."""
+        answers = json.loads(json.dumps(answers))
+        if fixture is not None and not answers.get("skill_sha256"):
+            answers["skill_sha256"] = self._analyze_json(root, fixture)["skill_sha256"]
+        path = os.path.join(root, filename)
+        with open(path, "w") as f:
+            json.dump(answers, f)
+        return path
+
+    def _loopctl(self, root, *args):
+        return run_cli(list(args) + ["--root", root])
+
+    def _loopctl_rc(self, root, *args):
+        return self._loopctl(root, *args).returncode
+
+    def _db_query_json(self, root, query_name, **kwargs):
+        args = ["query", query_name, "--root", root]
+        for k, v in kwargs.items():
+            args += [f"--{k.replace('_', '-')}", str(v)]
+        r = run_db(args)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    # --- the load-bearing test --------------------------------------------
+
+    def test_apply_scaffold_passes_validate(self):
+        root = self._scaffold_root()
+        self._write_answers(
+            root, "answers.json", self.CLEAN_ANSWERS, fixture="clean-check"
+        )
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+
+        rc = self._loopctl_rc(root, "validate", "repo-hygiene-check")
+        self.assertEqual(rc, 0)
+
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events[0]["event"], "imported")
+
+        pre = _read(os.path.join(root, "loops.d", "repo-hygiene-check", "precheck.sh"))
+        for line in pre.splitlines():
+            if "git " in line:
+                self.assertTrue(
+                    line.lstrip().startswith("#")
+                )  # proposals stay commented
+
+    # --- stale hash ---------------------------------------------------------
+
+    def test_apply_stale_hash_refused(self):
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        answers["skill_sha256"] = "0" * 64  # definitely wrong
+        answers_path = os.path.join(root, "answers.json")
+        with open(answers_path, "w") as f:
+            json.dump(answers, f)
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("stale", (r.stdout + r.stderr).lower())
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
+        )
+
+    # --- collision / --overwrite --------------------------------------------
+
+    def test_apply_collision_refused_without_overwrite(self):
+        root = self._scaffold_root()
+        self._write_answers(
+            root, "answers.json", self.CLEAN_ANSWERS, fixture="clean-check"
+        )
+        answers_path = os.path.join(root, "answers.json")
+
+        r1 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r1.returncode, 0, msg=r1.stdout + r1.stderr)
+
+        r2 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r2.returncode, 1)
+        self.assertIn("already exists", (r2.stdout + r2.stderr).lower())
+
+        r3 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--overwrite",
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r3.returncode, 0, msg=r3.stdout + r3.stderr)
+
+        events = self._db_query_json(
+            root, "loop-events", loop="repo-hygiene-check", events="imported"
+        )
+        self.assertGreaterEqual(len(events), 2)
+        latest_detail = json.loads(events[0]["detail"])
+        self.assertTrue(latest_detail["overwrite"])
+        oldest_detail = json.loads(events[-1]["detail"])
+        self.assertFalse(oldest_detail["overwrite"])
+
+    # --- blocked + acknowledge_blocked --------------------------------------
+
+    def test_apply_blocked_needs_acknowledgement(self):
+        root = self._scaffold_root()
+        answers = {
+            "analyzer_version": "1",
+            "skill_sha256": self._analyze_json(root, "needs-creds")["skill_sha256"],
+            "answers": {
+                "q1_purpose": "Report yesterday's failed Stripe charges",
+                "q4_cadence": "daily:08:00",
+                "q5_scope": "the connected Stripe account only",
+                "q8_finding_identity": "stripe:failed-charges",
+                "q9_semantics": "warn=any failed charge yesterday; alert=never",
+                "q10_metrics": '{"panels":[]}',
+                "q11_budget": "engine default model; retry 1; timeout 300",
+            },
+            "provenance": {},
+            "acknowledge_blocked": False,
+        }
+        answers_path = os.path.join(root, "answers.json")
+        with open(answers_path, "w") as f:
+            json.dump(answers, f)
+
+        r1 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "needs-creds"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r1.returncode, 1)
+        self.assertIn("blocked", (r1.stdout + r1.stderr).lower())
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "stripe-failed-charges"))
+        )
+
+        answers["acknowledge_blocked"] = True
+        with open(answers_path, "w") as f:
+            json.dump(answers, f)
+
+        r2 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "needs-creds"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r2.returncode, 0, msg=r2.stdout + r2.stderr)
+
+        loop_dir = os.path.join(root, "loops.d", "stripe-failed-charges")
+        conf_text = _read(os.path.join(loop_dir, "loop.conf"))
+        self.assertIn("schedule=manual", conf_text)
+        spec_text = _read(os.path.join(loop_dir, "SPEC.md"))
+        self.assertIn("## BLOCKED — read before scheduling", spec_text)
+        self.assertIn("credentials", spec_text.lower())
+
+    # --- import grants no dangerous-combo immunity --------------------------
+
+    def test_apply_dangerous_combo_still_fails_validate(self):
+        root = self._scaffold_root()
+        self._write_answers(
+            root, "answers.json", self.CLEAN_ANSWERS, fixture="clean-check"
+        )
+        answers_path = os.path.join(root, "answers.json")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+
+        conf_path = os.path.join(root, "loops.d", "repo-hygiene-check", "loop.conf")
+        text = _read(conf_path)
+        # Hand-edit to a dangerous combo: perm_remote_mutation=allowlist with
+        # no justification and no exec_allowlist — import grants no immunity
+        # from §5.2's dangerous-combination checks.
+        text = text.replace(
+            "perm_remote_mutation=none", "perm_remote_mutation=allowlist"
+        )
+        with open(conf_path, "w") as f:
+            f.write(text)
+
+        rc = self._loopctl_rc(root, "validate", "repo-hygiene-check")
+        self.assertEqual(rc, 1)
 
 
 if __name__ == "__main__":

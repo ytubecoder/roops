@@ -9,6 +9,11 @@ import skill_import
 FIX = os.path.join(os.path.dirname(__file__), "fixtures", "skills")
 
 
+def _read(path):
+    with open(path) as f:
+        return f.read()
+
+
 class TestParseSkill(unittest.TestCase):
     def test_dir_layout(self):
         s = skill_import.parse_skill(os.path.join(FIX, "clean-check"))
@@ -325,6 +330,127 @@ class TestIsReadOnlyCommand(unittest.TestCase):
     def test_grep_dash_o_stays_read_only(self):
         # grep's -o ("only matching") must not be confused with curl's -o.
         self.assertTrue(skill_import._is_read_only_command("grep -o foo file.txt"))
+
+
+class TestApply(unittest.TestCase):
+    """Direct-call coverage of `apply()` (Task 12) — the CLI-level tests in
+    tests/test_loopctl.py cover the end-to-end `loopctl import --apply`
+    contract; these exercise `apply()`'s own precedence/refusal rules in
+    isolation, in particular controller ruling 1 (an explicit `answers`
+    entry wins over the rubric's value, including for already-`answered`/
+    `derived` buckets) which the loopctl-level CLEAN_ANSWERS fixture never
+    happens to exercise since it only answers ids the rubric left missing."""
+
+    def _skill_and_analysis(self, fixture="clean-check"):
+        skill = skill_import.parse_skill(os.path.join(FIX, fixture))
+        analysis = skill_import.analyze(skill)
+        return skill, analysis
+
+    def _answers(self, analysis, **overrides):
+        base = {
+            "analyzer_version": analysis["analyzer_version"],
+            "skill_sha256": analysis["skill_sha256"],
+            "answers": {},
+            "provenance": {},
+            "acknowledge_blocked": False,
+        }
+        base.update(overrides)
+        return base
+
+    def test_explicit_answer_wins_over_already_derived_rubric_value(self):
+        # q2_pattern is "derived" for clean-check (never in answers_needed) —
+        # ruling 1 says an explicit answers["answers"] entry for it still
+        # wins over the rubric's own derived value.
+        skill, analysis = self._skill_and_analysis()
+        self.assertEqual(analysis["rubric"]["q2_pattern"]["bucket"], "derived")
+        answers = self._answers(
+            analysis, answers={"q2_pattern": "custom pattern override"}
+        )
+        dest = tempfile.mkdtemp()
+        skill_import.apply(
+            skill, analysis, answers, os.path.join(dest, "repo-hygiene-check")
+        )
+        spec = _read(os.path.join(dest, "repo-hygiene-check", "SPEC.md"))
+        self.assertIn("custom pattern override", spec)
+        self.assertNotIn(
+            "v1 loops are Human-in-the-loop by design", spec
+        )  # the rubric's derived value was overridden, not appended
+
+    def test_explicit_answer_wins_over_frontmatter_answered_value(self):
+        # q1_purpose is "answered" from frontmatter description — ruling 1
+        # says an explicit answers entry still wins over that too.
+        skill, analysis = self._skill_and_analysis()
+        self.assertEqual(analysis["rubric"]["q1_purpose"]["bucket"], "answered")
+        answers = self._answers(
+            analysis, answers={"q1_purpose": "a totally different purpose"}
+        )
+        dest = tempfile.mkdtemp()
+        skill_import.apply(
+            skill, analysis, answers, os.path.join(dest, "repo-hygiene-check")
+        )
+        spec = _read(os.path.join(dest, "repo-hygiene-check", "SPEC.md"))
+        self.assertIn("a totally different purpose", spec)
+
+    def test_unanswered_id_with_no_rubric_value_stays_fill(self):
+        # No derived-default fallback exists (ruling 2): an id that's
+        # "missing" in the rubric AND absent from answers must stay [FILL:.
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(analysis)  # no answers at all
+        dest = tempfile.mkdtemp()
+        skill_import.apply(
+            skill, analysis, answers, os.path.join(dest, "repo-hygiene-check")
+        )
+        spec = _read(os.path.join(dest, "repo-hygiene-check", "SPEC.md"))
+        self.assertIn("[FILL:", spec)
+
+    def test_apply_returns_the_written_paths(self):
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(analysis)
+        dest = os.path.join(tempfile.mkdtemp(), "repo-hygiene-check")
+        written = skill_import.apply(skill, analysis, answers, dest)
+        self.assertEqual(
+            sorted(os.path.basename(p) for p in written),
+            ["SPEC.md", "dashboard.json", "loop.conf", "precheck.sh", "prompt.md"],
+        )
+        for p in written:
+            self.assertTrue(os.path.isfile(p))
+
+    def test_apply_raises_on_stale_sha256(self):
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(analysis, skill_sha256="0" * 64)
+        dest = tempfile.mkdtemp()
+        with self.assertRaises(skill_import.SkillApplyError):
+            skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
+
+    def test_apply_raises_on_analyzer_version_mismatch(self):
+        skill, analysis = self._skill_and_analysis()
+        answers = self._answers(analysis, analyzer_version="999")
+        dest = tempfile.mkdtemp()
+        with self.assertRaises(skill_import.SkillApplyError):
+            skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
+
+    def test_apply_raises_when_blocked_without_acknowledgement(self):
+        skill, analysis = self._skill_and_analysis("needs-creds")
+        self.assertTrue(analysis["blocked"])
+        answers = self._answers(analysis)  # acknowledge_blocked defaults False
+        dest = tempfile.mkdtemp()
+        with self.assertRaises(skill_import.SkillApplyError):
+            skill_import.apply(skill, analysis, answers, os.path.join(dest, "x"))
+
+    def test_apply_blocked_with_acknowledgement_forces_manual_schedule(self):
+        skill, analysis = self._skill_and_analysis("needs-creds")
+        answers = self._answers(
+            analysis,
+            answers={"q4_cadence": "daily:07:30"},  # would NOT be manual otherwise
+            acknowledge_blocked=True,
+        )
+        dest = tempfile.mkdtemp()
+        loop_dir = os.path.join(dest, "stripe-failed-charges")
+        skill_import.apply(skill, analysis, answers, loop_dir)
+        conf = _read(os.path.join(loop_dir, "loop.conf"))
+        self.assertIn("schedule=manual", conf)
+        spec = _read(os.path.join(loop_dir, "SPEC.md"))
+        self.assertIn("## BLOCKED — read before scheduling", spec)
 
 
 if __name__ == "__main__":

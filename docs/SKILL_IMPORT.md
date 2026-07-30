@@ -8,9 +8,9 @@
 > of a blank `loopctl new`. Everything downstream of the intake interview — the contract, the
 > gates, the disposition workflow — is identical either way.
 >
-> Verified against the code as shipped through Task 10: `bin/skill_import.py`'s `parse_skill()` +
-> `analyze()`, and `bin/loopctl import <skill-path> --analyze [--json]`. `--apply` is not built yet
-> (Task 12) — every mention below is marked as such.
+> Verified against the code as shipped through Task 12: `bin/skill_import.py`'s `parse_skill()` +
+> `analyze()` + `apply()`, and `bin/loopctl import <skill-path> --analyze|--apply [--json]`
+> (Amendment 2, 2026-07-30, `docs/INTERFACES.md` §8).
 >
 > If you're jumping straight to §7 or §8: read §6 first, before uncommenting any proposed precheck
 > line.
@@ -177,7 +177,7 @@ Some situations don't get reshaped — they get blocked. `_build_blocked_info` i
 prefixed `[blocking]` or `[info]` so a downstream consumer can tell an actual block from an
 informational note without parsing prose):
 
-| Situation | Bucket | `--apply` behavior (Task 12 — not built yet, described as the contract) |
+| Situation | Bucket | `--apply` behavior |
 |---|---|---|
 | Needs API key / OAuth / MCP auth (credentials flag fires) | `incompatible`, `blocked=true` | Refuses unless `answers.json` sets `acknowledge_blocked: true`, in which case it scaffolds with `schedule=manual` plus a `## BLOCKED — read before scheduling` section in `SPEC.md` naming the blockers. |
 | MCP-only tooling with no CLI/curl equivalent in the *same source* as the mcp mention | `incompatible`, `blocked=true` | Same acknowledge-and-scaffold-manual path; the blocked tool names land in `SPEC.md`. |
@@ -198,9 +198,10 @@ Two things worth being precise about, verified against `bin/skill_import.py`:
   in `blocked_reasons` either way, including the non-blocking case (`[info] mcp: CLI equivalent
   'curl' found in SKILL.md — not blocked`), so the decision is never silent.
 
-Right now, `--apply` is unimplemented: `loopctl import <path> --apply` prints
-`"--apply: not implemented yet (Task 12)"` to stderr and exits 2, regardless of `--answers`. Use
-`--analyze` (§1, §7) plus the manual recipe (§8) until Task 12 lands.
+`loopctl import <path> --apply --answers <answers.json>` implements exactly this table: without
+`acknowledge_blocked: true` it refuses (exit 1, message naming the blocking reasons); with it, it
+scaffolds anyway, forcing `schedule=manual` regardless of any `q4_cadence` answer and appending the
+`## BLOCKED — read before scheduling` section to `SPEC.md` (§7).
 
 ## 6. Trust — read this before uncommenting anything
 
@@ -260,9 +261,9 @@ verdict to trust.
 
 ## 7. `answers.json` shape
 
-`answers.json` is the response form of `answers_needed` — the file `--apply` will consume once
-Task 12 lands. This shape is the Task 12 contract (`docs/plans/2026-07-30-skill-import-and-agent-surface.md`
-Task 12), not yet implemented:
+`answers.json` is the response form of `answers_needed` — the file `loopctl import <skill-path>
+--apply --answers <path>` consumes (`skill_import.apply()`, Task 12; wired into `bin/loopctl`'s
+`cmd_import` per Amendment 2, 2026-07-30, `docs/INTERFACES.md` §8):
 
 ```json
 {
@@ -282,14 +283,19 @@ Task 12), not yet implemented:
   content — `apply` refuses stale answers if the skill changed underneath them (re-run `--analyze`
   first, don't hand-patch the hash).
 - `answers` maps `question_id` → the chosen value: a selected `options[].id` where the question
-  offered options, free text where it's open. There is no fallback default for an omitted
-  `answers_needed` id — every rubric item that's actually `missing` (§3) is a bare `{"bucket":
-  "missing"}` with no `value` to fall back to. An omitted id simply stays `[FILL: ...]` in the
-  scaffold, and `loopctl validate` hard-fails while any `[FILL:` marker remains
-  (`docs/LOOP_AUTHORING.md` §7) — `apply` never invents an answer. Rubric items already in the
-  `answered`/`derived` buckets need no `answers.json` entry at all: `apply` fills those straight
-  from the rubric's own `value` (§3), not from `answers` — `answers.json` only ever needs to cover
-  what `answers_needed` actually asked for.
+  offered options, free text where it's open. **An explicit `answers[question_id]` entry always
+  wins over the rubric's own `value` for that id** — this holds for every bucket, not just
+  `missing`/`answers_needed` ids: an `answers` entry for an id the rubric already resolved as
+  `answered` or `derived` (or reshaped to `incompatible`) is honored, not ignored, and overrides
+  what the rubric computed. Rubric items already in the `answered`/`derived` buckets need no
+  `answers.json` entry at all — `apply` falls back to the rubric's own `value` (§3) for any id
+  `answers` doesn't mention, so `answers.json` only ever *needs* to cover what `answers_needed`
+  actually asked for; supplying extra entries beyond that is allowed and takes precedence. There is
+  no fallback default for an id that's `missing` in the rubric AND absent from `answers` — every
+  rubric item that's actually `missing` (§3) is a bare `{"bucket": "missing"}` with no `value` to
+  fall back to, and no derived-default synthesis exists to fill the gap either. That id simply stays
+  `[FILL: ...]` in the scaffold, and `loopctl validate` hard-fails while any `[FILL:` marker remains
+  (`docs/LOOP_AUTHORING.md` §7) — `apply` never invents an answer.
 - `provenance` is optional, per-answer, `"user"` or `"agent"` — it lands in the `imported` sqlite
   event's detail, so it's visible later which answers a human actually chose versus which ones the
   supervising agent proposed on its own (e.g. `q5_scope` when `suggested_answerer` was `"agent"`).
@@ -321,11 +327,12 @@ abfdf21dc02cf0bae24104e0a5158d40f71e18e5ecc3b083a6248d68c939901c`:
 }
 ```
 
-Once Task 12 ships, this scaffolds `loops.d/repo-hygiene-check/` fully pre-filled — `SPEC.md` with
-all eleven sections answered, `prompt.md` (reshaped skill body + contract sections + `## Finding
-identity` from `q8_finding_identity`), `loop.conf` (floor axes and tags, plus `schedule` from
-`q4_cadence`, `engine`/`model`/`retry_transient`/`timeout_s` from `q11_budget`), the template
-`precheck.sh` with the commented proposals from §6, and `dashboard.json` built from the
+`loopctl import tests/fixtures/skills/clean-check --apply --answers <that file> --root <root>`
+scaffolds `loops.d/repo-hygiene-check/` fully pre-filled — `SPEC.md` with all eleven sections
+answered, `prompt.md` (reshaped skill body + contract sections + `## Finding identity` from
+`q8_finding_identity`), `loop.conf` (floor axes and tags, plus `schedule` from `q4_cadence`,
+`model`/`timeout_s`/`retry_transient` best-effort-extracted from `q11_budget`'s free text), the
+template `precheck.sh` with the commented proposals from §6, and `dashboard.json` built from the
 `q10_metrics` answer — then records an `imported` sqlite event and prints the next steps: `loopctl
 validate` → `loopctl run` → `loopctl install`. It never installs by itself.
 

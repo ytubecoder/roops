@@ -17,6 +17,7 @@ malicious or oversized skill directory can't blow up the importer.
 """
 
 import hashlib
+import json
 import os
 import re
 
@@ -1075,3 +1076,478 @@ def analyze(skill: dict) -> dict:
         "answers_needed": answers_needed,
         "notes": notes,
     }
+
+
+# --- Task 12: apply() --------------------------------------------------------
+#
+# Scaffold templates. These are the single canonical copies — `bin/loopctl`'s
+# `cmd_new` aliases them (`_LOOP_CONF_TEMPLATE = skill_import._LOOP_CONF_TEMPLATE`
+# etc., see the module docstring there) rather than keeping its own copies, so
+# `loopctl new` and `loopctl import --apply` always render the SAME SPEC.md/
+# prompt.md/precheck.sh frame — the controller ruling for this task requires
+# reusing `loopctl new`'s templates rather than duplicating the strings.
+
+_LOOP_CONF_TEMPLATE = """\
+# Scaffolded by `loopctl new __NAME__` on __DATE__.
+# TODO before installing: pick a real `schedule` (see docs/INTERFACES.md §5.1)
+# and fill in `description`. Optional keys below are commented with their
+# permissive defaults — uncomment and edit only what this loop needs.
+name=__NAME__
+description="TODO: one-line description of what this loop does"
+type=__TYPE__
+engine=__ENGINE__
+# model=
+schedule=manual
+# workdir=$LOOPS_ROOT
+# timeout_s=900
+# enabled=true
+# retention_days=30
+# retry_transient=1
+# perm_fs_write=report_only
+# perm_network=none
+# perm_local_exec=none
+# perm_remote_mutation=none
+# exec_allowlist=
+# credential_env=
+# remote_mutation_justification=
+# notes=
+"""
+
+_PROMPT_MD_TEMPLATE = """\
+# __NAME__ — prompt
+
+TODO: describe what this loop should investigate/monitor and report on.
+
+## Output contract
+
+Your final message MUST be a single JSON object conforming exactly to
+`contract/contract.schema.json` — schema_version, run_id, status,
+status_reason, headline, report_markdown, metrics, findings. No prose
+outside that JSON object.
+
+- `run_id` MUST equal the value from the `## RUN CONTEXT` block the runner
+  appends to this prompt — copy it exactly; never invent your own.
+- `metrics` MUST be a JSON **string** containing a serialized JSON object
+  (e.g. the string `"{}"` when there is nothing to report) — not a nested
+  JSON object.
+- `findings` is required but MAY be an empty array.
+
+## Findings prompt contract
+
+1. Re-emit a still-true finding with its **same `finding_id`** — never
+   invent a new id for a recurring condition.
+2. Do not re-argue a `DISMISSED` finding unless the underlying situation has
+   **materially changed**; if it has, say what changed.
+3. Still emit `SNOOZED` findings if true — suppression is the runner's job,
+   not the model's.
+
+## Finding identity
+
+[FILL: derivation rule — how finding_id is derived from the durable identity
+of the condition being reported, e.g. `<subject>:<condition>`. Must be
+deterministic and stable across runs for the same real-world condition, and
+must NOT embed volatile data (timestamps, run ids, counts, shifting line
+numbers).]
+"""
+
+_SPEC_MD_TEMPLATE = """\
+# __NAME__ — intake spec
+
+1. Purpose & stop condition
+[FILL: what this loop exists to catch/report, and what "done" looks like]
+
+2. Agentic pattern
+[FILL: note — every v1 loop is outer-shape Human-in-the-loop; iterate-across-invocations
+is v2 — record the aspiration here, but ship single-shot for v1]
+
+3. Type & data flow (precheck gathers vs engine interprets)
+[FILL: what precheck.sh deterministically gathers vs what the engine is asked to interpret]
+
+4. Cadence
+[FILL: schedule and why]
+
+5. Scope & exclusions
+[FILL: what's in scope, what's explicitly excluded]
+
+6. Guardrails
+[FILL: verbatim guardrails this loop must respect]
+
+7. Permission axes + justification
+[FILL: perm_fs_write / perm_network / perm_local_exec / perm_remote_mutation values and why]
+
+8. Finding identity (what a finding IS + finding_id derivation rule)
+[FILL: same derivation rule as prompt.md's ## Finding identity section]
+
+9. Tier-1 semantics (ok/warn/alert meaning)
+[FILL: what ok / warn / alert mean for this loop]
+
+10. Tier-2 metrics + panels
+[FILL: metrics this loop emits and how dashboard.json renders them]
+
+11. Engine/model + budget
+[FILL: engine, model, expected tokens/run, retry_transient, timeout_s]
+"""
+
+_PRECHECK_SH_TEMPLATE = """\
+#!/usr/bin/env bash
+# __NAME__/precheck.sh — deterministic gathering step (script->agent pattern,
+# docs/INTERFACES.md §4.1/§6.2): this script does cheap, deterministic data
+# gathering; its stdout is injected into the engine's prompt as ground truth.
+# It must be idempotent and side-effect-free beyond read-only inspection. For
+# type=watchdog loops, THIS SCRIPT IS THE JOB — a non-zero exit or a
+# failure-shaped result escalates to the engine for diagnosis (§4.1).
+set -euo pipefail
+
+# TODO: gather deterministic signal here and print it to stdout.
+echo "TODO: implement precheck for __NAME__"
+"""
+
+
+def _render_template(template, name, **extra):
+    out = template.replace("__NAME__", name)
+    for key, value in extra.items():
+        out = out.replace(f"__{key.upper()}__", str(value))
+    return out
+
+
+class SkillApplyError(Exception):
+    """Raised by `apply()` when refusing to scaffold. The message is
+    user-facing — `loopctl import --apply` prints it verbatim to stderr and
+    exits 1."""
+
+
+def _resolved(rubric: dict, answers: dict, rubric_id: str):
+    """Controller ruling (Task 12, 2026-07-30): an explicit
+    `answers["answers"][id]` entry WINS over the rubric's own value for that
+    id — the rubric `value` only fills ids ABSENT (or blank) from `answers`.
+    This applies uniformly across every bucket (`answered`/`derived`/
+    `incompatible`) that carries a `value`, not just the buckets that were
+    already unanswered — an extra `answers` entry for an id the rubric had
+    already resolved is honored, not ignored.
+
+    Returns `None` — never a derived-default fallback; none exists — when
+    neither source has anything for `rubric_id` (i.e. the rubric bucket is
+    `missing` and `answers` has nothing either). The caller must leave that
+    section as an unresolved `[FILL: ...]` placeholder in that case, which is
+    the intended safety net: `loopctl validate` hard-fails on any remaining
+    `[FILL:` in SPEC.md."""
+    answers_map = (answers or {}).get("answers") or {}
+    if rubric_id in answers_map:
+        value = answers_map[rubric_id]
+        if value not in (None, ""):
+            return str(value)
+    item = (rubric or {}).get(rubric_id) or {}
+    if "value" in item:
+        return item["value"]
+    return None
+
+
+def _spec_template_sections(rendered_spec_template: str) -> list:
+    """Split a __NAME__-substituted `_SPEC_MD_TEMPLATE` into its eleven
+    `(header_line, placeholder_text)` pairs, in `RUBRIC_IDS` order — parsed
+    from the template text itself (rather than a hardcoded copy of the
+    section headings) so the section wording is never duplicated here."""
+    _, _, body = rendered_spec_template.partition("\n\n")
+    blocks = re.split(r"\n\n(?=\d+\.\s)", body.strip("\n"))
+    return [block.partition("\n")[0::2] for block in blocks]
+
+
+def _render_spec_md(name: str, rubric: dict, answers: dict) -> str:
+    """SPEC.md's eleven sections (docs/LOOP_AUTHORING.md §2), each filled
+    from `_resolved()` when available, else left as the template's own
+    `[FILL: ...]` placeholder text verbatim — so `loopctl validate`'s
+    `[FILL:` scan keeps working as the safety net for anything genuinely
+    unanswered."""
+    template = _SPEC_MD_TEMPLATE.replace("__NAME__", name)
+    header_line, _, _ = template.partition("\n\n")
+    sections = _spec_template_sections(template)
+    assert len(sections) == len(RUBRIC_IDS), "SPEC.md template section count drifted"
+
+    rendered = []
+    for rubric_id, (header, placeholder) in zip(RUBRIC_IDS, sections):
+        value = _resolved(rubric, answers, rubric_id)
+        body_text = value.strip() if value else placeholder
+        rendered.append(header + "\n" + body_text)
+
+    return header_line + "\n\n" + "\n\n".join(rendered) + "\n"
+
+
+def _blocked_spec_section(analysis: dict) -> str:
+    """The `## BLOCKED — read before scheduling` section appended to SPEC.md
+    when a blocked skill is scaffolded with `acknowledge_blocked: true`
+    (controller ruling 3) — names the blocking reasons verbatim so a human
+    reading SPEC.md later sees exactly why `schedule` was forced to
+    `manual`."""
+    reasons = [
+        r for r in (analysis.get("blocked_reasons") or []) if r.startswith("[blocking]")
+    ] or list(analysis.get("blocked_reasons") or [])
+    intro = (
+        "This loop was scaffolded from a skill the analyzer marked `blocked` "
+        "(answers.json set `acknowledge_blocked: true`). `schedule` was forced "
+        "to `manual` regardless of any `q4_cadence` answer — do not change that "
+        "until every reason below has been resolved:"
+    )
+    lines = [
+        "## BLOCKED — read before scheduling",
+        "",
+        intro,
+        "",
+    ]
+    lines += [f"- {r}" for r in reasons]
+    return "\n".join(lines) + "\n"
+
+
+def _render_prompt_md(name: str, skill: dict, rubric: dict, answers: dict) -> str:
+    """prompt.md: the `loopctl new` frame (Output contract, Findings prompt
+    contract, `## Finding identity` heading — all reused verbatim, byte-for-
+    byte, from `_PROMPT_MD_TEMPLATE`) with the skill's own body spliced into
+    the task section, and the `## Finding identity` placeholder filled from
+    `q8_finding_identity` when resolved."""
+    text = _PROMPT_MD_TEMPLATE.replace("__NAME__", name)
+
+    todo_line = (
+        "TODO: describe what this loop should investigate/monitor and report on."
+    )
+    body = (skill.get("body") or "").strip()
+    task_text = (
+        body if body else "[FILL: no task description found in the source skill]"
+    )
+    text = text.replace(todo_line, task_text, 1)
+
+    heading = "## Finding identity\n\n"
+    idx = text.index(heading)
+    q8 = _resolved(rubric, answers, "q8_finding_identity")
+    if q8:
+        text = text[: idx + len(heading)] + q8.strip() + "\n"
+    return text
+
+
+# Loose free-text hints inside a q11_budget answer (e.g. "engine default
+# model; ~1k tokens; retry 1; timeout 300", the brief's own example) — best-
+# effort extraction only; nothing here ever invents a value the text didn't
+# actually contain (ruling 2 — no derived-default fallback exists).
+_BUDGET_RETRY_RE = re.compile(r"\bretry[:\s]+(\d+)", re.IGNORECASE)
+_BUDGET_TIMEOUT_RE = re.compile(r"\btimeout[:\s]+(\d+)", re.IGNORECASE)
+_BUDGET_MODEL_RE = re.compile(r"\bmodel[:\s]+([A-Za-z0-9._-]+)", re.IGNORECASE)
+_APPLY_TAG_RE = re.compile(r"^[a-z][a-z0-9:_-]{1,40}$")
+
+
+def _quote_conf_value(text: str) -> str:
+    """loop.conf's KEY=value grammar (§5.0) is strictly line-based — flatten
+    any embedded newlines/repeated whitespace to single spaces and escape
+    embedded double quotes before wrapping in a quoted value."""
+    flat = " ".join((text or "").split())
+    return '"' + flat.replace('"', '\\"') + '"'
+
+
+def _sanitize_tags(raw_tags) -> list:
+    """Best-effort filter of an optional top-level `answers["tags"]` list
+    down to loop.conf's tag grammar (`^[a-z][a-z0-9:_-]{1,40}$`, deduped,
+    max 8, §5) — silently drops anything that doesn't fit rather than
+    failing the whole apply() over a cosmetic field."""
+    if not raw_tags:
+        return []
+    out = []
+    for t in raw_tags:
+        t = str(t).strip()
+        if t and _APPLY_TAG_RE.match(t) and t not in out:
+            out.append(t)
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _render_loop_conf(
+    name: str,
+    analysis: dict,
+    rubric: dict,
+    answers: dict,
+    blocked: bool,
+    acknowledge_blocked: bool,
+) -> str:
+    """loop.conf: name/description/type/engine from analysis+rubric,
+    schedule/model/timeout_s/retry_transient from answers (q4_cadence /
+    q11_budget), tags from the optional top-level `answers["tags"]`, and the
+    permission axes ALWAYS at the report-only floor `analysis["axes"]` — import
+    never raises an axis itself (docs/SKILL_IMPORT.md §1), same as `analyze()`.
+    Ruling 3: a blocked-but-acknowledged skill forces `schedule=manual`
+    regardless of what `q4_cadence` says."""
+    description = _resolved(rubric, answers, "q1_purpose") or (
+        "TODO: one-line description of what this loop does"
+    )
+    loop_type = analysis.get("type") or "agent"
+    engine = analysis.get("engine") or "codex"
+
+    if blocked and acknowledge_blocked:
+        schedule_value = "manual"
+    else:
+        schedule_value = _resolved(rubric, answers, "q4_cadence") or "manual"
+
+    budget_text = _resolved(rubric, answers, "q11_budget") or ""
+
+    header_comment = (
+        "# Scaffolded by `loopctl import --apply` "
+        f"(analyzer_version={analysis.get('analyzer_version')}, "
+        f"skill_sha256={analysis.get('skill_sha256')})."
+    )
+    lines = [
+        header_comment,
+        "# TODO before installing: read SPEC.md end to end — every remaining",
+        "# [FILL: ...] there blocks `loopctl validate`. Permission axes below are",
+        "# the report-only floor and were never raised by import — raise them",
+        "# deliberately if this loop genuinely needs more (docs/LOOP_AUTHORING.md §4).",
+        f"name={name}",
+        f"description={_quote_conf_value(description)}",
+        f"type={loop_type}",
+        f"engine={engine}",
+    ]
+
+    model_match = _BUDGET_MODEL_RE.search(budget_text)
+    if model_match:
+        lines.append(f"model={model_match.group(1)}")
+
+    lines.append(f"schedule={schedule_value}")
+
+    timeout_match = _BUDGET_TIMEOUT_RE.search(budget_text)
+    if timeout_match:
+        lines.append(f"timeout_s={timeout_match.group(1)}")
+
+    retry_match = _BUDGET_RETRY_RE.search(budget_text)
+    if retry_match:
+        lines.append(f"retry_transient={retry_match.group(1)}")
+
+    axes = analysis.get("axes") or {}
+    for axis_key in (
+        "perm_fs_write",
+        "perm_network",
+        "perm_local_exec",
+        "perm_remote_mutation",
+    ):
+        if axis_key in axes:
+            lines.append(f"{axis_key}={axes[axis_key]}")
+
+    tags = _sanitize_tags((answers or {}).get("tags"))
+    if tags:
+        lines.append("tags=" + ",".join(tags))
+
+    return "\n".join(lines) + "\n"
+
+
+def _render_precheck_sh(name: str, analysis: dict) -> str:
+    """precheck.sh: the safe `_PRECHECK_SH_TEMPLATE` boilerplate (still the
+    fallback TODO/echo — apply() never assumes the extracted candidates are
+    the whole story), plus `analysis["precheck_proposal"]`'s COMMENTED
+    candidate lines spliced in right after `set -euo pipefail`. Every
+    candidate line is already prefixed `#` by `_propose_precheck` — apply()
+    never uncomments anything (docs/SKILL_IMPORT.md §6)."""
+    base = _render_template(_PRECHECK_SH_TEMPLATE, name)
+    proposal = analysis.get("precheck_proposal") or []
+    if not proposal:
+        return base
+
+    block_lines = (
+        [
+            "",
+            "# --- Imported from skill: proposed precheck candidates (COMMENTED — read",
+            "# docs/SKILL_IMPORT.md §6 before ever uncommenting a line here; precheck.sh",
+            '# runs UNSANDBOXED bash, and "[read-only?]" is a heuristic hint, not a',
+            "# guarantee) ---",
+        ]
+        + list(proposal)
+        + [""]
+    )
+    block = "\n".join(block_lines)
+    marker = "set -euo pipefail\n"
+    idx = base.index(marker) + len(marker)
+    return base[:idx] + block + "\n" + base[idx:]
+
+
+def _render_dashboard_json(rubric: dict, answers: dict) -> str:
+    """dashboard.json from the resolved `q10_metrics` answer when it parses
+    as `{"panels": [...]}`, else the same empty-panels default `loopctl new`
+    writes."""
+    raw = _resolved(rubric, answers, "q10_metrics")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("panels"), list):
+            return json.dumps(parsed) + "\n"
+    return '{"panels": []}\n'
+
+
+def apply(skill: dict, analysis: dict, answers: dict, dest_dir: str) -> list:
+    """Scaffold a loop at `dest_dir` from a parsed `skill`, its `analysis`
+    (`analyze(skill)`'s output), and a filled-in `answers.json` dict
+    (docs/SKILL_IMPORT.md §7). Returns the list of paths written. Never
+    installs (docs/SKILL_IMPORT.md §7/§8 — `loopctl validate` -> `loopctl
+    run` -> `loopctl install` are unchanged downstream gates).
+
+    Raises `SkillApplyError` (message is user-facing) for every refusal case:
+    stale `answers` (analyzer_version or skill_sha256 mismatch against the
+    freshly re-parsed `skill`/`analysis` the caller passes in — re-run
+    --analyze rather than hand-patching the hash), or a `blocked` analysis
+    without `acknowledge_blocked: true`.
+
+    The pre-existing-`dest_dir` collision check (refuse unless `--overwrite`)
+    is deliberately NOT here — it's a CLI/`--overwrite` concern the caller
+    (`bin/loopctl`'s `cmd_import`) owns, since `apply()` has no `--overwrite`
+    concept of its own and writing into an already-scaffolded `dest_dir`
+    (same five filenames every time) is otherwise harmless idempotent
+    overwrite."""
+    answers = answers or {}
+
+    if answers.get("analyzer_version") != analysis.get("analyzer_version"):
+        raise SkillApplyError(
+            "stale answers — analyzer_version mismatch, re-run --analyze"
+        )
+    if answers.get("skill_sha256") != skill.get("sha256"):
+        raise SkillApplyError("stale answers — re-run --analyze")
+
+    blocked = bool(analysis.get("blocked"))
+    acknowledge_blocked = bool(answers.get("acknowledge_blocked"))
+    if blocked and not acknowledge_blocked:
+        reasons = (
+            "; ".join(analysis.get("blocked_reasons") or []) or "(no reasons recorded)"
+        )
+        raise SkillApplyError(
+            "refusing to scaffold a blocked skill: "
+            + reasons
+            + " — set acknowledge_blocked=true in answers.json to scaffold "
+            "anyway (forces schedule=manual + a BLOCKED section in SPEC.md)"
+        )
+
+    rubric = analysis.get("rubric") or {}
+    name = os.path.basename(os.path.normpath(dest_dir))
+
+    os.makedirs(dest_dir, exist_ok=True)
+
+    spec_text = _render_spec_md(name, rubric, answers)
+    if blocked and acknowledge_blocked:
+        spec_text += "\n" + _blocked_spec_section(analysis)
+
+    contents = [
+        (
+            "loop.conf",
+            _render_loop_conf(
+                name, analysis, rubric, answers, blocked, acknowledge_blocked
+            ),
+            False,
+        ),
+        ("SPEC.md", spec_text, False),
+        ("prompt.md", _render_prompt_md(name, skill, rubric, answers), False),
+        ("precheck.sh", _render_precheck_sh(name, analysis), True),
+        ("dashboard.json", _render_dashboard_json(rubric, answers), False),
+    ]
+
+    written = []
+    for fname, content, executable in contents:
+        path = os.path.join(dest_dir, fname)
+        with open(path, "w") as f:
+            f.write(content)
+        if executable:
+            os.chmod(path, 0o755)
+        written.append(path)
+
+    return written

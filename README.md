@@ -1,5 +1,8 @@
 # roops — ループス - the zen garden of loop harnesses
 
+<img width="1123" height="663" alt="image" src="https://github.com/user-attachments/assets/5dc652f6-cf4d-42ac-bfe6-12a99eb09252" />
+
+
 ![Python 3](https://img.shields.io/badge/python-3-blue)
 ![Platform: macOS / launchd](https://img.shields.io/badge/platform-macOS%20%2F%20launchd-lightgrey)
 ![Tests: 668 passing](https://img.shields.io/badge/tests-668%20passing-brightgreen)

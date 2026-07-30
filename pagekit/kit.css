@@ -3,7 +3,11 @@
  * Palette validated (dataviz six-checks, surface #0e0f12):
  *   high #d84f63 · medium #b48c1a · accent #279a83.
  * Severity is never color-alone: pair colors with markers + text labels.
- * Renderers INLINE this file (self-containment rule) — never <link> it. */
+ * Renderers INLINE this file (self-containment rule) — never <link> it, and do
+ * not read it at render time either: pages stay byte-deterministic and an
+ * unreadable kit.css must never break promotion. Everything below this comment
+ * is asserted byte-identical to the copy inlined in
+ * loops.d/kagi-ban/render_page.py by tests/test_kagi_ban.py — edit both. */
 :root{
   --bg:#0e0f12; --panel:#14161a; --line:#22252b; --line2:#2c3037;
   --ink:#e7e9ec; --sub:#9aa1ab; --mut:#5d6570;

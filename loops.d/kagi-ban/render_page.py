@@ -5,18 +5,48 @@
 generated_at/title/page_class; findings nest under data; delta 5 (2026-07-30,
 live gauntlet): neutralize_kv_phrases() rewrites 'token:'/'password:'-style
 separators in finding prose so paths after a keyword stop tripping
-bin/redact.py's generic KV pattern at the promotion gate. Do not fork further
-silently — keep this list current."""
+bin/redact.py's generic KV pattern at the promotion gate; delta 6 (2026-07-30):
+that pattern's keyword set + boundary are IMPORTED from bin/redact.py rather
+than copied, and the inlined <style> block is a verbatim copy of pagekit/kit.css
+bound by tests/test_kagi_ban.py. Do not fork further silently — keep this list
+current."""
 
 import argparse
 import datetime
 import html
 import json
+import os
 import pathlib
 import platform
 import plistlib
 import re
+import sys
 from string import Template
+
+# Single-source the KV keyword set from bin/redact.py. A forked copy here drifts
+# the moment someone adds a keyword there, and the only symptom is a page that
+# silently stops passing the §4.4 promotion gate (a `stale` dashboard badge).
+# $LOOPS_ROOT is set by render.sh under the runner; fall back to this file's own
+# repo layout so a bare `python3 render_page.py` (tests, manual renders) works.
+_BIN_DIR = (
+    pathlib.Path(
+        os.environ.get("LOOPS_ROOT") or pathlib.Path(__file__).resolve().parents[2]
+    )
+    / "bin"
+)
+sys.path.insert(0, str(_BIN_DIR))
+try:
+    import redact
+except ImportError as exc:
+    # Fail loudly rather than render an un-neutralized page: the gate itself
+    # imports redact.py (bin/page_envelope.py), so if it is gone nothing can be
+    # promoted anyway, and a render.sh non-zero exit lands a diagnosable line in
+    # page-render.log instead of an opaque gate rejection.
+    raise SystemExit(
+        f"render_page.py: cannot import {_BIN_DIR}/redact.py — the KV keyword "
+        "set is unavailable, so finding prose cannot be neutralized; refusing "
+        "to render an ungated page."
+    ) from exc
 
 SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 SEV_LABEL = {"critical": "CRIT", "high": "HIGH", "medium": "MED", "low": "LOW"}
@@ -99,9 +129,13 @@ def detect_av_version():
         return ""
 
 
-_KV_PHRASE_RE = re.compile(
-    r"(?i)\b(api[_-]?key|secret|password|token|authorization)(\s*[:=]\s*)"
-)
+# Key + separator exactly as bin/redact.py's _KV_RE sees them — same keyword
+# alternation, same lookbehind boundary. The boundary is load-bearing in BOTH
+# directions: a plain `\b` here under-matches underscore compounds
+# (`GITHUB_TOKEN=/path`, which redact.py DOES redact → failed promotion) and
+# over-matches hyphenated ones (`gh-cli-hosts-token: /path`, which redact.py
+# leaves alone → needless prose damage in av's own finding text).
+_KV_PHRASE_RE = re.compile(redact.KV_KEY_PATTERN + redact.KV_SEPARATOR, re.IGNORECASE)
 
 
 def neutralize_kv_phrases(findings):
@@ -235,6 +269,11 @@ $rows
     return "\n".join(out)
 
 
+# The <style> body below is a VERBATIM copy of pagekit/kit.css (minus that file's
+# leading header comment). Pages must be self-contained, so the kit is inlined,
+# not read from $PAGEKIT at render time — that keeps the page byte-deterministic
+# for a given scan and means an unreadable kit.css can never break promotion.
+# tests/test_kagi_ban.py::PagekitParityTests holds the two in sync; edit both.
 PAGE = Template("""<!DOCTYPE html>
 <html lang="en">
 <head>

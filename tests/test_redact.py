@@ -1,4 +1,5 @@
 """Tests for bin/redact.py — §4.4 redaction patterns."""
+
 import importlib.util
 import subprocess
 import sys
@@ -91,20 +92,14 @@ class TestRedactPatterns(unittest.TestCase):
         self.assertEqual(out.count("«redacted:"), 1)
 
     def test_bare_jwt_in_prose_redacted(self):
-        jwt = (
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-            "eyJzdWIiOiIxMjM0NTY3ODkwIn0"
-        )
+        jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0"
         text = f"here is a token {jwt} embedded in prose"
         out = redact(text)
         self.assertIn("«redacted:jwt»", out)
         self.assertNotIn(jwt, out)
 
     def test_authorization_bearer_jwt_line_fully_redacted(self):
-        jwt = (
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-            "eyJzdWIiOiIxMjM0NTY3ODkwIn0"
-        )
+        jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0"
         text = f"Authorization: Bearer {jwt}"
         out = redact(text)
         self.assertNotIn(jwt, out)
@@ -144,6 +139,26 @@ class TestRedactPatterns(unittest.TestCase):
             "gh-cli-hosts-token | /Users/x/.config/gh/hosts.yml"
         )
         self.assertEqual(redact(text), text)
+
+
+class TestKvKeywordExports(unittest.TestCase):
+    """KV_* are the single source for the generic KV rule: _KV_RE here and
+    loops.d/kagi-ban/render_page.py's neutralizer both build from them. Adding a
+    keyword to the regex literal instead of KV_KEYWORDS would silently desync the
+    renderer, so pin the construction."""
+
+    def test_kv_re_is_built_from_the_exported_pieces(self):
+        self.assertEqual(
+            redact_mod._KV_RE.pattern,
+            redact_mod.KV_KEY_PATTERN + redact_mod.KV_SEPARATOR + "(.+)",
+        )
+
+    def test_every_exported_keyword_actually_redacts(self):
+        for keyword in redact_mod.KV_KEYWORDS:
+            literal = keyword.replace("[_-]?", "_")  # fragments -> a concrete key
+            out = redact(f"{literal}: hunter2value")
+            self.assertIn("«redacted:secret»", out, msg=keyword)
+            self.assertNotIn("hunter2value", out, msg=keyword)
 
 
 class TestRedactCLI(unittest.TestCase):

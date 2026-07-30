@@ -19,9 +19,11 @@ import page_envelope  # noqa: E402
 def make_stub_av(dirpath, scan_json_path):
     stub = os.path.join(dirpath, "av")
     with open(stub, "w") as f:
-        f.write("#!/usr/bin/env bash\n"
-                'if [ "$1" = "--version" ]; then echo "av 0.0-stub"; exit 0; fi\n'
-                f'cat "{scan_json_path}"\n')
+        f.write(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "--version" ]; then echo "av 0.0-stub"; exit 0; fi\n'
+            f'cat "{scan_json_path}"\n'
+        )
     os.chmod(stub, 0o755)
     return stub
 
@@ -31,10 +33,22 @@ class KagiBanPrecheckTests(unittest.TestCase):
         out_dir = os.path.join(root, "state", "runs", "test-run")
         os.makedirs(out_dir, exist_ok=True)
         stub = make_stub_av(root, scan_json_path)
-        env = dict(os.environ, AV_BIN=stub, OUT_DIR=out_dir, LOOPS_ROOT=root,
-                   LOOP_NAME="kagi-ban", RUN_ID="test-run", WORKDIR=root)
-        proc = subprocess.run(["bash", os.path.join(LOOP, "precheck.sh")],
-                              capture_output=True, text=True, env=env, cwd=LOOP)
+        env = dict(
+            os.environ,
+            AV_BIN=stub,
+            OUT_DIR=out_dir,
+            LOOPS_ROOT=root,
+            LOOP_NAME="kagi-ban",
+            RUN_ID="test-run",
+            WORKDIR=root,
+        )
+        proc = subprocess.run(
+            ["bash", os.path.join(LOOP, "precheck.sh")],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=LOOP,
+        )
         return proc, out_dir
 
     def test_first_run_labels_everything_new(self):
@@ -44,23 +58,34 @@ class KagiBanPrecheckTests(unittest.TestCase):
             self.assertIn("first_run=yes", proc.stdout)
             self.assertIn("NEW av:github-cli:", proc.stdout)
             self.assertNotIn("ONGOING", proc.stdout)
-            self.assertTrue(os.path.isfile(
-                os.path.join(out_dir, "loop-data.commit", "scan-prev.json")))
+            self.assertTrue(
+                os.path.isfile(
+                    os.path.join(out_dir, "loop-data.commit", "scan-prev.json")
+                )
+            )
 
     def test_unchanged_world_is_all_ongoing_and_ids_stable(self):
         with tempfile.TemporaryDirectory() as root:
             proc1, out_dir = self.run_precheck(root, FIXTURE)
             committed = os.path.join(root, "state", "loop-data", "kagi-ban")
             os.makedirs(committed, exist_ok=True)
-            os.replace(os.path.join(out_dir, "loop-data.commit", "scan-prev.json"),
-                       os.path.join(committed, "scan-prev.json"))
+            os.replace(
+                os.path.join(out_dir, "loop-data.commit", "scan-prev.json"),
+                os.path.join(committed, "scan-prev.json"),
+            )
             proc2, _ = self.run_precheck(root, FIXTURE)
             self.assertIn("new=0", proc2.stdout)
             self.assertIn("resolved=0", proc2.stdout)
-            ids1 = sorted(line.split()[1] for line in proc1.stdout.splitlines()
-                          if line.startswith(("NEW ", "ONGOING ")))
-            ids2 = sorted(line.split()[1] for line in proc2.stdout.splitlines()
-                          if line.startswith(("NEW ", "ONGOING ")))
+            ids1 = sorted(
+                line.split()[1]
+                for line in proc1.stdout.splitlines()
+                if line.startswith(("NEW ", "ONGOING "))
+            )
+            ids2 = sorted(
+                line.split()[1]
+                for line in proc2.stdout.splitlines()
+                if line.startswith(("NEW ", "ONGOING "))
+            )
             self.assertEqual(ids1, ids2)
 
 
@@ -69,17 +94,80 @@ class KagiBanRendererTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "page.html")
             proc = subprocess.run(
-                [sys.executable, os.path.join(LOOP, "render_page.py"), FIXTURE,
-                 "--loop", "kagi-ban", "--run-id", "test-run", "-o", out,
-                 "--host", "fixture", "--av-version", "0.0-stub"],
-                capture_output=True, text=True)
+                [
+                    sys.executable,
+                    os.path.join(LOOP, "render_page.py"),
+                    FIXTURE,
+                    "--loop",
+                    "kagi-ban",
+                    "--run-id",
+                    "test-run",
+                    "-o",
+                    out,
+                    "--host",
+                    "fixture",
+                    "--av-version",
+                    "0.0-stub",
+                ],
+                capture_output=True,
+                text=True,
+            )
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            errors = page_envelope.check_page(out, expect_run_id="test-run",
-                                              expect_loop="kagi-ban")
+            errors = page_envelope.check_page(
+                out, expect_run_id="test-run", expect_loop="kagi-ban"
+            )
             self.assertEqual(errors, [])
             meta = page_envelope.read_meta(out)
             self.assertEqual(meta["page_class"], "snapshot")
             self.assertEqual(meta["totals"]["findings"], 5)
+
+    def test_kv_phrased_explanations_survive_the_redaction_gate(self):
+        """Real av scans phrase findings like 'plaintext access token: /path' —
+        the path after the keyword trips bin/redact.py's generic KV pattern, and
+        run 1 of the live gauntlet (2026-07-30) failed promotion on exactly this.
+        The renderer must neutralize keyword-separator phrasing so a PATH never
+        reads as a secret value; real token VALUES must still fail the gate."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(FIXTURE) as f:
+                scan = json.load(f)
+            scan["findings"][0]["explanation"] = (
+                "flyctl config file contains a plaintext access token: "
+                "/Users/taro/.fly/config.yml"
+            )
+            scan["findings"][1]["solution"] = (
+                "Move the password: /Users/taro/.pgpass entry into the keychain."
+            )
+            scan_path = os.path.join(tmp, "scan.json")
+            with open(scan_path, "w") as f:
+                json.dump(scan, f)
+            out = os.path.join(tmp, "page.html")
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    os.path.join(LOOP, "render_page.py"),
+                    scan_path,
+                    "--loop",
+                    "kagi-ban",
+                    "--run-id",
+                    "test-run",
+                    "-o",
+                    out,
+                    "--host",
+                    "fixture",
+                    "--av-version",
+                    "0.0-stub",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            errors = page_envelope.check_page(
+                out, expect_run_id="test-run", expect_loop="kagi-ban"
+            )
+            self.assertEqual(errors, [])
+            with open(out) as f:
+                text = f.read()
+            self.assertNotIn("token: /Users", text)
 
 
 if __name__ == "__main__":

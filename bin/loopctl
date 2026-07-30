@@ -675,14 +675,66 @@ def _resolve_display_row(root, name, last):
     return None
 
 
+def _loop_health(dash, conf, last, now):
+    """The dashboard's own `_resolve_loop` health formula (dashboard/generate.py
+    ~:1275-1323), reapplied here on the RAW latest run row — never the
+    blanking-fix's fallback-resolved row (Amendment 2 — 2026-07-30 fix
+    round 1: "the dashboard is canonical" ruling — an agent must see the
+    same fleet health a human sees on the dashboard). Reuses the dashboard's
+    own primitives (`is_died`/`is_stale`/`compute_light`/`is_overdue`) rather
+    than reimplementing their logic; only the branching glue is duplicated,
+    because `_resolve_loop` itself also does unrelated page-assembly work
+    (sqlite reads, tags, provenance) `loopctl` has no reason to repeat.
+    Returns `(light_color, needs_attention)` — `light_color` in
+    `{"green","amber","red","grey"}`, matching `dashboard/generate.py`'s own
+    vocabulary exactly, including that a `skipped-overlap`/`skipped-precheck`
+    row is unconditionally amber even if the prior run was `ok`."""
+    timeout_s = conf.get("timeout_s", 900)
+    schedule_spec = conf.get("schedule", "manual")
+    try:
+        expected_interval_s = schedule.parse(schedule_spec).get("expected_interval_s", 0)
+    except Exception:  # noqa: BLE001 — a bad schedule must degrade, never crash `status`
+        expected_interval_s = 0
+
+    died = False
+    if last is not None:
+        died = dash.is_died(last.get("finished_at"), last.get("started_at"), timeout_s, now)
+
+    stale = False
+    if last is not None and not died:
+        stale = dash.is_stale(last.get("started_at"), expected_interval_s, now)
+
+    if died:
+        light_color = "red"
+    elif last is not None and last.get("finished_at") is None:
+        fin, st = last.get("finished_at"), last.get("started_at")
+        light_color = "amber" if dash.is_overdue(fin, st, timeout_s, now) else "grey"
+    elif last is not None:
+        light_color, _marker = dash.compute_light(last.get("runner_status"), last.get("effective_status"))
+    else:
+        light_color = "grey"
+
+    needs_attention = (light_color in ("amber", "red")) or stale or died
+    return light_color, needs_attention
+
+
 def _fleet_aggregate(root, from_dir):
     """`fleet: N loops · ok X · warn Y · alert Z · needs_attention W ·
     spend7d $S` — the leading line on `status` and the bare-invocation
     summary (Amendment 2 — 2026-07-30). Loop count comes from the loops.d/
-    (or examples/) directory; status/spend come from `db.py query
-    loops-summary` (one row per loop: its newest run) and `db.py query spend
-    --days 7`, with the same skipped-overlap/unfinished fallback `status`
-    itself applies so a loop mid-overlap-skip isn't miscounted."""
+    (or examples/) directory; `ok`/`warn`/`alert` map `_loop_health`'s
+    green/amber/red 1:1 (grey — never run, or a still-running run within its
+    own timeout budget — is counted toward `N` but not toward any of the
+    three); `needs_attention` is `_loop_health`'s own boolean, so it agrees
+    with the dashboard exactly, including staleness and the harness-died
+    case, neither of which `ok`/`warn`/`alert` alone would catch. `spend7d`
+    sums `cost_usd` across `db.py query spend --days 7`. Status data comes
+    from one `db.py query loops-summary` call for the whole fleet (one row
+    per loop: its newest run, RAW — not the blanking-fix's fallback-resolved
+    row, which is for the per-loop status/headline TEXT only, see
+    `_resolve_display_row`)."""
+    dash = _dashboard_module()
+    now = datetime.now(timezone.utc)
     names = _discover_loop_names(root, from_dir)
     summary_by_loop = {r["loop_name"]: r for r in _db_query(root, "loops-summary")}
 
@@ -691,22 +743,17 @@ def _fleet_aggregate(root, from_dir):
         last = summary_by_loop.get(name)
         if last is None:
             continue  # never run — not yet actionable, doesn't count as needing attention
-        display = _resolve_display_row(root, name, last)
-        if display is None:
-            needs_attention += 1
-            continue
-        if display.get("runner_status") == "completed":
-            es = display.get("effective_status")
-            if es == "ok":
-                ok += 1
-            elif es == "warn":
-                warn += 1
-                needs_attention += 1
-            elif es == "alert":
-                alert += 1
-                needs_attention += 1
-            # else: malformed/missing effective_status on a completed run — uncounted
-        else:
+        conf_path = os.path.join(root, from_dir, name, "loop.conf")
+        conf, _errors = loopconf.parse(conf_path)
+        light_color, loop_needs_attention = _loop_health(dash, conf, last, now)
+        if light_color == "green":
+            ok += 1
+        elif light_color == "amber":
+            warn += 1
+        elif light_color == "red":
+            alert += 1
+        # grey: uncounted in ok/warn/alert, matching the dashboard's own grey bucket
+        if loop_needs_attention:
             needs_attention += 1
 
     spend_rows = _db_query(root, "spend", days=7)
@@ -1215,71 +1262,117 @@ def _default_root():
     return os.environ.get("LOOPS_ROOT", os.path.expanduser("~/projects/loops"))
 
 
-def _common_parser():
+def _common_parser(*, hidden=False, suppress_defaults=False):
     """The `--root`/`--json`/`--from`/`--actor` flags shared by every verb's
-    subparser. Also reused directly by `main()` (Amendment 2 — 2026-07-30) to
-    fill in the same defaults on a bare, verb-less invocation — `dest="verb"`
-    yields None before any subparser ever runs, so those defaults never get
-    applied to `args` any other way."""
+    subparser, AND (Amendment 2 — 2026-07-30 fix round 1) by the top-level
+    parser `p` itself, in two deliberately different flavors — conflating
+    them was a verified Critical (see the long comment on `build_parser`
+    below for the mechanism):
+
+    - `hidden=True` (top-level `p`'s copy): real defaults, `help=SUPPRESS`
+      on every flag — parseable (so a bare/pre-verb `--root R` etc. doesn't
+      get mis-swallowed as a positional) but invisible in `loopctl --help`,
+      which must read identically to before this amendment.
+    - `suppress_defaults=True` (every subparser's copy): `default=SUPPRESS`
+      on every flag, normal (visible, unchanged) help — so that when a verb
+      invocation doesn't repeat a flag after the verb, the subparser's own
+      re-parse doesn't clobber whatever the top-level parser already
+      resolved for it with a fresh default.
+    """
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--root", default=_default_root())
-    common.add_argument("--json", action="store_true")
-    common.add_argument("--from", dest="from_dir", default="loops.d", choices=["loops.d", "examples"])
-    common.add_argument("--actor", default=os.environ.get("USER", "unknown"))
+    help_ = argparse.SUPPRESS if hidden else None
+    sup = argparse.SUPPRESS
+
+    common.add_argument(
+        "--root", default=(sup if suppress_defaults else _default_root()), help=help_
+    )
+    common.add_argument(
+        "--json",
+        action="store_true",
+        default=(sup if suppress_defaults else False),
+        help=help_,
+    )
+    common.add_argument(
+        "--from",
+        dest="from_dir",
+        choices=["loops.d", "examples"],
+        default=(sup if suppress_defaults else "loops.d"),
+        help=help_,
+    )
+    common.add_argument(
+        "--actor",
+        default=(sup if suppress_defaults else os.environ.get("USER", "unknown")),
+        help=help_,
+    )
     return common
 
 
 def build_parser():
-    common = _common_parser()
+    # (Amendment 2 — 2026-07-30 fix round 1) `common_top` (real defaults,
+    # hidden help) vs `common_sub` (SUPPRESS defaults, normal help) — see
+    # `_common_parser`'s docstring for what each is for. The mechanism this
+    # exists to avoid: argparse's `_SubParsersAction.__call__` parses a
+    # chosen subparser's trailing tokens into a **fresh** sub-namespace
+    # (`parser.parse_known_args(arg_strings, None)` — the `None` is the
+    # fresh namespace, not the outer one), then unconditionally copies EVERY
+    # key from that sub-namespace onto the outer namespace. If the
+    # subparser's own `--root` etc. carry real defaults too, an invocation
+    # like `loopctl --root R status --json` gets `--root R` correctly
+    # resolved by `p` first, then immediately clobbered back to
+    # `_default_root()` when `status`'s sub-namespace (which never saw
+    # `--root` — it only received `["--json"]`) gets copied over wholesale.
+    # `default=SUPPRESS` on the subparser's copy means that when a flag
+    # isn't repeated after the verb, it's simply absent from the
+    # sub-namespace — `vars(subnamespace)` doesn't contain the key at all —
+    # so the copy loop never touches it, and the top-level parser's already-
+    # resolved value survives. When a flag IS repeated after the verb (the
+    # existing, most common convention — e.g. `status --root R`), the
+    # subparser parses it for real and correctly overwrites the top-level's
+    # default with it. Verified against the full flag x placement matrix in
+    # `TestGlobalFlagPlacement`.
+    common_top = _common_parser(hidden=True)
+    common_sub = _common_parser(suppress_defaults=True)
 
-    # (Amendment 2 — 2026-07-30) `p` itself also carries `common`'s flags, not
-    # just each subparser: a bare invocation (no verb at all) never reaches a
-    # subparser, so without this, `loopctl --root R` (no verb) would fail as
-    # "unrecognized arguments" before args.verb could ever be observed as
-    # None. This is additive only — once a verb token is present, argparse's
-    # subparsers action (nargs=PARSER) still sweeps every token from that
-    # point on, verb-subparser included, into its own parse, so a verb
-    # invocation's own `--root` etc. keep working exactly as before.
-    p = argparse.ArgumentParser(prog="loopctl", parents=[common])
+    p = argparse.ArgumentParser(prog="loopctl", parents=[common_top])
     sub = p.add_subparsers(dest="verb")
 
-    new_p = sub.add_parser("new", parents=[common])
+    new_p = sub.add_parser("new", parents=[common_sub])
     new_p.add_argument("name")
     new_p.add_argument("--type", dest="type_", default="agent", choices=["agent", "watchdog"])
     new_p.add_argument("--engine", default="codex", choices=["codex", "claude"])
 
-    validate_p = sub.add_parser("validate", parents=[common])
+    validate_p = sub.add_parser("validate", parents=[common_sub])
     validate_p.add_argument("name", nargs="?")
     validate_p.add_argument("--all", action="store_true")
 
-    run_p = sub.add_parser("run", parents=[common])
+    run_p = sub.add_parser("run", parents=[common_sub])
     run_p.add_argument("name")
     run_p.add_argument("--trigger", default="manual")
 
-    list_p = sub.add_parser("list", parents=[common])
+    list_p = sub.add_parser("list", parents=[common_sub])
     list_p.add_argument("--tag", default=None)
 
-    status_p = sub.add_parser("status", parents=[common])
+    status_p = sub.add_parser("status", parents=[common_sub])
     status_p.add_argument("name", nargs="?")
 
-    install_p = sub.add_parser("install", parents=[common])
+    install_p = sub.add_parser("install", parents=[common_sub])
     install_p.add_argument("name")
 
-    uninstall_p = sub.add_parser("uninstall", parents=[common])
+    uninstall_p = sub.add_parser("uninstall", parents=[common_sub])
     uninstall_p.add_argument("name")
 
-    pause_p = sub.add_parser("pause", parents=[common])
+    pause_p = sub.add_parser("pause", parents=[common_sub])
     pause_p.add_argument("name")
 
-    resume_p = sub.add_parser("resume", parents=[common])
+    resume_p = sub.add_parser("resume", parents=[common_sub])
     resume_p.add_argument("name")
 
-    sub.add_parser("dashboard", parents=[common])
+    sub.add_parser("dashboard", parents=[common_sub])
 
-    findings_p = sub.add_parser("findings", parents=[common])
+    findings_p = sub.add_parser("findings", parents=[common_sub])
     findings_p.add_argument("loop")
 
-    import_p = sub.add_parser("import", parents=[common])
+    import_p = sub.add_parser("import", parents=[common_sub])
     import_p.add_argument("skill_path")
     import_group = import_p.add_mutually_exclusive_group(required=True)
     import_group.add_argument("--analyze", action="store_true")
@@ -1289,7 +1382,7 @@ def build_parser():
     import_p.add_argument("--overwrite", action="store_true")
 
     for verb in ("ack", "dismiss", "snooze", "reopen"):
-        vp = sub.add_parser(verb, parents=[common])
+        vp = sub.add_parser(verb, parents=[common_sub])
         vp.add_argument("loop")
         vp.add_argument("finding_id")
         if verb in ("ack", "dismiss"):

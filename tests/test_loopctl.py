@@ -14,6 +14,7 @@ recording Python stub (`fake_launchctl.py`, written per-fixture) whose exit
 codes and call log are controllable via environment variables.
 """
 
+import importlib.util
 import json
 import os
 import plistlib
@@ -146,6 +147,35 @@ def _read_plist(path):
 
 def iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _load_module_from_path(path, modname):
+    spec = importlib.util.spec_from_file_location(modname, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_dashboard_module():
+    """The real, already-committed dashboard/generate.py — loaded directly
+    (not via bin/loopctl) so tests can independently ask it what a fixture's
+    fleet health SHOULD be, to pin agreement with `loopctl status`'s own
+    aggregate (Amendment 2 fix round 1 — "the dashboard is canonical")."""
+    return _load_module_from_path(
+        str(REPO_ROOT / "dashboard" / "generate.py"), "_test_dashboard"
+    )
+
+
+def _real_loopconf_parse():
+    return _load_module_from_path(
+        str(REPO_ROOT / "bin" / "loopconf.py"), "_test_loopconf"
+    ).parse
+
+
+def _real_schedule_parse():
+    return _load_module_from_path(
+        str(REPO_ROOT / "bin" / "schedule.py"), "_test_schedule"
+    ).parse
 
 
 class LoopsRoot:
@@ -1773,6 +1803,60 @@ class TestListStatus(LoopsRootTestCase):
         self.assertEqual(fleet["alert"], 0)
         self.assertEqual(fleet["needs_attention"], 1)
 
+    def test_fleet_aggregate_agrees_with_dashboard_on_overlap_over_ok(self):
+        # Fix round 1 ("the dashboard is canonical" ruling): a loop whose
+        # newest run is skipped-overlap over a prior ok run must count as
+        # warn/needs_attention in the fleet aggregate, NOT ok — dashboard/
+        # generate.py's compute_light() maps skipped-overlap to amber
+        # unconditionally, regardless of what came before. This pins
+        # agreement between `status --json`'s aggregate and the dashboard's
+        # own _resolve_loop() on identical fixture data — the exact
+        # divergence verified during review (aggregate said needs_attention:
+        # 0, dashboard said True). The per-loop DISPLAYED status/headline
+        # still uses the blanking-fix fallback ("all good") — asserted
+        # separately in test_status_falls_back_past_overlap_row; this test
+        # is about the aggregate health counts only.
+        name = "overlap-agree"
+        self.fixture.minimal_valid_loop(name)
+        self.fixture.add_run(
+            f"20260722T000000Z-{name}-c1",
+            name,
+            "2026-07-29T00:00:00Z",
+            runner_status="completed",
+            effective_status="ok",
+            headline="all good",
+        )
+        self.fixture.add_run(
+            f"20260722T000000Z-{name}-c2",
+            name,
+            iso(datetime.now(timezone.utc)),
+            runner_status="skipped-overlap",
+        )
+
+        r = run_cli(["status", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        fleet = json.loads(r.stdout)["fleet"]
+        self.assertEqual(fleet["ok"], 0)
+        self.assertEqual(fleet["warn"], 1)
+        self.assertEqual(fleet["alert"], 0)
+        self.assertEqual(fleet["needs_attention"], 1)
+
+        dash_mod = _load_dashboard_module()
+        conn = dash_mod._open_db(self.root)
+        try:
+            resolved = dash_mod._resolve_loop(
+                self.root,
+                name,
+                conn,
+                _real_loopconf_parse(),
+                _real_schedule_parse(),
+                datetime.now(timezone.utc),
+            )
+        finally:
+            conn.close()
+        self.assertTrue(resolved["needs_attention"])
+        self.assertEqual(resolved["light_color"], "amber")
+
     def test_list_tag_filter_exact(self):
         self.fixture.minimal_valid_loop("tagged", extra_lines=['tags="project:x"'])
         self.fixture.minimal_valid_loop("untagged")
@@ -1928,6 +2012,112 @@ class TestBareInvocation(LoopsRootTestCase):
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         self.assertIn("usage: loopctl", r.stdout)
         self.assertNotIn("fleet:", r.stdout)
+
+    def test_help_output_hides_the_hoisted_common_flags(self):
+        # Fix round 1 (verified Critical + this Important companion): `p`
+        # now also carries --root/--json/--from/--actor directly (so a
+        # bare/pre-verb invocation of any of them can be parsed at all —
+        # see TestGlobalFlagPlacement), but they must stay invisible in
+        # `loopctl --help` — help=SUPPRESS on that copy specifically.
+        # Verified byte-identical against the pre-Amendment-2 commit's
+        # --help output during review; asserting the meaningful invariant
+        # here rather than the exact formatted text.
+        r = run_cli(["--help"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("positional arguments:", r.stdout)
+        for hidden_flag in ("--root", "--json", "--from", "--actor"):
+            self.assertNotIn(hidden_flag, r.stdout)
+
+    def test_verb_help_still_shows_common_flags(self):
+        # The subparser-level copies (`common_sub`) must stay visible in
+        # per-verb --help — only the top-level copy is hidden.
+        r = run_cli(["status", "--help"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        for flag in ("--root", "--json", "--from", "--actor"):
+            self.assertIn(flag, r.stdout)
+
+
+# ---------------------------------------------------------------------------
+# loopctl global flag placement (Amendment 2 — 2026-07-30 fix round 1):
+# --root/--json/--from/--actor must resolve identically whether given before
+# or after the verb — a verified Critical: naive parents=[common] on both the
+# top-level parser and every subparser let the subparser's fresh sub-
+# namespace silently clobber a correctly-resolved pre-verb value with its
+# own default.
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalFlagPlacement(LoopsRootTestCase):
+    def test_root_before_and_after_verb_are_equivalent(self):
+        self.fixture.minimal_valid_loop("g1")
+        # A decoy default root: if --root ever gets silently dropped back to
+        # a default, these calls would see 0 loops instead of 1 (or worse,
+        # in a non-hermetic run, the real ~/projects/loops fleet).
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        env = {"LOOPS_ROOT": decoy}
+
+        r_before = run_cli(["--root", self.root, "status", "--json"], env_overrides=env)
+        r_after = run_cli(["status", "--root", self.root, "--json"], env_overrides=env)
+        self.assertEqual(r_before.returncode, 0, msg=r_before.stdout + r_before.stderr)
+        self.assertEqual(r_after.returncode, 0, msg=r_after.stdout + r_after.stderr)
+
+        fleet_before = json.loads(r_before.stdout)["fleet"]
+        fleet_after = json.loads(r_after.stdout)["fleet"]
+        self.assertEqual(fleet_before["loops"], 1)
+        self.assertEqual(fleet_before, fleet_after)
+
+    def test_root_before_verb_on_bare_invocation_too(self):
+        # The bare-invocation case specifically named in the live repro.
+        self.fixture.minimal_valid_loop("g1b")
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(
+            ["--root", self.root, "status", "--json"],
+            env_overrides={"LOOPS_ROOT": decoy},
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertEqual(json.loads(r.stdout)["fleet"]["loops"], 1)
+
+    def test_json_before_and_after_verb_are_equivalent(self):
+        self.fixture.minimal_valid_loop("g2")
+        r_before = run_cli(["--json", "list", "--root", self.root])
+        r_after = run_cli(["list", "--json", "--root", self.root])
+        self.assertEqual(r_before.returncode, 0, msg=r_before.stdout + r_before.stderr)
+        self.assertEqual(r_after.returncode, 0, msg=r_after.stdout + r_after.stderr)
+        # Both must parse as JSON (a table would fail json.loads) — proves
+        # --json wasn't silently dropped in the "before the verb" placement.
+        rows_before = json.loads(r_before.stdout)
+        rows_after = json.loads(r_after.stdout)
+        self.assertEqual([row["name"] for row in rows_before], ["g2"])
+        self.assertEqual(rows_before, rows_after)
+
+    def test_from_before_and_after_verb_are_equivalent(self):
+        self.fixture.minimal_valid_loop("g3", from_dir="examples")
+        r_before = run_cli(
+            ["--from", "examples", "list", "--root", self.root, "--json"]
+        )
+        r_after = run_cli(["list", "--from", "examples", "--root", self.root, "--json"])
+        self.assertEqual(r_before.returncode, 0, msg=r_before.stdout + r_before.stderr)
+        self.assertEqual(r_after.returncode, 0, msg=r_after.stdout + r_after.stderr)
+        rows_before = json.loads(r_before.stdout)
+        self.assertEqual([row["name"] for row in rows_before], ["g3"])
+        self.assertEqual(rows_before, json.loads(r_after.stdout))
+
+    def test_actor_before_and_after_verb_are_equivalent(self):
+        r_before = run_cli(
+            ["--actor", "claude/before", "new", "actor-before", "--root", self.root]
+        )
+        self.assertEqual(r_before.returncode, 0, msg=r_before.stdout + r_before.stderr)
+        events_before = _query_loop_events(self.root, "actor-before")
+        self.assertEqual(events_before[0]["actor"], "claude/before")
+
+        r_after = run_cli(
+            ["new", "actor-after", "--root", self.root, "--actor", "claude/after"]
+        )
+        self.assertEqual(r_after.returncode, 0, msg=r_after.stdout + r_after.stderr)
+        events_after = _query_loop_events(self.root, "actor-after")
+        self.assertEqual(events_after[0]["actor"], "claude/after")
 
 
 # ---------------------------------------------------------------------------

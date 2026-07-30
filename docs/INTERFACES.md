@@ -681,38 +681,61 @@ to `status` and exits `0`. Only an unrecognized verb (e.g. `loopctl frobnicate`)
 unrecognized arguments after a valid verb, still exit `2`; `--help` is unaffected — it still prints
 usage and exits `0` without dispatching anywhere.
 
-**Bare invocation (Amendment 2 — 2026-07-30):** `loopctl` and `loopctl --root R` (no verb) call the
-exact same code path as `loopctl status` — same leading fleet line, same per-loop table/JSON, same
-exit 0. Mechanically: `main()`'s top-level parser also carries `common`'s `--root`/`--json`/
-`--from`/`--actor` flags (not just each subparser) so a verb-less invocation still has real values
-for them (`argparse`'s `dest="verb"` yields `None` before any subparser ever runs); once a verb IS
-given, argparse's subparsers action still sweeps every remaining token into that subparser's own
-parse exactly as before, so per-verb flag handling is unchanged.
+**Bare invocation (Amendment 2 — 2026-07-30, fix round 1 — 2026-07-30):** `loopctl` and `loopctl
+--root R` (no verb, in any flag placement) call the exact same code path as `loopctl status` — same
+leading fleet line, same per-loop table/JSON, same exit 0.
+  Mechanically, `main()`'s top-level parser `p` carries a *hidden* copy of `--root`/`--json`/
+`--from`/`--actor` (real defaults, `help=argparse.SUPPRESS`) so a verb-less invocation still has
+real values for them (`argparse`'s `dest="verb"` yields `None` before any subparser ever runs) and
+`loopctl --help` stays unchanged (these four never appear in it — only per-verb `--help`, e.g.
+`loopctl status --help`, shows them, exactly as before). Every subparser's own copy uses
+`default=argparse.SUPPRESS` instead of a real default (fix round 1 — **verified Critical**: giving
+both `p` and every subparser a REAL default for the same flags let a valid verb invocation with
+flags placed *before* the verb — `loopctl --root R status --json` — silently resolve to the WRONG
+root: argparse's `_SubParsersAction.__call__` parses the chosen subparser's trailing tokens into a
+**fresh** sub-namespace, then unconditionally copies every key from it onto the outer namespace —
+if the subparser's own `--root` wasn't repeated after the verb, that fresh sub-namespace's default
+value silently overwrote `p`'s already-correct one, with no warning, at exit 0). `default=SUPPRESS`
+on the subparser's copy means an unrepeated flag is simply absent from the sub-namespace, so the
+clobbering copy loop never touches it and `p`'s resolved value survives; a flag that IS repeated
+after the verb (the pre-existing, still most common convention — `status --root R`) is parsed for
+real by the subparser and correctly wins, same as before. Both flag placements are equivalent for
+all four flags — verified in `TestGlobalFlagPlacement`. Only an unrecognized verb, or genuinely
+unrecognized arguments after a valid verb, still exit `2`.
 
-**`status` aggregates + blanking fix + `in_flight` (Amendment 2 — 2026-07-30):** `status` (with or
-without `<name>`) prints a leading line before anything else: `fleet: N loops · ok X · warn Y ·
-alert Z · needs_attention W · spend7d $S`. `N` is the loop count under `--from` (`loops.d` by
-default); `ok`/`warn`/`alert` bucket each loop's *displayed* `effective_status` (see the blanking
-fix below) on a `runner_status=completed` run; `needs_attention` is `warn + alert` plus any loop
-whose newest resolvable run did not complete cleanly (a failure status, `skipped-precheck`, or no
-resolvable terminal run at all); a loop with zero runs ever contributes to `N` but not to any of the
-four buckets. `spend7d` sums `cost_usd` across `db.py query spend --days 7`. Computed from `db.py
-query loops-summary` (one row per loop: its newest run) plus, only for loops whose newest row isn't
-"terminal" (see below), a `last-runs --limit 10` fallback lookup — the common case (a loop's newest
-run completed cleanly) costs one shared query for the whole fleet, not one query per loop. `--json`
-wraps the existing per-loop rows in an envelope: `{"fleet": {"loops", "ok", "warn", "alert",
-"needs_attention", "spend7d"}, "loops": [...]}` — this applies whether or not `<name>` was given.
-Table form is unchanged below the new leading line.
-  Blanking fix: a run row is "terminal" (safe to display) only if `finished_at` is set AND
-`runner_status != "skipped-overlap"` — a `skipped-overlap` row finishes immediately but never
-carries real status/headline data, and an unfinished row (`finished_at IS NULL`) has none yet
-either; naively using "the newest row" for either case blanked the display. `status` now falls back
-to the newest *terminal* row (within the last 10) for `runner_status`/`effective_status`/
-`headline`/`started_at`; if none of the last 10 is terminal, those fields stay `None`. Independently,
-each row also gains `"in_flight": true/false` — true whenever the loop's actual newest run has
-`finished_at IS NULL` (a real in-progress run), regardless of whether a fallback was needed for
-display. `next_run` estimation is unaffected — it always uses the true newest row's `started_at`,
-never the fallback.
+**`status` aggregates + blanking fix + `in_flight` (Amendment 2 — 2026-07-30, fix round 1 —
+2026-07-30):** `status` (with or without `<name>`) prints a leading line before anything else:
+`fleet: N loops · ok X · warn Y · alert Z · needs_attention W · spend7d $S`. `N` is the loop count
+under `--from` (`loops.d` by default). `spend7d` sums `cost_usd` across `db.py query spend --days
+7`. `--json` wraps the existing per-loop rows in an envelope: `{"fleet": {"loops", "ok", "warn",
+"alert", "needs_attention", "spend7d"}, "loops": [...]}` — this applies whether or not `<name>` was
+given. Table form is unchanged below the new leading line.
+  **`ok`/`warn`/`alert`/`needs_attention` — "the dashboard is canonical" (fix round 1):** these are
+computed by reapplying `dashboard/generate.py`'s own health formula (`compute_light` +
+`is_stale`/`is_died`/`is_overdue`, ~:1275-1323) to each loop's **RAW** newest run row (from `db.py
+query loops-summary`) — never the blanking-fix's fallback-resolved row. `ok`/`warn`/`alert` map the
+dashboard's green/amber/red 1:1; a loop whose light is grey (never run, or a still-running run
+within its own timeout budget) counts toward `N` but not toward any of the three. `needs_attention`
+is the dashboard's own boolean — amber or red light, OR stale (overdue per the schedule), OR died
+(past the harness timeout + grace) — so it necessarily agrees with what a human sees on the
+dashboard for the same fixture, including that a `skipped-overlap`/`skipped-precheck` row is
+unconditionally amber/needs-attention regardless of what the prior run was, and including staleness
+and harness-death, neither of which the blanking-fix's fallback row alone would catch. A completed
+run with a missing/unrecognized `effective_status` falls to grey (`compute_light`'s own documented
+fallback) — uncounted in `ok`/`warn`/`alert`, not a silent special case of `status`'s own. Pinned
+against the dashboard directly on identical fixture data in
+`test_fleet_aggregate_agrees_with_dashboard_on_overlap_over_ok`.
+  **Blanking fix (display text only, unaffected by the above):** a run row is "terminal" (safe to
+display) only if `finished_at` is set AND `runner_status != "skipped-overlap"` — a `skipped-overlap`
+row finishes immediately but never carries real status/headline data, and an unfinished row
+(`finished_at IS NULL`) has none yet either; naively using "the newest row" for either case blanked
+the display. `status` falls back to the newest *terminal* row (within the last 10) for
+`runner_status`/`effective_status`/`headline`/`started_at` shown per loop; if none of the last 10 is
+terminal, those fields stay `None`. This fallback is display-text only — it does NOT feed the health
+counts above. Independently, each row also gains `"in_flight": true/false` — true whenever the
+loop's actual newest run has `finished_at IS NULL` (a real in-progress run), regardless of whether a
+fallback was needed for display. `next_run` estimation is unaffected — it always uses the true
+newest row's `started_at`, never the fallback.
 
 **Definitive empty states (Amendment 2 — 2026-07-30):** `list` (table form) with zero loops under
 `--from` prints `0 loops (<from-dir> empty)` (e.g. `0 loops (loops.d empty)`) instead of the generic

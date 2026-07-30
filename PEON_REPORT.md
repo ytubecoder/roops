@@ -66,3 +66,13 @@ None.
 
 No remaining concerns. C1 intentionally has no hermetic test because it reads the
 real login shell path, per task instruction.
+
+## Revision Note
+
+- Narrowed the C2 generic KV lookbehind to `(?<![A-Za-z0-9-])`, so hyphenated
+  compounds and letter-adjacent tails still avoid generic redaction while
+  underscore env-var compounds like `GITHUB_TOKEN=` keep value redaction.
+- Added two regression tests: `GITHUB_TOKEN=hunter2` and `DB_PASSWORD=hunter2`
+  redact their values.
+- Verified `python3 -m unittest tests.test_redact tests.test_kagi_ban` and
+  `bash tests/run-tests.sh` green.

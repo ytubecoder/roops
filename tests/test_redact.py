@@ -118,6 +118,14 @@ class TestRedactPatterns(unittest.TestCase):
         self.assertNotIn("hunter2value", out)
         self.assertNotIn("trailing context", out)
 
+    def test_underscore_token_env_var_still_redacts_value(self):
+        out = redact("GITHUB_TOKEN=hunter2")
+        self.assertEqual(out, "GITHUB_TOKEN=«redacted:secret»")
+
+    def test_underscore_password_env_var_still_redacts_value(self):
+        out = redact("DB_PASSWORD=hunter2")
+        self.assertEqual(out, "DB_PASSWORD=«redacted:secret»")
+
     def test_compound_keyword_finding_id_is_not_redacted(self):
         text = "hosts-token: av:gh-cli-hosts-token:1a2b3c4d | high | detail"
         self.assertEqual(redact(text), text)

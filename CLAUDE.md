@@ -16,6 +16,22 @@ Custom thin harness for scheduled agent "loops" (recurring maintenance/monitorin
 - **Roops rebrand (applied at brand level 2026-07-30):** GitHub repo renamed `ytubecoder/roops`; README + dashboard header/title say roops; `bin/roopctl` aliases `loopctl`. Mechanical names deliberately unchanged per the settled alias-not-a-rewrite rule: `loopctl`, `loops.d/`, `state/loops.sqlite`, `com.loops.*` launchd labels, INTERFACES vocabulary, and this machine's checkout stays at `~/projects/loops` (installed plists reference it). The former standalone site repo is retired (`roops-retired`, pending deletion — gh token lacks `delete_repo` scope); brand + UI-concept pages live in `site/` with full history (design system in `site/CLAUDE.md`). The site is LIVE at https://ytubecoder.github.io/roops/ — served from the public `ytubecoder/ytubecoder.github.io` repo (`roops/` folder; user-pages workaround because Pages on the private harness repo needs a paid plan). `site/` is the source of truth, publish via `site/workflows/publish.txt`; published pages stay mock-data-only BY RULE — the real dashboard, with real loop names and spend, is a local gitignored artifact and is never published. `dashboard/generate.py` renders the garden design (hanko stamps over unchanged §4.3 precedence, per-loop tokonoma, pancake chips, 巡/休 install state — B-07; §10 amended twice, style + staleness). Remaining concept follow-ups (interactive hanko/copy buttons, fleet ledger zone, live-run tail, `niwashi` gardener loop) — each visual one is done or presentation-only; the rest still need INTERFACES amendments.
 - Findings/disposition flow (the human arrow): `loopctl findings <loop>` → `ack|dismiss --note|snooze --until|reopen`. Dismissed/snoozed findings are suppressed by the RUNNER (latest.json + dashboard); the engine still emits them; audit copy stays in `state/runs/<id>/contract.json`.
 
+## Change lifecycle routing (which flow for which change)
+- **Feature-scale change** (new capability, new loop, new output tier — anything that IS or
+  should be a B-ticket): OpenSpec is the enrolled spec lifecycle. `openspec-propose` creates
+  `openspec/changes/<date>-<ticket-id>-<slug>/`; implement via `openspec-apply-change`;
+  `openspec-archive-change` when done. Name the change dir after the Ticket Takeaway ticket
+  (precedent: B-01, the only change through it so far — B-04..B-08 bypassed it via
+  superpowers plans; from now on, feature-scale work goes through OpenSpec).
+  `docs/INTERFACES.md` stays the frozen authority — OpenSpec artifacts point at it, never
+  duplicate it (`openspec/config.yaml` says the same).
+- **Small fix / hardening / docs amendment** (like B-09): superpowers plan in
+  `docs/superpowers/plans/` or a direct edit; the INTERFACES amendment ships in the same
+  commit as the code. No OpenSpec change below feature scale.
+- **Either way:** open a Ticket Takeaway ticket at start of work
+  (`python3 ~/.claude/ticket-takeaway/tickets-cli.py add loops "<title>" --section wip`),
+  move it to review when coding completes.
+
 ## Non-negotiables (from the plan — full rationale in docs/HARNESS_PLAN.md)
 - Engine: **codex default** (`codex exec --output-last-message --output-schema`), claude switchable (`claude -p --json-schema`), local models later. Prompts engine-neutral; prefer CLI/curl over MCP.
 - The real invariant (README "What Can Actually Change Things"): **deterministic code you wrote gets full power; the model gets a sandbox.** `precheck.sh` is trusted UNSANDBOXED bash (all network/file I/O belongs there); the **model** is contained by the four per-loop permission axes, never by prompt text alone. The whole current fleet sits at/near the report-only floor; widening an axis is a per-loop config change requiring written justification — never something inherited or assumed. Know which axis actually contains what: the **working-directory write sandbox**, `--tools`, and `perm_network=none` are the real containment. `exec_allowlist` is NOT — a non-allowlisted `echo` still ran under a one-entry allowlist (verified 2026-07-28), so treat the allowlist as intent, not as a boundary.

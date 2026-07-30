@@ -92,6 +92,16 @@ CREATE TABLE IF NOT EXISTS dispositions (
 );
 CREATE INDEX IF NOT EXISTS idx_disp_loop_finding ON dispositions(loop_name, finding_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS loop_events (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  loop_name TEXT NOT NULL,
+  event     TEXT NOT NULL,
+  actor     TEXT NOT NULL,
+  ts        TEXT NOT NULL,
+  detail    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_loop_ts ON loop_events(loop_name, ts DESC);
+
 CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -180,6 +190,13 @@ class FixtureRoot:
                 error_detail,
                 exit_code,
             ),
+        )
+        conn.commit()
+
+    def add_event(self, conn, loop_name, event, actor, ts=None, detail=None):
+        conn.execute(
+            "INSERT INTO loop_events(loop_name, event, actor, ts, detail) VALUES (?,?,?,?,?)",
+            (loop_name, event, actor, ts or iso(NOW), detail),
         )
         conn.commit()
 
@@ -1322,6 +1339,156 @@ class FailureSurfacingTests(unittest.TestCase):
         conn.close()
         html = self._generate()
         self.assertNotIn('class="report-drawer"', html)
+
+
+class TagsProvenanceEventsTests(unittest.TestCase):
+    """Tag chips, per-loop provenance line, and the fleet-wide recent-events strip
+    (Amendment 2 -- 2026-07-30). loop_events rows are inserted directly against the
+    §3 schema fixture; tags are injected via fake_loopconf_parse's conf_overrides seam
+    (the fake KEY=value fixture parser doesn't replicate loopconf.py's real `tags=`
+    comma-split/quoting grammar -- that's covered by bin/loopconf.py's own tests)."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+        self.fx.init_db().close()
+        self._tag_overrides = {}
+
+    def _root_with_loop(self, name, tags=None, description="a loop"):
+        self.fx.add_loop(name, description=description)
+        if tags is not None:
+            self._tag_overrides[name] = {"tags": tags}
+        return self.fx.root
+
+    def _insert_event(self, root, loop_name, event, actor, detail=None, ts=None):
+        conn = sqlite3.connect(self.fx.db_path)
+        try:
+            self.fx.add_event(conn, loop_name, event, actor, ts=ts, detail=detail)
+        finally:
+            conn.close()
+
+    def _generate(self, root):
+        out = os.path.join(root, "dashboard", "loops.html")
+        generate.generate(
+            root=root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(self._tag_overrides),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            return f.read()
+
+    def test_tags_and_provenance_render(self):
+        root = self._root_with_loop("tagged", tags=["project:x"])
+        self._insert_event(
+            root,
+            "tagged",
+            "imported",
+            "claude/maguyva",
+            detail='{"source_skill": "~/.claude/skills/seo-audit"}',
+        )
+        html = self._generate(root)
+        self.assertIn('class="tag"', html)
+        self.assertIn("project:x", html)
+        self.assertIn("claude/maguyva", html)
+        self.assertIn("seo-audit", html)
+
+    def test_provenance_without_source_skill_falls_back_to_actor_and_date(self):
+        root = self._root_with_loop("plain")
+        self._insert_event(
+            root, "plain", "created", "tester", ts=iso(NOW - timedelta(days=2))
+        )
+        html = self._generate(root)
+        self.assertIn("created by tester", html)
+        self.assertIn((NOW - timedelta(days=2)).strftime("%Y-%m-%d"), html)
+
+    def test_no_events_no_provenance_line_for_that_loop(self):
+        root = self._root_with_loop("lonely")
+        html = self._generate(root)
+        self.assertNotIn('class="provenance', html)
+
+    def test_no_tags_no_chip_and_no_data_tags_attribute(self):
+        root = self._root_with_loop("untagged")
+        html = self._generate(root)
+        self.assertNotIn('class="tag"', html)
+        # the filter JS's `[data-tags]` selector is expected boilerplate; only the
+        # actual HTML attribute (with its opening quote) is what must be absent
+        self.assertNotIn('data-tags="', html)
+
+    def test_tag_filter_select_only_rendered_when_tags_exist(self):
+        root = self._root_with_loop("untagged")
+        html = self._generate(root)
+        self.assertNotIn('id="tag-filter"', html)
+
+    def test_tag_filter_select_rendered_and_populated_when_tags_exist(self):
+        root = self._root_with_loop("tagged", tags=["project:x", "seo"])
+        html = self._generate(root)
+        self.assertIn('id="tag-filter"', html)
+        self.assertIn('<option value="project:x">', html)
+        self.assertIn('<option value="seo">', html)
+
+    def test_data_tags_attribute_on_row_and_section_space_separated(self):
+        root = self._root_with_loop("tagged", tags=["project:x", "seo"])
+        html = self._generate(root)
+        self.assertIn('data-tags="project:x seo"', html)
+
+    def test_chips_render_in_both_fleet_row_and_loop_section(self):
+        root = self._root_with_loop("tagged", tags=["project:x"])
+        html = self._generate(root)
+        self.assertEqual(html.count('<span class="tag">project:x</span>'), 2)
+
+    def test_recent_events_strip(self):
+        root = self._root_with_loop("l1")
+        self._insert_event(root, "l1", "created", "tester")
+        html = self._generate(root)
+        self.assertIn('id="recent-events"', html)
+        self.assertIn("created", html)
+
+    def test_recent_events_strip_empty_state(self):
+        root = self._root_with_loop("l1")
+        html = self._generate(root)
+        self.assertIn('id="recent-events"', html)
+        self.assertIn("no lifecycle events yet", html)
+
+    def test_recent_events_strip_limited_to_15_fleet_wide(self):
+        root = self._root_with_loop("l1")
+        for i in range(20):
+            self._insert_event(
+                root,
+                "l1",
+                "paused" if i % 2 else "resumed",
+                "tester",
+                ts=iso(NOW - timedelta(minutes=20 - i)),
+            )
+        html = self._generate(root)
+        table_start = html.index('id="recent-events"')
+        table_end = html.index("</section>", table_start)
+        strip = html[table_start:table_end]
+        body_start = strip.index("<tbody>")
+        body_end = strip.index("</tbody>")
+        self.assertEqual(strip[body_start:body_end].count("<tr>"), 15)
+
+    def test_event_detail_and_actor_html_escaped(self):
+        root = self._root_with_loop("l1")
+        self._insert_event(
+            root,
+            "l1",
+            "imported",
+            '<script>alert("x")</script>',
+            detail='{"source_skill": "<img src=x onerror=alert(1)>"}',
+        )
+        html = self._generate(root)
+        self.assertNotIn('<script>alert("x")</script>', html)
+        self.assertNotIn("<img src=x onerror=alert(1)>", html)
+        self.assertIn("&lt;script&gt;", html)
+
+    def test_tag_filter_js_toggles_display_none_on_non_matching(self):
+        root = self._root_with_loop("tagged", tags=["project:x"])
+        html = self._generate(root)
+        self.assertIn("onchange=", html)
+        self.assertIn("display", html)
+        self.assertIn("none", html)
 
 
 if __name__ == "__main__":

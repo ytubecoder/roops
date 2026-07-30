@@ -807,6 +807,22 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   `report_markdown` from the suppression-filtered `latest.json` inside a collapsed
   `<details>` — HTML-escaped, displayed as text (markdown is not parsed), clamped at 8 KiB
   with a truncation marker; the `latest.md` link is retained alongside.
+- **Tags + provenance + recent-events strip (Amendment 2 — 2026-07-30):** rendered from
+  `loop.conf`'s `tags=` and the `loop_events` table (§3) — never re-derived from markdown.
+  Loop rows and sections carry `data-tags="a b c"` (space-separated, omitted when a loop has
+  no tags); tag chips (`<span class="tag">`) render next to the loop name in both the fleet
+  row and its per-loop section. A `<select id="tag-filter">` is rendered only when at least
+  one tag exists fleet-wide, populated from the union of every loop's tags; its `onchange`
+  runs inline vanilla JS that toggles `display:none` on non-matching `[data-tags]` elements —
+  **client-side only**, no server round-trip, no query-string state. Each per-loop section
+  shows a provenance line for the loop's most recent `created`/`imported` event (found by
+  filtering `event IN ('created','imported')` in SQL before any `LIMIT`, so the founding event
+  is never lost behind later `paused`/`resumed`/etc. rows): `<event> from <source> by <actor>,
+  <date>` when that event's `detail` JSON carries a `source_skill`, else `<event> by <actor>,
+  <date>`; no such event ⇒ no line rendered. A fleet-wide `<section id="recent-events">` lists
+  the last 15 `loop_events` rows (newest first, `load_loop_events(conn, limit=15)`); zero
+  events still renders the section, with a literal "no lifecycle events yet" line rather than
+  omitting it.
 - Style: bold and distinctive, not generic corporate; dark-friendly; function first, dense over
   airy. It is a status board read at a glance, not a marketing page.
 

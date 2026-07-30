@@ -478,6 +478,32 @@ def _latest_heartbeat(conn, loop_name):
     return dict(row) if row else None
 
 
+def load_loop_events(conn, limit=15):
+    """Fleet-wide most-recent lifecycle events (§3 `loop_events`), newest first.
+    Powers the `<section id="recent-events">` strip."""
+    if conn is None:
+        return []
+    rows = conn.execute(
+        "SELECT * FROM loop_events ORDER BY ts DESC, id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _loop_provenance(conn, loop_name):
+    """Most recent created/imported event for a loop (Amendment 2). The `event IN (...)`
+    filter runs in SQL before the LIMIT so the founding event is never lost behind a run of
+    later paused/resumed/etc. rows — same fix as loopctl's `status --json` provenance lookup."""
+    if conn is None:
+        return None
+    row = conn.execute(
+        "SELECT * FROM loop_events WHERE loop_name=? AND event IN ('created','imported') "
+        "ORDER BY ts DESC, id DESC LIMIT 1",
+        (loop_name,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def _read_json(path):
     if not os.path.isfile(path):
         return None
@@ -589,7 +615,118 @@ details.raw-fallback summary { cursor: pointer; color: #808a99; font-size: 0.8re
 .hb .light { margin-right: 0.35rem; }
 .empty { padding: 3rem; text-align: center; color: #808a99; }
 footer { text-align: center; color: #4a5364; font-size: 0.75rem; padding: 1.5rem; }
+.tags { margin: 0.2rem 0; }
+.tag {
+  display: inline-block; font-size: 0.68rem; font-weight: 600; padding: 0.05rem 0.5rem;
+  border-radius: 999px; background: #1a2029; border: 1px solid #2c3444; color: #9fb0c3;
+  margin-right: 0.3rem;
+}
+.provenance { font-size: 0.78rem; margin: 0.3rem 0 0.6rem; }
+#recent-events {
+  padding: 0.7rem 1.4rem; background: #0e1218; border-bottom: 1px solid #1a2029;
+}
+#recent-events h3 {
+  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: #808a99;
+  margin-bottom: 0.5rem; font-weight: 700;
+}
+.events-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.events-table th { text-align: left; color: #808a99; font-weight: 600; padding: 0.2rem 0.6rem; }
+.events-table td { padding: 0.2rem 0.6rem; border-bottom: 1px solid #171c25; }
+.filter-bar { margin-bottom: 0.8rem; font-size: 0.82rem; color: #808a99; }
+.filter-bar select {
+  background: #171c25; color: #d7dce3; border: 1px solid #232a36; border-radius: 4px;
+  padding: 0.25rem 0.5rem; font: inherit; margin-left: 0.4rem;
+}
 """
+
+DASHBOARD_JS = """
+function loopsFilterByTag(tag) {
+  document.querySelectorAll('[data-tags]').forEach(function (el) {
+    if (!tag) { el.style.display = ''; return; }
+    var tags = (el.getAttribute('data-tags') || '').split(' ');
+    el.style.display = tags.indexOf(tag) > -1 ? '' : 'none';
+  });
+}
+"""
+
+
+def _render_tag_chips(tags):
+    if not tags:
+        return ""
+    return (
+        '<div class="tags">'
+        + "".join(f'<span class="tag">{e(t)}</span>' for t in tags)
+        + "</div>"
+    )
+
+
+def _data_tags_attr(tags):
+    if not tags:
+        return ""
+    return f' data-tags="{e(" ".join(tags))}"'
+
+
+def _event_source_skill(detail):
+    """Pulls `source_skill` out of an event's opaque detail JSON, if present. Detail is
+    imported-file-derived text -- callers must still HTML-escape whatever this returns."""
+    if not detail:
+        return None
+    try:
+        data = json.loads(detail)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(data, dict):
+        val = data.get("source_skill")
+        if val:
+            return str(val)
+    return None
+
+
+def _render_provenance(prov):
+    """Per-loop provenance line for the most recent created/imported event:
+    `<event> from <source> by <actor>, <date>` when detail carries a source_skill,
+    else `<event> by <actor>, <date>`. No qualifying event -> no line."""
+    if not prov:
+        return ""
+    event = prov.get("event") or ""
+    actor = prov.get("actor") or ""
+    date = (prov.get("ts") or "")[:10]
+    source = _event_source_skill(prov.get("detail"))
+    if source:
+        text = f"{event} from {source} by {actor}, {date}"
+    else:
+        text = f"{event} by {actor}, {date}"
+    return f'<div class="provenance muted">{e(text)}</div>'
+
+
+def _render_events_strip(events, now):
+    """Fleet-wide `<section id="recent-events">` — last N loop_events rows, newest first.
+    Zero events still renders the section with an explicit empty-state line."""
+    if not events:
+        body = '<p class="muted">no lifecycle events yet</p>'
+    else:
+        rows = []
+        for ev in events:
+            source = _event_source_skill(ev.get("detail"))
+            detail_text = e(source) if source else ""
+            rows.append(
+                "<tr>"
+                f"<td>{e(format_relative(ev['ts'], now))} "
+                f'<span class="muted">({e(ev["ts"])})</span></td>'
+                f"<td>{e(ev['loop_name'])}</td>"
+                f"<td>{e(ev['event'])}</td>"
+                f"<td>{e(ev['actor'])}</td>"
+                f"<td>{detail_text}</td>"
+                "</tr>"
+            )
+        body = (
+            '<table class="events-table"><thead><tr><th>When</th><th>Loop</th>'
+            "<th>Event</th><th>Actor</th><th>Detail</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
+    return (
+        f'<section id="recent-events"><h3>Recent lifecycle events</h3>{body}</section>'
+    )
 
 
 def _light_html(color, marker=None, extra_badges=()):
@@ -861,11 +998,13 @@ def _render_loop_row(loop, now):
     report_link = ""
     if loop["report_href"]:
         report_link = f'<a href="{e(loop["report_href"])}">latest</a>'
+    tags_html = _render_tag_chips(loop["tags"])
+    data_tags = _data_tags_attr(loop["tags"])
     return (
-        "<tr>"
+        f"<tr{data_tags}>"
         f"<td>{light}</td>"
         f'<td class="loop-name"><a href="#loop-{e(loop["name"])}">{e(loop["name"])}</a>'
-        f'<div class="muted">{e(loop["description"])}</div></td>'
+        f'<div class="muted">{e(loop["description"])}</div>{tags_html}</td>'
         f"<td>{headline}</td>"
         f"<td>{last_run}</td>"
         f'<td>{e(loop["schedule"])}<div class="muted">{e(next_run)}</div></td>'
@@ -964,9 +1103,15 @@ def _render_loop_section(loop, conn, now):
         else:
             hb_html = '<div class="hb muted">Heartbeat: no probes recorded</div>'
 
+    tags_html = _render_tag_chips(loop["tags"])
+    data_tags = _data_tags_attr(loop["tags"])
+    provenance_html = _render_provenance(loop.get("provenance"))
+
     return (
-        f'<section class="loop" id="loop-{e(loop["name"])}">'
+        f'<section class="loop" id="loop-{e(loop["name"])}"{data_tags}>'
         f'<h2>{light}{e(loop["name"])} <span class="muted">{e(loop["description"])}</span></h2>'
+        f"{tags_html}"
+        f"{provenance_html}"
         f"{hb_html}"
         f"{handoff_html}"
         f"{panels_html}"
@@ -1000,6 +1145,8 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
     latest_run = _latest_run(conn, name)
     recent_runs = _recent_runs(conn, name)
     heartbeat = _latest_heartbeat(conn, name)
+    tags = conf.get("tags") or []
+    provenance = _loop_provenance(conn, name)
 
     timeout_s = conf.get("timeout_s", 900)
     schedule_spec = conf.get("schedule", "manual")
@@ -1060,6 +1207,8 @@ def _resolve_loop(root, name, conn, loopconf_parse, schedule_parse, now):
         "latest_run": latest_run,
         "recent_runs": recent_runs,
         "heartbeat": heartbeat,
+        "tags": tags,
+        "provenance": provenance,
         "died": died,
         "stale": stale,
         "light_color": light_color,
@@ -1099,9 +1248,17 @@ def generate(
         since_7d = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
         spend_today = _fleet_spend(conn, since_today)
         spend_7d_fleet = _fleet_spend(conn, since_7d)
+        events = load_loop_events(conn, limit=15)
 
         html = _render_page(
-            loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn
+            loops,
+            counts,
+            needs_attention_count,
+            spend_today,
+            spend_7d_fleet,
+            now,
+            conn,
+            events,
         )
     finally:
         if conn is not None:
@@ -1112,7 +1269,7 @@ def generate(
 
 
 def _render_page(
-    loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn
+    loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn, events
 ):
     top_chips = "".join(
         f'<span class="chip"><span class="dot" style="background:'
@@ -1142,9 +1299,26 @@ def _render_page(
         "</div>"
     )
 
+    events_html = _render_events_strip(events, now)
+
     if not loops:
-        body = '<main><div class="empty">No loops configured yet.</div></main>'
+        body = (
+            f"{events_html}"
+            '<main><div class="empty">No loops configured yet.</div></main>'
+        )
         return _wrap_html(top, body)
+
+    tag_options = sorted({t for loop in loops for t in loop["tags"]})
+    filter_html = ""
+    if tag_options:
+        opts = '<option value="">all tags</option>' + "".join(
+            f'<option value="{e(t)}">{e(t)}</option>' for t in tag_options
+        )
+        filter_html = (
+            '<div class="filter-bar"><label>Filter by tag'
+            f'<select id="tag-filter" onchange="loopsFilterByTag(this.value)">{opts}</select>'
+            "</label></div>"
+        )
 
     global_rows = "".join(_render_loop_row(loop, now) for loop in loops)
     global_table = (
@@ -1155,7 +1329,7 @@ def _render_page(
 
     sections = "".join(_render_loop_section(loop, conn, now) for loop in loops)
 
-    body = f"<main>{global_table}{sections}</main>"
+    body = f"{events_html}<main>{filter_html}{global_table}{sections}</main>"
     return _wrap_html(top, body)
 
 
@@ -1176,6 +1350,7 @@ def _wrap_html(top, body):
         f"<style>{CSS}</style></head><body>"
         f"{top}{body}"
         "<footer>loops harness — static dashboard, report/propose-only</footer>"
+        f"<script>{DASHBOARD_JS}</script>"
         "</body></html>"
     )
 

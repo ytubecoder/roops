@@ -1,9 +1,10 @@
 # Report pages — follow-up warmstart (updated 2026-07-30)
 
 The report-pages tier (INTERFACES Amendment 2) and its pilot `kagi-ban` **shipped and are live**.
-**The three parked decisions and the whole follow-up backlog are now CLEARED** (second wave,
-2026-07-30). What remains below is the live-state context a cold agent needs, the PATH explanation
-that must not be "fixed" back, and two small leftovers. Delete sections here as they resolve.
+**The three parked decisions, the whole follow-up backlog, and both trailing leftovers are CLEARED**
+(2026-07-30). Nothing here is outstanding. What remains is the live-state context a cold agent
+needs, the PATH explanation that must not be "fixed" back, and the settled decisions with their
+reasoning, so they are not silently reversed. Delete sections here as they stop being load-bearing.
 
 - Design rationale: `docs/REPORT_PAGES_PLAN.md` · Mechanical contract: `docs/INTERFACES.md`
   §4.1 step 6.5 + §12 · Author guide: `docs/REPORT_PAGES.md` · Plan (executed):
@@ -60,26 +61,26 @@ an ungated one (the promotion gate imports redact too, so nothing could promote 
   rest-of-line rule; underscore compounds (`GITHUB_TOKEN=`) still do; the specific high-value
   patterns (`ghp_`/`sk-`/`xox`/`AKIA`/`eyJ`/private-key) fire regardless and are the primary
   control. Recorded in `bin/redact.py`'s comment.
-- **`pagekit/kit.css` stays an inlined copy, bound by test** — not read at render time. Reading it
-  live would make the shipped page's bytes depend on a mutable external file (breaking
-  byte-determinism) and would need a fallback copy anyway, reintroducing the drift. The bodies are
-  asserted byte-identical instead. **Edit both together.**
+- **`pagekit/kit.css` is READ at render time — it is the single source of report-page CSS.**
+  `$PAGEKIT` (exported by `bin/run-loop.sh` step 6.5) is the runner's path to it; `render_page.py`
+  falls back to its own repo layout so a bare `python3 render_page.py` works. The body is inlined
+  into `<style>` (pages must stay self-contained offline — never `<link>` it) and the header
+  comment is stripped. A missing kit.css **fails the render**, same call as the redact import: it
+  is a committed file, so its absence is a broken checkout, and failing names the path in
+  `page-render.log` instead of quietly promoting an unstyled page. Editing kit.css restyles every
+  page-enabled loop. Superseded the earlier inlined-copy-bound-by-test design, which left two
+  copies and gave `$PAGEKIT` no reader.
 - **The corrupted finding row is deleted.** `av:gh-cli-hosts-token:«redacted:secret»` (the
   pre-redact-fix id, times_seen=4, resolved) is gone from `state/loops.sqlite`; the real finding
   `av:gh-cli-hosts-token:ff079f7f` is untouched. No `«redacted:»` ids remain in `findings`.
-
-## Remaining leftovers (neither blocking)
-
-- **`PAGEKIT` (the env var) still has no reader.** `bin/run-loop.sh` step 6.5 exports it and no
-  renderer consumes it — kit.css is now bound by test instead. It remains the documented contract
-  for future page loops; decide whether to keep exporting it when the second page-enabled loop
-  lands.
-- **CLAUDE.md's "`http://` must not appear anywhere in the dashboard page" is stricter than what
-  is enforceable.** The real `dashboard/loops.html` contains one occurrence — inside a loop's
-  finding text, a probe reporting that `http://127.0.0.1:9/dead` refused a connection. It is data
-  in a `<pre>`, not an asset reference, so it triggers no network fetch. `tests/test_dashboard.py`
-  correctly asserts against a hermetic fixture (it guards the *generator*), so real finding text
-  can never be caught by it. Do not "fix" this by mangling finding text.
+- **Page self-containment is asserted on references, not on the substring `http://`.** The old rule
+  ("the page must not contain `http://` anywhere") was simultaneously too strict — real finding text
+  contains URLs, and `xmlns="http://www.w3.org/2000/svg"` is an identifier — and too loose, since
+  `src="//cdn.example/x.js"` fetches from the network without containing `http://` at all.
+  `tests/html_selfcontained.py` collects everything the browser dereferences on load (`src`,
+  `srcset`, `poster`, `data`, fetching `<link rel>`s, CSS `@import`/`url()`, inline `style=`) and
+  requires each to be relative or `data:`. Navigation `<a href>` is deliberately excluded. The
+  scanner has its own tests — an always-empty scanner would make every call pass vacuously.
 
 ## Tooling note (not this repo)
 

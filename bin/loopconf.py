@@ -12,6 +12,7 @@ grammar (see module docstring sections below for the exact rules).
 Dangerous-combo checks (§5.2) are NOT here — they live in `loopctl
 validate`.
 """
+
 import argparse
 import importlib.util
 import json
@@ -35,6 +36,7 @@ _schedule = _load_schedule_module()
 
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
+TAG_RE = re.compile(r"^[a-z][a-z0-9:_-]{1,40}$")
 
 # Field table (§5). Each entry declares: required, type, default (or
 # _REQUIRED / _CONDITIONAL sentinels), plus type-specific extras.
@@ -49,10 +51,28 @@ FIELDS = {
     "model": {"required": False, "type": "str", "default": None},
     "schedule": {"required": True, "type": "schedule"},
     "workdir": {"required": False, "type": "path", "default": None},
-    "timeout_s": {"required": False, "type": "int", "min": 30, "max": 7200, "default": 900},
+    "timeout_s": {
+        "required": False,
+        "type": "int",
+        "min": 30,
+        "max": 7200,
+        "default": 900,
+    },
     "enabled": {"required": False, "type": "bool", "default": True},
-    "retention_days": {"required": False, "type": "int", "min": 1, "max": 3650, "default": 30},
-    "retry_transient": {"required": False, "type": "int", "min": 0, "max": 3, "default": 1},
+    "retention_days": {
+        "required": False,
+        "type": "int",
+        "min": 1,
+        "max": 3650,
+        "default": 30,
+    },
+    "retry_transient": {
+        "required": False,
+        "type": "int",
+        "min": 0,
+        "max": 3,
+        "default": 1,
+    },
     "perm_fs_write": {
         "required": False,
         "type": "enum",
@@ -79,8 +99,13 @@ FIELDS = {
     },
     "exec_allowlist": {"required": False, "type": "list", "default": None},
     "credential_env": {"required": False, "type": "list", "default": None},
-    "remote_mutation_justification": {"required": False, "type": "str", "default": None},
+    "remote_mutation_justification": {
+        "required": False,
+        "type": "str",
+        "default": None,
+    },
     "notes": {"required": False, "type": "str", "default": None},
+    "tags": {"required": False, "type": "tags", "default": None},
     "i_accept_unrestricted": {"required": False, "type": "bool", "default": False},
 }
 
@@ -125,10 +150,9 @@ def _parse_value(rest: str):
         # whitespace is the value; whitespace must then be followed
         # (after more whitespace) by a comment '#' or end of line.
         m = re.match(r"^(\S*)(\s*)(.*)$", rest)
-        value, ws, remainder = m.group(1), m.group(2), m.group(3)
-        if remainder:
-            if not remainder.lstrip().startswith("#"):
-                raise _LineError("bare value must not contain spaces")
+        value, _ws, remainder = m.group(1), m.group(2), m.group(3)
+        if remainder and not remainder.lstrip().startswith("#"):
+            raise _LineError("bare value must not contain spaces")
         return value
 
 
@@ -155,7 +179,7 @@ def _split_line(line: str):
 
 def _expand_home(value: str) -> str:
     if value.startswith("$HOME"):
-        return os.path.expanduser("~") + value[len("$HOME"):]
+        return os.path.expanduser("~") + value[len("$HOME") :]
     if value == "~":
         return os.path.expanduser("~")
     if value.startswith("~/"):
@@ -186,7 +210,9 @@ def parse(path: str):
         key, rest = split
 
         if not KEY_RE.match(key):
-            errors.append(f"line {lineno}: invalid key {key!r} (must match ^[a-z][a-z0-9_]*$)")
+            errors.append(
+                f"line {lineno}: invalid key {key!r} (must match ^[a-z][a-z0-9_]*$)"
+            )
             continue
 
         if key not in FIELDS:
@@ -230,13 +256,22 @@ def parse(path: str):
     # validate, which has the directory context; parser stays generic).
 
     # Conditional requirements.
-    if conf.get("perm_local_exec") == "allowlist" or conf.get("perm_remote_mutation") == "allowlist":
-        if not conf.get("exec_allowlist"):
-            errors.append("exec_allowlist is required when perm_local_exec=allowlist or perm_remote_mutation=allowlist")
+    if (
+        conf.get("perm_local_exec") == "allowlist"
+        or conf.get("perm_remote_mutation") == "allowlist"
+    ) and not conf.get("exec_allowlist"):
+        errors.append(
+            "exec_allowlist is required when perm_local_exec=allowlist or perm_remote_mutation=allowlist"
+        )
 
-    if conf.get("perm_remote_mutation") and conf.get("perm_remote_mutation") != "none":
-        if not conf.get("remote_mutation_justification"):
-            errors.append("remote_mutation_justification is required when perm_remote_mutation != none")
+    if (
+        conf.get("perm_remote_mutation")
+        and conf.get("perm_remote_mutation") != "none"
+        and not conf.get("remote_mutation_justification")
+    ):
+        errors.append(
+            "remote_mutation_justification is required when perm_remote_mutation != none"
+        )
 
     return conf, errors
 
@@ -245,7 +280,11 @@ def _typecheck(key, field, raw_value):
     t = field["type"]
     if t == "name":
         if not NAME_RE.match(raw_value):
-            return False, None, f"{key}: {raw_value!r} does not match ^[a-z][a-z0-9-]{{1,40}}$"
+            return (
+                False,
+                None,
+                f"{key}: {raw_value!r} does not match ^[a-z][a-z0-9-]{{1,40}}$",
+            )
         return True, raw_value, None
     if t == "str":
         return True, raw_value, None
@@ -273,6 +312,21 @@ def _typecheck(key, field, raw_value):
     if t == "list":
         items = [x.strip() for x in raw_value.split(",") if x.strip() != ""]
         return True, items, None
+    if t == "tags":
+        entries = [e.strip() for e in raw_value.split(",")]
+        if any(e == "" for e in entries):
+            return False, None, f"{key}: empty tag entry"
+        bad = [e for e in entries if not TAG_RE.match(e)]
+        if bad:
+            return (
+                False,
+                None,
+                f"{key}: invalid tag(s) {bad} (need ^[a-z][a-z0-9:_-]{{1,40}}$)",
+            )
+        deduped = list(dict.fromkeys(entries))
+        if len(deduped) > 8:
+            return False, None, f"{key}: max 8 tags, got {len(deduped)}"
+        return True, deduped, None
     if t == "schedule":
         try:
             _schedule.parse(raw_value)
@@ -313,11 +367,11 @@ def main(argv=None) -> int:
 
     if args.verb == "get":
         if args.key not in FIELDS:
-            print("", end="")
+            print(end="")
             return 1
         conf, errors = parse(args.file)
         if args.key not in conf:
-            print("", end="")
+            print(end="")
             return 1
         value = conf[args.key]
         if isinstance(value, list):
@@ -325,7 +379,7 @@ def main(argv=None) -> int:
         elif isinstance(value, bool):
             print("true" if value else "false")
         elif value is None:
-            print("")
+            print()
         else:
             print(value)
         return 0

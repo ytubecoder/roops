@@ -14,6 +14,7 @@ recording Python stub (`fake_launchctl.py`, written per-fixture) whose exit
 codes and call log are controllable via environment variables.
 """
 
+import importlib.util
 import json
 import os
 import plistlib
@@ -24,10 +25,12 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import ClassVar
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOOPCTL = REPO_ROOT / "bin" / "loopctl"
 DB_PY = REPO_ROOT / "bin" / "db.py"
+FIX = os.path.join(os.path.dirname(__file__), "fixtures", "skills")
 
 FAKE_LAUNCHCTL_SRC = """#!/usr/bin/env python3
 import os
@@ -44,7 +47,7 @@ if log_path:
 verb = sys.argv[1] if len(sys.argv) > 1 else ""
 
 # Simulates launchd actually firing the job on kickstart: inserts a fresh
-# run row, so loopctl's post-kickstart poll (§8.1 step 4) has something real
+# run row, so loopctl's post-kickstart poll (§8.1 step 5) has something real
 # to find. Opt-in via env so failure-path tests can leave it unset and let
 # the poll time out for real.
 #
@@ -123,6 +126,15 @@ def _query_last_runs(root, loop_name, limit=1):
     return json.loads(r.stdout)
 
 
+def _query_loop_events(root, loop_name=None, limit=50):
+    args = ["query", "loop-events", "--root", root, "--limit", str(limit)]
+    if loop_name is not None:
+        args += ["--loop", loop_name]
+    r = run_db(args)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
 def _read(path):
     with open(path) as f:
         return f.read()
@@ -135,6 +147,35 @@ def _read_plist(path):
 
 def iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _load_module_from_path(path, modname):
+    spec = importlib.util.spec_from_file_location(modname, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_dashboard_module():
+    """The real, already-committed dashboard/generate.py — loaded directly
+    (not via bin/loopctl) so tests can independently ask it what a fixture's
+    fleet health SHOULD be, to pin agreement with `loopctl status`'s own
+    aggregate (Amendment 2 fix round 1 — "the dashboard is canonical")."""
+    return _load_module_from_path(
+        str(REPO_ROOT / "dashboard" / "generate.py"), "_test_dashboard"
+    )
+
+
+def _real_loopconf_parse():
+    return _load_module_from_path(
+        str(REPO_ROOT / "bin" / "loopconf.py"), "_test_loopconf"
+    ).parse
+
+
+def _real_schedule_parse():
+    return _load_module_from_path(
+        str(REPO_ROOT / "bin" / "schedule.py"), "_test_schedule"
+    ).parse
 
 
 class LoopsRoot:
@@ -779,6 +820,12 @@ class TestPlistGeneration(LoopsRootTestCase):
         return conf_path, text
 
     def _run_install(self, name):
+        # Run-first precondition (§8.1 Amendment 2): install needs a prior
+        # non-failed supervised run recorded before it will even attempt the
+        # launchd flow these tests are actually about.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(
             LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
             LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
@@ -925,6 +972,79 @@ class TestInstall(LoopsRootTestCase):
         self.assertEqual(r.returncode, 1)
         self.assertEqual(self.fixture.launchctl_calls(), [])
 
+    def test_install_refuses_without_prior_run(self):
+        # Amendment 2 (2026-07-30): install refuses when the loop has zero
+        # runs with runner_status in (completed, skipped-precheck) already
+        # recorded — makes the validate -> supervised run -> install gauntlet
+        # mechanical. This check happens before any launchctl call.
+        name = self._valid_loop("fresh1")
+        r = run_cli(
+            ["install", name, "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("loopctl run", r.stderr)
+        self.assertEqual(self.fixture.launchctl_calls(), [])
+
+    def test_install_refuses_when_only_run_is_failed(self):
+        # A loop whose only run row is a FAILED runner_status is still
+        # refused — the precondition requires a non-failed run, not merely
+        # any run at all.
+        name = self._valid_loop("failed-only")
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-fail1",
+            name,
+            "2026-01-01T00:00:00Z",
+            runner_status="engine-failed",
+        )
+        r = run_cli(
+            ["install", name, "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("loopctl run", r.stderr)
+        self.assertEqual(self.fixture.launchctl_calls(), [])
+
+    def test_install_succeeds_after_completed_run_recorded(self):
+        # Positive case: a prior completed run row satisfies the precondition
+        # and install proceeds through the normal bootout/bootstrap/kickstart
+        # flow.
+        name = self._valid_loop("prior-run-ok")
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1",
+            name,
+            "2026-01-01T00:00:00Z",
+            runner_status="completed",
+        )
+        env = self.fixture.base_env(
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
+            LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
+            FAKE_LAUNCHCTL_INSERT_RUN="completed",
+        )
+        r = run_cli(["install", name, "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        calls = self.fixture.launchctl_calls()
+        verbs = [c.split()[0] for c in calls]
+        self.assertEqual(verbs, ["bootout", "bootstrap", "kickstart"])
+
+    def test_install_succeeds_after_skipped_precheck_run_recorded(self):
+        # skipped-precheck is the other status that satisfies the
+        # precondition, per §8.1's runner_status pair.
+        name = self._valid_loop("prior-run-skip")
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-skip1",
+            name,
+            "2026-01-01T00:00:00Z",
+            runner_status="skipped-precheck",
+        )
+        env = self.fixture.base_env(
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
+            LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
+            FAKE_LAUNCHCTL_INSERT_RUN="completed",
+        )
+        r = run_cli(["install", name, "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+
     def test_success_path_runs_bootout_bootstrap_kickstart_and_verifies(self):
         name = self._valid_loop("succeeds")
         # A pre-existing run row proves the poll requires a genuinely NEW
@@ -952,6 +1072,12 @@ class TestInstall(LoopsRootTestCase):
 
     def test_bootstrap_failure_aborts(self):
         name = self._valid_loop("bootstrap-fails")
+        # Prior completed run satisfies the run-first precondition (§8.1
+        # Amendment 2) so this test still exercises the bootstrap-failure
+        # path it's named for, rather than the earlier precondition refusal.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(FAKE_LAUNCHCTL_BOOTSTRAP_EXIT="1")
         r = run_cli(["install", name, "--root", self.root], env_overrides=env)
         self.assertEqual(r.returncode, 1)
@@ -961,6 +1087,9 @@ class TestInstall(LoopsRootTestCase):
 
     def test_kickstart_failure_aborts_and_boots_out(self):
         name = self._valid_loop("kickstart-fails")
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(FAKE_LAUNCHCTL_KICKSTART_EXIT="1")
         r = run_cli(["install", name, "--root", self.root], env_overrides=env)
         self.assertEqual(r.returncode, 1)
@@ -970,7 +1099,12 @@ class TestInstall(LoopsRootTestCase):
 
     def test_no_fresh_run_row_fails_and_boots_out(self):
         name = self._valid_loop("no-fresh-run")
-        # No run rows at all inserted -> poll must time out.
+        # A prior (stale) completed run satisfies the run-first precondition
+        # so install proceeds to the launchd flow; no FRESH run row appears
+        # after kickstart -> the post-kickstart poll must time out.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-stale1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(
             LOOPCTL_INSTALL_POLL_TIMEOUT_S="0.5", LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1"
         )
@@ -989,6 +1123,11 @@ class TestInstall(LoopsRootTestCase):
         # before install would be rejected by freshness alone and wouldn't
         # exercise the status check at all).
         name = self._valid_loop("fresh-but-failed")
+        # Prior completed run satisfies the run-first precondition so
+        # install reaches the launchd flow this test targets.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(
             LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
             LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
@@ -1007,6 +1146,11 @@ class TestInstall(LoopsRootTestCase):
         # must fail loudly — a fresh-but-never-finished row is not a pass,
         # even though "started" is not in the runner-failure-status set.
         name = self._valid_loop("fresh-stuck-started")
+        # Prior completed run satisfies the run-first precondition so
+        # install reaches the launchd flow this test targets.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
         env = self.fixture.base_env(
             LOOPCTL_INSTALL_POLL_TIMEOUT_S="0.5",
             LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
@@ -1456,6 +1600,16 @@ class TestFindings(LoopsRootTestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(json.loads(r.stdout), [])
 
+    def test_findings_empty_state(self):
+        # Definitive empty state (Amendment 2 — 2026-07-30): the human form
+        # says explicitly "0 open findings for <loop>" instead of the
+        # generic table "(none)".
+        name = "no-findings-loop2"
+        self.fixture.minimal_valid_loop(name)
+        r = run_cli(["findings", name, "--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn(f"0 open findings for {name}", r.stdout)
+
 
 # ---------------------------------------------------------------------------
 # loopctl list / status
@@ -1487,13 +1641,43 @@ class TestListStatus(LoopsRootTestCase):
         self.assertIn("l3", r.stdout)
         self.assertIn("name", r.stdout)
 
+    def test_list_empty_state(self):
+        # Definitive empty state (Amendment 2 — 2026-07-30): zero loops
+        # under loops.d/ prints "0 loops (loops.d empty)", not the generic
+        # table "(none)", and still exits 0.
+        r = run_cli(
+            ["list", "--root", self.root], env_overrides=self.fixture.base_env()
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("0 loops (loops.d empty)", r.stdout)
+
+    def test_list_tag_no_match_on_nonempty_fleet_is_not_the_empty_message(self):
+        # Fix wave (2026-07-30, IMPORTANT #1): the tag filter used to mutate
+        # `rows` BEFORE the empty-state check ran, so a fleet with loops but
+        # no --tag match printed the same "0 loops (loops.d empty)" message
+        # as a genuinely empty loops.d/ -- a definitively false statement
+        # about a 2-loop fleet. It must name the filter and the true fleet
+        # size instead, and still exit 0.
+        self.fixture.minimal_valid_loop("tagged", extra_lines=['tags="project:x"'])
+        self.fixture.minimal_valid_loop("untagged")
+        r = run_cli(
+            ["list", "--tag", "project:nope", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertNotIn("empty)", r.stdout)
+        self.assertIn(
+            "0 loops matching --tag project:nope (2 loops under loops.d)", r.stdout
+        )
+
     def test_status_single_loop_no_runs(self):
         self.fixture.minimal_valid_loop("s1")
         r = run_cli(["status", "s1", "--root", self.root, "--json"])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
-        rows = json.loads(r.stdout)
+        rows = json.loads(r.stdout)["loops"]
         self.assertEqual(len(rows), 1)
         self.assertIsNone(rows[0]["runner_status"])
+        self.assertFalse(rows[0]["in_flight"])
 
     def test_status_single_loop_with_run(self):
         name = "s2"
@@ -1506,7 +1690,7 @@ class TestListStatus(LoopsRootTestCase):
         )
         r = run_cli(["status", name, "--root", self.root, "--json"])
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
-        rows = json.loads(r.stdout)
+        rows = json.loads(r.stdout)["loops"]
         self.assertEqual(rows[0]["headline"], "all good")
         self.assertEqual(rows[0]["runner_status"], "completed")
 
@@ -1515,8 +1699,1579 @@ class TestListStatus(LoopsRootTestCase):
         self.fixture.minimal_valid_loop("s4")
         r = run_cli(["status", "--root", self.root, "--json"])
         self.assertEqual(r.returncode, 0)
-        rows = json.loads(r.stdout)
+        data = json.loads(r.stdout)
+        rows = data["loops"]
         self.assertEqual({row["name"] for row in rows}, {"s3", "s4"})
+        self.assertEqual(data["fleet"]["loops"], 2)
+
+    def test_status_json_envelope_shape(self):
+        self.fixture.minimal_valid_loop("s3b")
+        r = run_cli(["status", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(set(data), {"fleet", "loops"})
+        self.assertEqual(
+            set(data["fleet"]),
+            {"loops", "ok", "warn", "alert", "needs_attention", "spend7d"},
+        )
+
+    def test_status_aggregate_line(self):
+        self.fixture.minimal_valid_loop("s5")
+        r = run_cli(["status", "--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("fleet:", r.stdout.splitlines()[0])
+
+    def test_status_empty_fleet_prints_aggregate_then_empty_state(self):
+        r = run_cli(["status", "--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        lines = r.stdout.splitlines()
+        self.assertIn("fleet: 0 loops", lines[0])
+        self.assertIn("0 loops (loops.d empty)", r.stdout)
+
+    def test_status_falls_back_past_overlap_row(self):
+        name = "s6"
+        self.fixture.minimal_valid_loop(name)
+        self.fixture.add_run(
+            f"20260722T000000Z-{name}-c1",
+            name,
+            "2026-07-29T00:00:00Z",
+            runner_status="completed",
+            effective_status="ok",
+            headline="all good",
+        )
+        self.fixture.add_run(
+            f"20260722T000000Z-{name}-c2",
+            name,
+            iso(datetime.now(timezone.utc)),
+            runner_status="skipped-overlap",
+        )
+        r = run_cli(["status", name, "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)["loops"]
+        self.assertEqual(rows[0]["headline"], "all good")
+        self.assertEqual(rows[0]["runner_status"], "completed")
+        self.assertFalse(rows[0]["in_flight"])
+
+    def test_status_in_flight_true_for_unfinished_run(self):
+        name = "s7"
+        self.fixture.minimal_valid_loop(name)
+        run_id = f"20260722T000000Z-{name}-c1"
+        r_start = run_db(
+            [
+                "start-run",
+                "--root",
+                self.root,
+                "--run-id",
+                run_id,
+                "--loop",
+                name,
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                iso(datetime.now(timezone.utc)),
+            ]
+        )
+        self.assertEqual(r_start.returncode, 0, msg=r_start.stderr)
+        r = run_cli(["status", name, "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)["loops"]
+        self.assertTrue(rows[0]["in_flight"])
+        self.assertIsNone(rows[0]["runner_status"])
+
+    def test_status_falls_back_past_unfinished_row(self):
+        # An unfinished (still-running) newest row is the OTHER blanking
+        # trigger, alongside skipped-overlap — both must fall back to the
+        # newest terminal row for status/headline, while in_flight still
+        # reports the true (unfinished) newest row's state.
+        name = "s8"
+        self.fixture.minimal_valid_loop(name)
+        self.fixture.add_run(
+            f"20260722T000000Z-{name}-c1",
+            name,
+            "2026-07-29T00:00:00Z",
+            runner_status="completed",
+            effective_status="ok",
+            headline="all good",
+        )
+        run_id = f"20260722T000000Z-{name}-c2"
+        r_start = run_db(
+            [
+                "start-run",
+                "--root",
+                self.root,
+                "--run-id",
+                run_id,
+                "--loop",
+                name,
+                "--engine",
+                "codex",
+                "--trigger",
+                "manual",
+                "--started-at",
+                iso(datetime.now(timezone.utc)),
+            ]
+        )
+        self.assertEqual(r_start.returncode, 0, msg=r_start.stderr)
+        r = run_cli(["status", name, "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)["loops"]
+        self.assertEqual(rows[0]["headline"], "all good")
+        self.assertTrue(rows[0]["in_flight"])
+
+    def test_status_fleet_aggregate_counts_ok_warn_and_spend(self):
+        self.fixture.minimal_valid_loop("ok-loop9")
+        self.fixture.minimal_valid_loop("warn-loop9")
+        self.fixture.add_run(
+            "20260722T000000Z-ok-loop9-c1",
+            "ok-loop9",
+            iso(datetime.now(timezone.utc)),
+            runner_status="completed",
+            effective_status="ok",
+            headline="fine",
+        )
+        self.fixture.add_run(
+            "20260722T000000Z-warn-loop9-c1",
+            "warn-loop9",
+            iso(datetime.now(timezone.utc)),
+            runner_status="completed",
+            effective_status="warn",
+            headline="hmm",
+        )
+        r = run_cli(["status", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        fleet = json.loads(r.stdout)["fleet"]
+        self.assertEqual(fleet["loops"], 2)
+        self.assertEqual(fleet["ok"], 1)
+        self.assertEqual(fleet["warn"], 1)
+        self.assertEqual(fleet["alert"], 0)
+        self.assertEqual(fleet["needs_attention"], 1)
+
+    def test_fleet_aggregate_agrees_with_dashboard_on_overlap_over_ok(self):
+        # Fix round 1 ("the dashboard is canonical" ruling): a loop whose
+        # newest run is skipped-overlap over a prior ok run must count as
+        # warn/needs_attention in the fleet aggregate, NOT ok — dashboard/
+        # generate.py's compute_light() maps skipped-overlap to amber
+        # unconditionally, regardless of what came before. This pins
+        # agreement between `status --json`'s aggregate and the dashboard's
+        # own _resolve_loop() on identical fixture data — the exact
+        # divergence verified during review (aggregate said needs_attention:
+        # 0, dashboard said True). The per-loop DISPLAYED status/headline
+        # still uses the blanking-fix fallback ("all good") — asserted
+        # separately in test_status_falls_back_past_overlap_row; this test
+        # is about the aggregate health counts only.
+        name = "overlap-agree"
+        self.fixture.minimal_valid_loop(name)
+        self.fixture.add_run(
+            f"20260722T000000Z-{name}-c1",
+            name,
+            "2026-07-29T00:00:00Z",
+            runner_status="completed",
+            effective_status="ok",
+            headline="all good",
+        )
+        self.fixture.add_run(
+            f"20260722T000000Z-{name}-c2",
+            name,
+            iso(datetime.now(timezone.utc)),
+            runner_status="skipped-overlap",
+        )
+
+        r = run_cli(["status", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        fleet = json.loads(r.stdout)["fleet"]
+        self.assertEqual(fleet["ok"], 0)
+        self.assertEqual(fleet["warn"], 1)
+        self.assertEqual(fleet["alert"], 0)
+        self.assertEqual(fleet["needs_attention"], 1)
+
+        dash_mod = _load_dashboard_module()
+        conn = dash_mod._open_db(self.root)
+        try:
+            resolved = dash_mod._resolve_loop(
+                self.root,
+                name,
+                conn,
+                _real_loopconf_parse(),
+                _real_schedule_parse(),
+                datetime.now(timezone.utc),
+            )
+        finally:
+            conn.close()
+        self.assertTrue(resolved["needs_attention"])
+        self.assertEqual(resolved["light_color"], "amber")
+
+    def test_fleet_aggregate_agrees_with_dashboard_on_same_second_tie(self):
+        # MINOR #1 (fix wave, 2026-07-30): db.py's query_loops_summary used a
+        # naive MAX(started_at) self-join that could return MULTIPLE rows per
+        # loop on a started_at TIE (e.g. a skipped-overlap row written the
+        # same second a run starts) -- loopctl's dict-comprehension kept the
+        # LAST of those rows, while the dashboard's own _latest_run() ("ORDER
+        # BY started_at DESC LIMIT 1", no tie-break) effectively kept the
+        # FIRST. Reproduced: `status --json` reported alert/needs_attention
+        # while the dashboard said green for the same fixture. Both must now
+        # agree deterministically (rowid DESC tie-break in both places).
+        name = "same-second-tie"
+        self.fixture.minimal_valid_loop(name)
+        same_ts = "2026-07-29T00:00:00Z"
+        self.fixture.add_run(
+            f"20260729T000000Z-{name}-a",
+            name,
+            same_ts,
+            runner_status="completed",
+            effective_status="ok",
+            headline="all good",
+        )
+        self.fixture.add_run(
+            f"20260729T000000Z-{name}-b",
+            name,
+            same_ts,
+            runner_status="skipped-overlap",
+        )
+
+        r = run_cli(["status", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        fleet = json.loads(r.stdout)["fleet"]
+
+        dash_mod = _load_dashboard_module()
+        conn = dash_mod._open_db(self.root)
+        try:
+            resolved = dash_mod._resolve_loop(
+                self.root,
+                name,
+                conn,
+                _real_loopconf_parse(),
+                _real_schedule_parse(),
+                datetime.now(timezone.utc),
+            )
+        finally:
+            conn.close()
+
+        # Whichever of the two tied rows wins the deterministic tie-break,
+        # loopctl's fleet aggregate and the dashboard's own resolution must
+        # agree with EACH OTHER -- not merely each be internally consistent.
+        self.assertEqual(
+            fleet["needs_attention"], 1 if resolved["needs_attention"] else 0
+        )
+        self.assertEqual(fleet["alert"], 1 if resolved["light_color"] == "red" else 0)
+        self.assertEqual(fleet["warn"], 1 if resolved["light_color"] == "amber" else 0)
+        self.assertEqual(fleet["ok"], 1 if resolved["light_color"] == "green" else 0)
+        # Pin the actual winner too, not just "they agree with each other" --
+        # rowid DESC means the later-inserted row (skipped-overlap, "b") wins,
+        # and compute_light() maps skipped-overlap to amber unconditionally.
+        self.assertEqual(resolved["light_color"], "amber")
+        self.assertEqual(fleet["warn"], 1)
+
+    def test_list_tag_filter_exact(self):
+        self.fixture.minimal_valid_loop("tagged", extra_lines=['tags="project:x"'])
+        self.fixture.minimal_valid_loop("untagged")
+        r = run_cli(
+            ["list", "--tag", "project:x", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)
+        self.assertEqual([row["name"] for row in rows], ["tagged"])
+
+        # exact match, not substring — "project" must not match "project:x"
+        r2 = run_cli(
+            ["list", "--tag", "project", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r2.returncode, 0, msg=r2.stdout + r2.stderr)
+        self.assertEqual(json.loads(r2.stdout), [])
+
+    def test_list_json_includes_tags(self):
+        self.fixture.minimal_valid_loop(
+            "tagged", extra_lines=['tags="project:x,team:infra"']
+        )
+        self.fixture.minimal_valid_loop("untagged")
+        r = run_cli(
+            ["list", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = {row["name"]: row for row in json.loads(r.stdout)}
+        self.assertEqual(rows["tagged"]["tags"], ["project:x", "team:infra"])
+        self.assertEqual(rows["untagged"]["tags"], [])
+
+    def test_list_human_table_includes_tags_column(self):
+        self.fixture.minimal_valid_loop("tagged", extra_lines=['tags="project:x"'])
+        r = run_cli(
+            ["list", "--root", self.root], env_overrides=self.fixture.base_env()
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("tags", r.stdout)
+        self.assertIn("project:x", r.stdout)
+
+    def test_status_json_includes_tags_and_provenance(self):
+        self.fixture.minimal_valid_loop("tagged", extra_lines=['tags="project:x"'])
+        r_new = run_cli(
+            [
+                "new",
+                "fresh",
+                "--root",
+                self.root,
+                "--type",
+                "agent",
+                "--engine",
+                "codex",
+                "--actor",
+                "claude/t",
+            ]
+        )
+        self.assertEqual(r_new.returncode, 0, msg=r_new.stdout + r_new.stderr)
+        r = run_cli(["status", "fresh", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)["loops"]
+        self.assertEqual(rows[0]["tags"], [])
+        self.assertEqual(rows[0]["provenance"]["actor"], "claude/t")
+        self.assertEqual(rows[0]["provenance"]["event"], "created")
+
+    def test_status_json_provenance_none_when_no_events(self):
+        self.fixture.minimal_valid_loop("noprov")
+        r = run_cli(["status", "noprov", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)["loops"]
+        self.assertIsNone(rows[0]["provenance"])
+
+    def test_status_json_provenance_survives_beyond_ten_later_events(self):
+        # Regression: a loop paused/resumed 10+ times must not push its
+        # founding `created` event out of a naive "scan the newest 10 rows"
+        # window — provenance must still resolve it via a SQL-side events
+        # filter, not a client-side scan of a limited row set.
+        name = "provwin"
+        self.fixture.minimal_valid_loop(name)
+        r_created = run_db(
+            [
+                "record-event",
+                "--root",
+                self.root,
+                "--loop",
+                name,
+                "--event",
+                "created",
+                "--actor",
+                "claude/t",
+            ]
+        )
+        self.assertEqual(r_created.returncode, 0, msg=r_created.stderr)
+        for _ in range(12):
+            for ev in ("paused", "resumed"):
+                r_ev = run_db(
+                    [
+                        "record-event",
+                        "--root",
+                        self.root,
+                        "--loop",
+                        name,
+                        "--event",
+                        ev,
+                        "--actor",
+                        "t",
+                    ]
+                )
+                self.assertEqual(r_ev.returncode, 0, msg=r_ev.stderr)
+
+        r = run_cli(["status", name, "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = json.loads(r.stdout)["loops"]
+        self.assertEqual(rows[0]["provenance"]["event"], "created")
+        self.assertEqual(rows[0]["provenance"]["actor"], "claude/t")
+
+
+# ---------------------------------------------------------------------------
+# loopctl bare invocation (Amendment 2 — 2026-07-30): content-first — no verb
+# means "show me the fleet", not "show me usage"
+# ---------------------------------------------------------------------------
+
+
+class TestBareInvocation(LoopsRootTestCase):
+    def test_bare_invocation_prints_summary_exit_0(self):
+        self.fixture.minimal_valid_loop("b1")
+        r = run_cli(["--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("fleet:", r.stdout)
+
+    def test_bare_invocation_respects_root_flag(self):
+        self.fixture.minimal_valid_loop("b2")
+        # Decoy default root (fix round 2 test hygiene): without this, the
+        # assertion leans on the real ~/projects/loops not happening to
+        # have exactly 1 loop — a silent fallback to the default would
+        # pass or fail this test depending on machine state, not on
+        # whether --root was actually respected.
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(["--root", self.root], env_overrides={"LOOPS_ROOT": decoy})
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("fleet: 1 loops", r.stdout)
+
+    def test_bare_invocation_respects_loops_root_env_with_no_args_at_all(self):
+        self.fixture.minimal_valid_loop("b3")
+        r = run_cli([], env_overrides={"LOOPS_ROOT": self.root})
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("fleet: 1 loops", r.stdout)
+
+    def test_unknown_verb_still_exit_2(self):
+        r = run_cli(["frobnicate", "--root", self.root])
+        self.assertEqual(r.returncode, 2)
+
+    def test_help_still_exits_0_and_does_not_dispatch(self):
+        # --help is a deliberate ask for usage, distinct from a bare
+        # invocation — it must keep behaving like before (print help, exit
+        # 0) rather than falling into the new content-first summary path.
+        r = run_cli(["--help"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("usage: loopctl", r.stdout)
+        self.assertNotIn("fleet:", r.stdout)
+
+    def test_help_output_hides_the_hoisted_common_flags(self):
+        # Fix round 1 (verified Critical + this Important companion): `p`
+        # now also carries --root/--json/--from/--actor directly (so a
+        # bare/pre-verb invocation of any of them can be parsed at all —
+        # see TestGlobalFlagPlacement), but they must stay invisible in
+        # `loopctl --help` — help=SUPPRESS on that copy specifically.
+        # Verified byte-identical against the pre-Amendment-2 commit's
+        # --help output during review; asserting the meaningful invariant
+        # here rather than the exact formatted text.
+        r = run_cli(["--help"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("positional arguments:", r.stdout)
+        for hidden_flag in ("--root", "--json", "--from", "--actor"):
+            self.assertNotIn(hidden_flag, r.stdout)
+
+    def test_verb_help_still_shows_common_flags(self):
+        # The subparser-level copies (`common_sub`) must stay visible in
+        # per-verb --help — only the top-level copy is hidden.
+        r = run_cli(["status", "--help"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        for flag in ("--root", "--json", "--from", "--actor"):
+            self.assertIn(flag, r.stdout)
+
+    # -- fix round 2: a verb-less parse isn't always a genuine bare
+    # invocation -- three ways a typo silently loses the verb/root and
+    # must now exit 2 instead of exit 0 against the default root.
+
+    def test_unrecognized_flag_with_no_verb_exits_2(self):
+        # Repro 1: on the pre-Task-16 base this exited 2. The bug: `extra`
+        # was checked AFTER the verb-is-None branch, so a typo'd flag name
+        # with no verb silently printed the DEFAULT-root fleet at exit 0.
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(["--root-dir=/sandbox"], env_overrides={"LOOPS_ROOT": decoy})
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("fleet:", r.stdout)
+        self.assertIn("unrecognized arguments", r.stderr)
+
+    def test_actor_swallowing_a_verb_token_exits_2(self):
+        # Repro 2: --actor takes a value, so `loopctl --actor status`
+        # parses cleanly as actor="status", verb=None, extra=[] -- nothing
+        # for an "unrecognized arguments" check to catch. Must refuse
+        # rather than silently default the root.
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(["--actor", "status"], env_overrides={"LOOPS_ROOT": decoy})
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("fleet:", r.stdout)
+        self.assertIn("ambiguous invocation", r.stderr)
+
+    def test_root_swallowing_a_verb_token_exits_2(self):
+        # Repro 3: same shape as above but for --root -- the more
+        # dangerous case, since root silently becoming the literal string
+        # "status" would (if not refused) drive every subsequent read
+        # against a bogus path instead of the intended root.
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(["--root", "status"], env_overrides={"LOOPS_ROOT": decoy})
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("fleet:", r.stdout)
+        self.assertIn("ambiguous invocation", r.stderr)
+
+    def test_flag_equals_syntax_is_the_ambiguity_escape_hatch(self):
+        # `--actor=status` is a single argv token, never equal to a bare
+        # verb name, so a genuinely-intended literal value survives the
+        # ambiguity check the three tests above rely on.
+        self.fixture.minimal_valid_loop("b4")
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(
+            ["--root", self.root, "--actor=status"], env_overrides={"LOOPS_ROOT": decoy}
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("fleet: 1 loops", r.stdout)
+
+
+# ---------------------------------------------------------------------------
+# loopctl global flag placement (Amendment 2 — 2026-07-30 fix round 1):
+# --root/--json/--from/--actor must resolve identically whether given before
+# or after the verb — a verified Critical: naive parents=[common] on both the
+# top-level parser and every subparser let the subparser's fresh sub-
+# namespace silently clobber a correctly-resolved pre-verb value with its
+# own default.
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalFlagPlacement(LoopsRootTestCase):
+    def test_root_before_and_after_verb_are_equivalent(self):
+        self.fixture.minimal_valid_loop("g1")
+        # A decoy default root: if --root ever gets silently dropped back to
+        # a default, these calls would see 0 loops instead of 1 (or worse,
+        # in a non-hermetic run, the real ~/projects/loops fleet).
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        env = {"LOOPS_ROOT": decoy}
+
+        r_before = run_cli(["--root", self.root, "status", "--json"], env_overrides=env)
+        r_after = run_cli(["status", "--root", self.root, "--json"], env_overrides=env)
+        self.assertEqual(r_before.returncode, 0, msg=r_before.stdout + r_before.stderr)
+        self.assertEqual(r_after.returncode, 0, msg=r_after.stdout + r_after.stderr)
+
+        fleet_before = json.loads(r_before.stdout)["fleet"]
+        fleet_after = json.loads(r_after.stdout)["fleet"]
+        self.assertEqual(fleet_before["loops"], 1)
+        self.assertEqual(fleet_before, fleet_after)
+
+    def test_root_before_verb_on_genuine_bare_invocation(self):
+        # Fix round 2 test hygiene: this used to be misnamed and actually
+        # duplicate the "before" half of test_root_before_and_after_verb_
+        # are_equivalent (its argv included the "status" verb, so it
+        # wasn't a bare invocation at all). A genuine bare invocation —
+        # --root with no verb whatsoever — must resolve --root correctly
+        # too, not just the "flags before a real verb" case.
+        self.fixture.minimal_valid_loop("g1b")
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(
+            ["--root", self.root, "--json"], env_overrides={"LOOPS_ROOT": decoy}
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertEqual(json.loads(r.stdout)["fleet"]["loops"], 1)
+
+    def test_json_before_and_after_verb_are_equivalent(self):
+        self.fixture.minimal_valid_loop("g2")
+        r_before = run_cli(["--json", "list", "--root", self.root])
+        r_after = run_cli(["list", "--json", "--root", self.root])
+        self.assertEqual(r_before.returncode, 0, msg=r_before.stdout + r_before.stderr)
+        self.assertEqual(r_after.returncode, 0, msg=r_after.stdout + r_after.stderr)
+        # Both must parse as JSON (a table would fail json.loads) — proves
+        # --json wasn't silently dropped in the "before the verb" placement.
+        rows_before = json.loads(r_before.stdout)
+        rows_after = json.loads(r_after.stdout)
+        self.assertEqual([row["name"] for row in rows_before], ["g2"])
+        self.assertEqual(rows_before, rows_after)
+
+    def test_from_before_and_after_verb_are_equivalent(self):
+        self.fixture.minimal_valid_loop("g3", from_dir="examples")
+        r_before = run_cli(
+            ["--from", "examples", "list", "--root", self.root, "--json"]
+        )
+        r_after = run_cli(["list", "--from", "examples", "--root", self.root, "--json"])
+        self.assertEqual(r_before.returncode, 0, msg=r_before.stdout + r_before.stderr)
+        self.assertEqual(r_after.returncode, 0, msg=r_after.stdout + r_after.stderr)
+        rows_before = json.loads(r_before.stdout)
+        self.assertEqual([row["name"] for row in rows_before], ["g3"])
+        self.assertEqual(rows_before, json.loads(r_after.stdout))
+
+    def test_actor_before_and_after_verb_are_equivalent(self):
+        r_before = run_cli(
+            ["--actor", "claude/before", "new", "actor-before", "--root", self.root]
+        )
+        self.assertEqual(r_before.returncode, 0, msg=r_before.stdout + r_before.stderr)
+        events_before = _query_loop_events(self.root, "actor-before")
+        self.assertEqual(events_before[0]["actor"], "claude/before")
+
+        r_after = run_cli(
+            ["new", "actor-after", "--root", self.root, "--actor", "claude/after"]
+        )
+        self.assertEqual(r_after.returncode, 0, msg=r_after.stdout + r_after.stderr)
+        events_after = _query_loop_events(self.root, "actor-after")
+        self.assertEqual(events_after[0]["actor"], "claude/after")
+
+
+# ---------------------------------------------------------------------------
+# loopctl lifecycle events (Amendment 2) — --actor + _record_event call sites
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleEvents(LoopsRootTestCase):
+    def _valid_loop(self, name, from_dir="loops.d"):
+        self.fixture.minimal_valid_loop(name, extra_lines=[], from_dir=from_dir)
+        self.fixture.write_spec(name, "filled\n" * 11, from_dir=from_dir)
+        return name
+
+    def test_new_records_created_event_with_default_actor(self):
+        r = run_cli(
+            [
+                "new",
+                "evt-loop",
+                "--root",
+                self.root,
+                "--type",
+                "agent",
+                "--engine",
+                "codex",
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, "evt-loop")
+        self.assertEqual(events[0]["event"], "created")
+        self.assertEqual(events[0]["actor"], os.environ.get("USER", "unknown"))
+
+    def test_new_records_created_event_detail(self):
+        r = run_cli(
+            [
+                "new",
+                "evt-loop-detail",
+                "--root",
+                self.root,
+                "--type",
+                "watchdog",
+                "--engine",
+                "claude",
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, "evt-loop-detail")
+        self.assertEqual(events[0]["event"], "created")
+        detail = json.loads(events[0]["detail"])
+        self.assertEqual(detail, {"type": "watchdog", "engine": "claude"})
+
+    def test_actor_flag_overrides(self):
+        r = run_cli(
+            [
+                "new",
+                "evt-loop2",
+                "--root",
+                self.root,
+                "--type",
+                "agent",
+                "--engine",
+                "codex",
+                "--actor",
+                "claude/testproj",
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, "evt-loop2")
+        self.assertEqual(events[0]["actor"], "claude/testproj")
+
+    def test_pause_resume_record_events(self):
+        name = self._valid_loop("evt3")
+        r1 = run_cli(
+            ["pause", name, "--root", self.root], env_overrides=self.fixture.base_env()
+        )
+        self.assertEqual(r1.returncode, 0, msg=r1.stdout + r1.stderr)
+        r2 = run_cli(
+            ["resume", name, "--root", self.root], env_overrides=self.fixture.base_env()
+        )
+        self.assertEqual(r2.returncode, 0, msg=r2.stdout + r2.stderr)
+        names = [e["event"] for e in _query_loop_events(self.root, name)]
+        self.assertEqual(names[:2], ["resumed", "paused"])  # newest first
+
+    def test_pause_resume_record_events_even_when_never_installed(self):
+        # Neither the loop nor its plist has ever been installed — pause/resume
+        # still flip enabled= and still record the intent (ambiguity resolution).
+        name = "evt-uninstalled"
+        self.fixture.write_conf(
+            name,
+            [
+                f"name={name}",
+                'description="d"',
+                "type=agent",
+                "engine=codex",
+                "schedule=interval:15m",
+                "enabled=true",
+            ],
+        )
+        r = run_cli(
+            ["pause", name, "--root", self.root], env_overrides=self.fixture.base_env()
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, name)
+        self.assertEqual(events[0]["event"], "paused")
+        self.assertEqual(events[0]["actor"], os.environ.get("USER", "unknown"))
+
+    def test_pause_actor_flag_overrides(self):
+        name = self._valid_loop("evt-pause-actor")
+        r = run_cli(
+            ["pause", name, "--root", self.root, "--actor", "claude/testproj"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, name)
+        self.assertEqual(events[0]["actor"], "claude/testproj")
+
+    def test_install_records_installed_event_on_success(self):
+        name = self._valid_loop("evt-install")
+        # Run-first precondition (§8.1 Amendment 2).
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
+        env = self.fixture.base_env(
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
+            LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
+            FAKE_LAUNCHCTL_INSERT_RUN="completed",
+        )
+        r = run_cli(["install", name, "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, name)
+        self.assertEqual(events[0]["event"], "installed")
+        self.assertEqual(events[0]["actor"], os.environ.get("USER", "unknown"))
+
+    def test_install_does_not_record_event_on_kickstart_failure(self):
+        name = self._valid_loop("evt-install-fails")
+        # Run-first precondition (§8.1 Amendment 2) so this test still
+        # exercises the kickstart-failure path it's named for.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z"
+        )
+        env = self.fixture.base_env(FAKE_LAUNCHCTL_KICKSTART_EXIT="1")
+        r = run_cli(["install", name, "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 1)
+        events = _query_loop_events(self.root, name)
+        self.assertEqual(events, [])
+
+    def test_uninstall_records_uninstalled_event(self):
+        name = self._valid_loop("evt-uninstall")
+        r = run_cli(
+            ["uninstall", name, "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        events = _query_loop_events(self.root, name)
+        self.assertEqual(events[0]["event"], "uninstalled")
+        self.assertEqual(events[0]["actor"], os.environ.get("USER", "unknown"))
+
+    def test_new_succeeds_even_when_event_recording_fails(self):
+        # Fix round 1: proves the best-effort/never-fail contract on
+        # _record_event, rather than just relying on manual verification.
+        #
+        # A read-only loops.sqlite makes db.py record-event's own INSERT
+        # fail for real (verified below) — db.py's connect() opens the file
+        # fine and both PRAGMA calls succeed (journal_mode is already WAL,
+        # so it's a no-op that needs no write), so the failure only surfaces
+        # at the actual INSERT, which raises uncaught and exits non-zero.
+        #
+        # Two side effects of that failed attempt need explicit handling:
+        # connect() unconditionally chmods the *main* file back to 0600 on
+        # its way out (§0 file-modes rule), independent of whether the write
+        # itself succeeded — so the read-only mode must be freshly
+        # re-applied to the main file before each subprocess invocation that
+        # needs to observe the denial. And SQLite creates the WAL mode's
+        # -wal/-shm sidecar files inheriting the main file's 0444 at the
+        # moment they're created — connect() never resets *those* — so they
+        # stay permanently read-only afterward unless explicitly restored,
+        # which would break any later write in the same test (verified: this
+        # bit us during development — the final read-back query failed with
+        # the same "attempt to write a readonly database" until the sidecars
+        # were restored too).
+        db_path = os.path.join(self.root, "state", "loops.sqlite")
+        sidecar_paths = [db_path + "-wal", db_path + "-shm"]
+        self.assertTrue(os.path.isfile(db_path))
+
+        def _restore_perms():
+            for p in [db_path] + sidecar_paths:
+                if os.path.isfile(p):
+                    os.chmod(p, 0o600)
+
+        self.addCleanup(_restore_perms)
+
+        # Prove the injection is real: db.py record-event must fail non-zero
+        # against a read-only loops.sqlite.
+        os.chmod(db_path, 0o444)
+        r_probe = run_db(
+            [
+                "record-event",
+                "--root",
+                self.root,
+                "--loop",
+                "probe-loop",
+                "--event",
+                "created",
+                "--actor",
+                "tester",
+            ]
+        )
+        self.assertNotEqual(r_probe.returncode, 0)
+
+        # Re-inject for the actual call under test (see the note above: the
+        # probe call already silently restored the main file's permission).
+        os.chmod(db_path, 0o444)
+
+        r = run_cli(["new", "evt-bestfeffort", "--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        loop_dir = self.fixture.loop_dir("evt-bestfeffort")
+        for fname in (
+            "loop.conf",
+            "prompt.md",
+            "SPEC.md",
+            "dashboard.json",
+            "precheck.sh",
+        ):
+            self.assertTrue(os.path.isfile(os.path.join(loop_dir, fname)), fname)
+
+        # And the write genuinely never landed (not just "didn't crash") —
+        # confirms this exercised the failure path, not a lucky race. Restore
+        # full write access (main file + WAL sidecars) before reading back.
+        _restore_perms()
+        events = _query_loop_events(self.root, "evt-bestfeffort")
+        self.assertEqual(events, [])
+
+
+# ---------------------------------------------------------------------------
+# loopctl import --analyze (Task 10)
+# ---------------------------------------------------------------------------
+
+
+class TestImport(LoopsRootTestCase):
+    def test_import_analyze_json(self):
+        r = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--analyze",
+                "--json",
+                "--root",
+                self.root,
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["analyzer_version"], "1")
+        self.assertIn("answers_needed", out)
+
+    def test_import_analyze_missing_path_exits_1(self):
+        r = run_cli(["import", "/nonexistent", "--analyze", "--root", self.root])
+        self.assertEqual(r.returncode, 1)
+
+    def test_import_analyze_blocked_fixture_still_exits_0(self):
+        # A blocked skill (needs-creds: STRIPE_API_KEY) still analyzes fine —
+        # `blocked` is a field in the output, not a CLI failure.
+        r_json = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "needs-creds"),
+                "--analyze",
+                "--json",
+                "--root",
+                self.root,
+            ]
+        )
+        self.assertEqual(r_json.returncode, 0, msg=r_json.stdout + r_json.stderr)
+        out = json.loads(r_json.stdout)
+        self.assertTrue(out["blocked"])
+        self.assertTrue(
+            any(reason.startswith("[blocking]") for reason in out["blocked_reasons"])
+        )
+
+        r_human = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "needs-creds"),
+                "--analyze",
+                "--root",
+                self.root,
+            ]
+        )
+        self.assertEqual(r_human.returncode, 0, msg=r_human.stdout + r_human.stderr)
+        self.assertIn("blocked", r_human.stdout.lower())
+        self.assertTrue(
+            any("[blocking]" in line for line in r_human.stdout.splitlines())
+        )
+
+    def test_import_requires_analyze_or_apply(self):
+        r = run_cli(["import", os.path.join(FIX, "clean-check"), "--root", self.root])
+        self.assertEqual(r.returncode, 2)
+
+    def test_import_analyze_and_apply_mutually_exclusive(self):
+        r = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--analyze",
+                "--apply",
+                "--root",
+                self.root,
+            ]
+        )
+        self.assertEqual(r.returncode, 2)
+
+    def test_import_apply_requires_answers(self):
+        # Task 12: --apply is implemented now, but still needs --answers.
+        r = run_cli(
+            ["import", os.path.join(FIX, "clean-check"), "--apply", "--root", self.root]
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--answers", r.stdout + r.stderr)
+
+    def test_import_analyze_human_form_shows_header_rubric_and_safety_framing(self):
+        r = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--analyze",
+                "--root",
+                self.root,
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        out = r.stdout
+        # header: proposed name / type / engine / blocked
+        self.assertIn("repo-hygiene-check", out)
+        self.assertIn("agent", out)
+        self.assertIn("blocked", out.lower())
+        # rubric table
+        self.assertIn("q1_purpose", out)
+        self.assertIn("q8_finding_identity", out)
+        # flags line
+        self.assertIn("mutation", out.lower())
+        # precheck proposal, with the safety framing the controller required:
+        # commented lines + an explicit human-review caveat + the heuristic caveat.
+        self.assertIn("# [read-only?]", out)
+        self.assertIn("COMMENTED", out.upper())
+        self.assertIn("heuristic", out.lower())
+        # answers needed, numbered
+        self.assertIn("q4_cadence", out)
+
+
+# ---------------------------------------------------------------------------
+# loopctl import --apply (Task 12)
+# ---------------------------------------------------------------------------
+
+
+class TestImportApply(LoopsRootTestCase):
+    # The brief's own filled example (docs/SKILL_IMPORT.md §7), against the
+    # clean-check fixture — skill_sha256 is filled in per-test by
+    # _write_answers() from a live --analyze, never hardcoded here.
+    CLEAN_ANSWERS: ClassVar[dict] = {
+        "analyzer_version": "1",
+        "skill_sha256": None,
+        "answers": {
+            "q1_purpose": (
+                "Report dirty/unpushed repos; done per-firing = report written; "
+                "cross-run done = repo becomes clean"
+            ),
+            "q4_cadence": "daily:07:30",
+            "q5_scope": "~/projects only; exclude maguyva",
+            "q8_finding_identity": (
+                "<repo-dir-name>:<condition> where condition is dirty|unpushed"
+            ),
+            "q9_semantics": "ok=all clean; warn=any dirty/unpushed; alert=never",
+            "q10_metrics": (
+                '{"panels":[{"title":"Dirty","metric":"repos.dirty","type":"number"}]}'
+            ),
+            "q11_budget": "engine default model; ~1k tokens; retry 1; timeout 300",
+        },
+        "provenance": {"q4_cadence": "user"},
+        "acknowledge_blocked": False,
+    }
+
+    def _scaffold_root(self):
+        return self.root
+
+    def _analyze_json(self, root, fixture):
+        r = run_cli(
+            [
+                "import",
+                os.path.join(FIX, fixture),
+                "--analyze",
+                "--json",
+                "--root",
+                root,
+            ]
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        return json.loads(r.stdout)
+
+    def _write_answers(self, root, filename, answers, fixture=None):
+        """Deep-copies `answers` (tests must never mutate the shared class
+        constant) and, if `skill_sha256` is falsy, fills it in from a live
+        `--analyze` against `fixture` — never hardcoded, so this always
+        tracks whatever the analyzer currently produces."""
+        answers = json.loads(json.dumps(answers))
+        if fixture is not None and not answers.get("skill_sha256"):
+            answers["skill_sha256"] = self._analyze_json(root, fixture)["skill_sha256"]
+        path = os.path.join(root, filename)
+        with open(path, "w") as f:
+            json.dump(answers, f)
+        return path
+
+    def _loopctl(self, root, *args):
+        return run_cli(list(args) + ["--root", root])
+
+    def _loopctl_rc(self, root, *args):
+        return self._loopctl(root, *args).returncode
+
+    def _db_query_json(self, root, query_name, **kwargs):
+        args = ["query", query_name, "--root", root]
+        for k, v in kwargs.items():
+            args += [f"--{k.replace('_', '-')}", str(v)]
+        r = run_db(args)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    # --- the load-bearing test --------------------------------------------
+
+    def test_apply_scaffold_passes_validate(self):
+        root = self._scaffold_root()
+        self._write_answers(
+            root, "answers.json", self.CLEAN_ANSWERS, fixture="clean-check"
+        )
+        analysis = self._analyze_json(root, "clean-check")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+
+        rc = self._loopctl_rc(root, "validate", "repo-hygiene-check")
+        self.assertEqual(rc, 0)
+
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events[0]["event"], "imported")
+
+        precheck_path = os.path.join(
+            root, "loops.d", "repo-hygiene-check", "precheck.sh"
+        )
+        self.assertTrue(os.access(precheck_path, os.X_OK))
+        pre = _read(precheck_path)
+        # Every line of the injected proposal block (analysis["precheck_proposal"])
+        # must survive verbatim, still commented — not "any line containing
+        # 'git '", which would miss a proposal line apply() silently mangled
+        # as long as it didn't happen to say "git ".
+        for line in analysis["precheck_proposal"]:
+            self.assertTrue(line.startswith("#"))
+            self.assertIn(line, pre)
+
+    # --- stale hash ---------------------------------------------------------
+
+    def test_apply_stale_hash_refused(self):
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        answers["skill_sha256"] = "0" * 64  # definitely wrong
+        answers_path = os.path.join(root, "answers.json")
+        with open(answers_path, "w") as f:
+            json.dump(answers, f)
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("stale", (r.stdout + r.stderr).lower())
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
+        )
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events, [])
+
+    # --- collision / --overwrite --------------------------------------------
+
+    def test_apply_collision_refused_without_overwrite(self):
+        root = self._scaffold_root()
+        self._write_answers(
+            root, "answers.json", self.CLEAN_ANSWERS, fixture="clean-check"
+        )
+        answers_path = os.path.join(root, "answers.json")
+
+        r1 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r1.returncode, 0, msg=r1.stdout + r1.stderr)
+
+        r2 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r2.returncode, 1)
+        self.assertIn("already exists", (r2.stdout + r2.stderr).lower())
+
+        r3 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--overwrite",
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r3.returncode, 0, msg=r3.stdout + r3.stderr)
+
+        events = self._db_query_json(
+            root, "loop-events", loop="repo-hygiene-check", events="imported"
+        )
+        self.assertGreaterEqual(len(events), 2)
+        latest_detail = json.loads(events[0]["detail"])
+        self.assertTrue(latest_detail["overwrite"])
+        oldest_detail = json.loads(events[-1]["detail"])
+        self.assertFalse(oldest_detail["overwrite"])
+
+    def test_overwrite_refused_when_target_is_installed(self):
+        # IMPORTANT #2a (fix wave, 2026-07-30): --overwrite must refuse
+        # outright (no files touched, no event recorded) when the target
+        # loop is currently INSTALLED -- overwriting an installed loop's
+        # prompt.md/loop.conf/precheck.sh in place would let the next
+        # launchd firing run the new prompt with none of validate ->
+        # supervised run -> install re-applied. No force-past flag; the
+        # message must point at `loopctl uninstall <name>`.
+        root = self._scaffold_root()
+        name = "repo-hygiene-check"
+        answers_path = self._write_answers(
+            root, "answers.json", self.CLEAN_ANSWERS, fixture="clean-check"
+        )
+
+        r1 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r1.returncode, 0, msg=r1.stdout + r1.stderr)
+
+        # Satisfy install's own "prior non-failed supervised run" precondition.
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-ok1",
+            name,
+            "2026-01-01T00:00:00Z",
+            runner_status="completed",
+        )
+        install_env = self.fixture.base_env(
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="5",
+            LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
+            FAKE_LAUNCHCTL_INSERT_RUN="completed",
+        )
+        r_install = run_cli(
+            ["install", name, "--root", root], env_overrides=install_env
+        )
+        self.assertEqual(
+            r_install.returncode, 0, msg=r_install.stdout + r_install.stderr
+        )
+
+        r_overwrite = run_cli(
+            [
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--apply",
+                "--answers",
+                answers_path,
+                "--overwrite",
+                "--actor",
+                "claude/t",
+                "--root",
+                root,
+            ],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r_overwrite.returncode, 1)
+        msg = (r_overwrite.stdout + r_overwrite.stderr).lower()
+        self.assertIn("installed", msg)
+        self.assertIn("loopctl uninstall", msg)
+
+        # No new imported event from the refused attempt -- exactly the one
+        # from the original successful import.
+        events = self._db_query_json(root, "loop-events", loop=name, events="imported")
+        self.assertEqual(len(events), 1)
+
+    # --- blocked + acknowledge_blocked --------------------------------------
+
+    def test_apply_blocked_needs_acknowledgement(self):
+        root = self._scaffold_root()
+        answers = {
+            "analyzer_version": "1",
+            "skill_sha256": self._analyze_json(root, "needs-creds")["skill_sha256"],
+            "answers": {
+                "q1_purpose": "Report yesterday's failed Stripe charges",
+                "q4_cadence": "daily:08:00",
+                "q5_scope": "the connected Stripe account only",
+                "q8_finding_identity": "stripe:failed-charges",
+                "q9_semantics": "warn=any failed charge yesterday; alert=never",
+                "q10_metrics": '{"panels":[]}',
+                "q11_budget": "engine default model; retry 1; timeout 300",
+            },
+            "provenance": {},
+            "acknowledge_blocked": False,
+        }
+        answers_path = os.path.join(root, "answers.json")
+        with open(answers_path, "w") as f:
+            json.dump(answers, f)
+
+        r1 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "needs-creds"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r1.returncode, 1)
+        self.assertIn("blocked", (r1.stdout + r1.stderr).lower())
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "stripe-failed-charges"))
+        )
+        events = self._db_query_json(root, "loop-events", loop="stripe-failed-charges")
+        self.assertEqual(events, [])
+
+        answers["acknowledge_blocked"] = True
+        with open(answers_path, "w") as f:
+            json.dump(answers, f)
+
+        r2 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "needs-creds"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r2.returncode, 0, msg=r2.stdout + r2.stderr)
+
+        loop_dir = os.path.join(root, "loops.d", "stripe-failed-charges")
+        conf_text = _read(os.path.join(loop_dir, "loop.conf"))
+        self.assertIn("schedule=manual", conf_text)
+        spec_text = _read(os.path.join(loop_dir, "SPEC.md"))
+        self.assertIn("## BLOCKED — read before scheduling", spec_text)
+        self.assertIn("credentials", spec_text.lower())
+
+    # --- import grants no dangerous-combo immunity --------------------------
+
+    def test_apply_dangerous_combo_still_fails_validate(self):
+        root = self._scaffold_root()
+        self._write_answers(
+            root, "answers.json", self.CLEAN_ANSWERS, fixture="clean-check"
+        )
+        answers_path = os.path.join(root, "answers.json")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+
+        conf_path = os.path.join(root, "loops.d", "repo-hygiene-check", "loop.conf")
+        text = _read(conf_path)
+        # Hand-edit to a dangerous combo: perm_remote_mutation=allowlist with
+        # no justification and no exec_allowlist — import grants no immunity
+        # from §5.2's dangerous-combination checks.
+        text = text.replace(
+            "perm_remote_mutation=none", "perm_remote_mutation=allowlist"
+        )
+        with open(conf_path, "w") as f:
+            f.write(text)
+
+        rc = self._loopctl_rc(root, "validate", "repo-hygiene-check")
+        self.assertEqual(rc, 1)
+
+    # --- round-1 review: malformed answers.json leaves no dir behind --------
+
+    def test_apply_malformed_answers_shape_leaves_no_directory_and_retry_succeeds(
+        self,
+    ):
+        # Reviewer-reported defect: {"answers": ["q1_purpose"]} (a list, not
+        # an object) previously tracebacked out of the CLI AND left an empty
+        # loops.d/<name>/ behind, making the next, CORRECT attempt fail with
+        # a spurious "already exists".
+        root = self._scaffold_root()
+        analysis = self._analyze_json(root, "clean-check")
+        answers = {
+            "analyzer_version": "1",
+            "skill_sha256": analysis["skill_sha256"],
+            "answers": ["q1_purpose"],  # malformed: list instead of object
+            "acknowledge_blocked": False,
+        }
+        answers_path = os.path.join(root, "answers.json")
+        with open(answers_path, "w") as f:
+            json.dump(answers, f)
+
+        r1 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            answers_path,
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r1.returncode, 1)
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
+        )
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events, [])
+
+        # A CORRECT retry must succeed — no spurious "already exists" from a
+        # half-written directory the first (malformed) attempt might have
+        # left behind.
+        self._write_answers(
+            root, "answers2.json", self.CLEAN_ANSWERS, fixture="clean-check"
+        )
+        r2 = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers2.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r2.returncode, 0, msg=r2.stdout + r2.stderr)
+
+    # --- round-1 review: free-text budget prose must never become config ----
+
+    def test_apply_free_text_budget_prose_never_becomes_config(self):
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        # The reviewer's own reproducer: prose that would have tricked the
+        # old regex scraper into inventing model=unless / timeout_s=30.
+        answers["answers"]["q11_budget"] = (
+            "use the default model unless cost spikes; timeout 30 minutes"
+        )
+        self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        conf = _read(os.path.join(root, "loops.d", "repo-hygiene-check", "loop.conf"))
+        self.assertNotIn("model=unless", conf)
+        self.assertNotIn("timeout_s=30", conf)
+        self.assertNotIn("model=", conf)
+        self.assertNotIn("timeout_s=", conf)
+
+    def test_apply_structured_budget_keys_honored(self):
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        answers["model"] = "claude-sonnet-5"
+        answers["timeout_s"] = 600
+        answers["retry_transient"] = 2
+        self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        conf = _read(os.path.join(root, "loops.d", "repo-hygiene-check", "loop.conf"))
+        self.assertIn("model=claude-sonnet-5", conf)
+        self.assertIn("timeout_s=600", conf)
+        self.assertIn("retry_transient=2", conf)
+
+    def test_apply_invalid_structured_timeout_s_refused(self):
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        answers["timeout_s"] = 99999  # out of loopconf's 30-7200 range
+        self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
+        )
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events, [])
+
+    # --- round-2 review: model / schedule shape, non-dict answers ----------
+
+    def test_apply_model_with_internal_whitespace_refused(self):
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        answers["model"] = "gpt 4 turbo"  # loop.conf writes model= bare, unquoted
+        self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
+        )
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events, [])
+
+    def test_apply_model_with_double_quote_refused(self):
+        # Round-3 review: the round-2 regex (^\S+$) excluded whitespace but
+        # not the double-quote character — a `model` containing `"` slipped
+        # through and was written bare into loop.conf, where loopconf.parse()
+        # then broke with "unterminated quoted value".
+        root = self._scaffold_root()
+        for bad in ('"weird-model', 'weird"model', 'model"', 'a"b"c', '"'):
+            answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+            answers["model"] = bad
+            self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+            r = self._loopctl(
+                root,
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--apply",
+                "--answers",
+                os.path.join(root, "answers.json"),
+                "--actor",
+                "claude/t",
+            )
+            self.assertEqual(r.returncode, 1, msg=f"bad={bad!r}: {r.stdout + r.stderr}")
+            self.assertFalse(
+                os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check")),
+                msg=f"bad={bad!r}",
+            )
+            events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+            self.assertEqual(events, [], msg=f"bad={bad!r}")
+
+    def test_apply_legitimate_model_ids_still_accepted(self):
+        root = self._scaffold_root()
+        for good in ("claude-sonnet-5", "gpt-5.5", "foo\\bar"):
+            answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+            answers["model"] = good
+            self._write_answers(
+                root, f"answers-{hash(good)}.json", answers, fixture="clean-check"
+            )
+
+            r = self._loopctl(
+                root,
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--apply",
+                "--answers",
+                os.path.join(root, f"answers-{hash(good)}.json"),
+                "--overwrite",
+                "--actor",
+                "claude/t",
+            )
+            self.assertEqual(
+                r.returncode, 0, msg=f"good={good!r}: {r.stdout + r.stderr}"
+            )
+            conf = _read(
+                os.path.join(root, "loops.d", "repo-hygiene-check", "loop.conf")
+            )
+            self.assertIn(f"model={good}", conf, msg=f"good={good!r}")
+
+    def test_apply_free_text_cadence_refused(self):
+        # Same "silently unparseable loop.conf" shape as the model bug: a
+        # free-text q4_cadence answer must be refused, not written through
+        # to schedule= and left for loopctl validate to discover indirectly.
+        root = self._scaffold_root()
+        answers = json.loads(json.dumps(self.CLEAN_ANSWERS))
+        answers["answers"]["q4_cadence"] = "daily at 07:30"
+        self._write_answers(root, "answers.json", answers, fixture="clean-check")
+
+        r = self._loopctl(
+            root,
+            "import",
+            os.path.join(FIX, "clean-check"),
+            "--apply",
+            "--answers",
+            os.path.join(root, "answers.json"),
+            "--actor",
+            "claude/t",
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(
+            os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check"))
+        )
+        events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+        self.assertEqual(events, [])
+
+    def test_apply_non_dict_top_level_answers_refused(self):
+        # A bare JSON list/string/number as answers.json's whole top-level
+        # value must refuse cleanly (exit 1), the same as every other
+        # malformed-input path — not traceback, and not leave a directory
+        # behind for a corrected retry to spuriously collide with.
+        root = self._scaffold_root()
+        for bad in (["x"], "hello", 42):
+            answers_path = os.path.join(root, "answers.json")
+            with open(answers_path, "w") as f:
+                json.dump(bad, f)
+
+            r = self._loopctl(
+                root,
+                "import",
+                os.path.join(FIX, "clean-check"),
+                "--apply",
+                "--answers",
+                answers_path,
+                "--actor",
+                "claude/t",
+            )
+            self.assertEqual(r.returncode, 1, msg=f"bad={bad!r}: {r.stdout + r.stderr}")
+            self.assertFalse(
+                os.path.isdir(os.path.join(root, "loops.d", "repo-hygiene-check")),
+                msg=f"bad={bad!r}",
+            )
+            events = self._db_query_json(root, "loop-events", loop="repo-hygiene-check")
+            self.assertEqual(events, [], msg=f"bad={bad!r}")
 
 
 # ---------------------------------------------------------------------------

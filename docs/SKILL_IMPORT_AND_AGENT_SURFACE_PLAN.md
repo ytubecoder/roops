@@ -103,7 +103,11 @@ CREATE TABLE IF NOT EXISTS loop_events (
 CREATE INDEX IF NOT EXISTS idx_events_loop_ts ON loop_events(loop_name, ts DESC);
 ```
 - Amendment-level contract (council round): written via `db.py record-event`; read via
-  `db.py query loop-events [--loop L] [--limit N]`. `validate` deliberately records **no**
+  `db.py query loop-events [--loop L] [--limit N] [--events E1,E2]` — the `--events` filter
+  (added during implementation, not in the original council-round sketch) applies in SQL
+  before the `LIMIT`, which is what `status --json`'s provenance lookup relies on to find a
+  loop's founding `created`/`imported` event without it being pushed out of a small window by
+  later lifecycle events. `validate` deliberately records **no**
   event (audit spam — it's a build gate, not a lifecycle change). `loopctl new` records
   `created`; `import --apply` records `imported` (parity). `schema_meta.schema_version` stays
   `1` — this is an idempotent additive table, same treatment as Amendment 1. Events are kept
@@ -116,9 +120,12 @@ CREATE INDEX IF NOT EXISTS idx_events_loop_ts ON loop_events(loop_name, ts DESC)
 
 ### 3.3 Live-run visibility
 - The runner regenerates the dashboard right after the `start-run` insert — **non-blocking**
-  (council round): acquire `_dashboard.lock` with `--wait-s 0`, skip the regen entirely if
-  held; never delay the run. End-of-run regen keeps its existing `--wait-s 30`. "Running now"
-  may therefore lag under contention — documented, accepted.
+  (council round). As shipped this is a read-only `bin/lock.py check --name _dashboard` probe
+  (exit 0 only when free, never modifies the lock file — not an acquire-with-`--wait-s 0`)
+  gating a `dashboard/generate.py` call, both `|| true`d so a held lock silently skips the
+  regen and nothing here can ever block or fail the run (`bin/run-loop.sh`, `docs/INTERFACES.md`
+  §4.1 step 3). End-of-run regen keeps its existing `--wait-s 30` acquire. "Running now" may
+  therefore lag under contention — documented, accepted.
 - Rendering trichotomy (closes the gap both reviewers flagged): a row with
   `finished_at IS NULL` renders **running** while `now - started_at ≤ timeout_s` (live badge),
   **overdue** (amber tint, still "running") in `(timeout_s, timeout_s + 120s]`, and **died**
@@ -147,7 +154,7 @@ twelve-question intake rubric (`docs/LOOP_AUTHORING.md` §2, stable ids `q1_purp
 | Bucket | Meaning | Examples |
 |---|---|---|
 | `answered` | The skill states it | purpose (from description), scope (partial) |
-| `derived` | Statically inferable — confirm, don't ask | type, engine recommendation, floor axes, commented precheck proposal, tags from origin project |
+| `derived` | Statically inferable — confirm, don't ask | type, engine recommendation, floor axes, commented precheck proposal |
 | `missing` | Must be answered | cadence, finding identity, tier-1 semantics, metrics/panels, budget |
 | `incompatible` | Harness can't run it as written — reshaped or blocked, stated per item | interactivity, mutation, MCP dependence, credentials, iterate-until-success, conversational-context assumptions |
 
@@ -222,7 +229,13 @@ the skill content changed — re-analyze first) and a map of `question_id` → c
 selected option's id, or free text where the question is open), plus optional per-answer
 provenance (`"user"` / `"agent"`) which lands in the `imported` event detail. Omitted ids fall
 back to the analyzer's derived default where one exists, and otherwise remain `[FILL:]` in the
-scaffold so `loopctl validate` catches them.
+scaffold so `loopctl validate` catches them. `answers.json` also carries four OPTIONAL
+top-level keys, siblings of `answers` rather than rubric answers themselves — `tags` (filtered
+through the `loop.conf` tag grammar), `model`, `timeout_s`, `retry_transient` — that map
+straight onto the matching `loop.conf` fields (each refused outright, never coerced, if out of
+shape); `q11_budget`'s free text does NOT set any of the latter three, by design (an earlier
+draft regex-scraped them out of the prose and shipped real bugs from it). Full shape and
+validation rules: `docs/SKILL_IMPORT.md` §7.
 
 Scaffolds `loops.d/<name>/` fully pre-filled: `SPEC.md` with all twelve sections answered (no
 `[FILL:]` left when answers are complete), `prompt.md` = reshaped skill body + the contract
@@ -251,7 +264,8 @@ loops skill teaches from.
   N-round-trip enumeration. In-scope for this pass (council round): fix the known
   `cmd_status` blanking when the latest row is `started`/`skipped-overlap` (OPEN_THREADS §3) —
   "definitive, never blank" cannot ship on top of that bug.
-- Definitive empty states ("0 loops installed", "0 open findings") — never blank output.
+- Definitive empty states (`"0 loops (<from-dir> empty)"`, `"0 open findings for <loop>"`) —
+  never blank output.
 - Compact default output; `--json` escape hatch on all read verbs (we take AXI's principles,
   not its TOON format dependency).
 - Content-first: bare `loopctl` prints the live fleet summary and exits **0** (a deliberate

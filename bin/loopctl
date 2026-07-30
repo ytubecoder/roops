@@ -59,6 +59,9 @@ def _load_module_from_path(path, modname):
 
 loopconf = _load_module_from_path(os.path.join(_HERE, "loopconf.py"), "_loopctl_loopconf")
 schedule = _load_module_from_path(os.path.join(_HERE, "schedule.py"), "_loopctl_schedule")
+skill_import = _load_module_from_path(
+    os.path.join(_HERE, "skill_import.py"), "_loopctl_skill_import"
+)
 
 _DB_BIN = os.path.join(_HERE, "db.py")
 _DASHBOARD_GENERATE = os.path.join(_REPO_ROOT, "dashboard", "generate.py")
@@ -107,6 +110,15 @@ def _db_query(root, query_name, **kwargs):
 def _latest_run_id(root, name):
     rows = _db_query(root, "last-runs", loop=name, limit=1)
     return rows[0]["run_id"] if rows else None
+
+
+def _record_event(root, loop, event, actor, detail=None):
+    """Best-effort: an audit-write failure must never fail the verb (see
+    docs/INTERFACES.md §8 Amendment 2)."""
+    argv = ["record-event", "--root", root, "--loop", loop, "--event", event, "--actor", actor]
+    if detail:
+        argv += ["--detail", json.dumps(detail)]
+    _db_run_raw(argv)
 
 
 # ---------------------------------------------------------------------------
@@ -469,132 +481,19 @@ def _write_file(path, content):
 
 # ---------------------------------------------------------------------------
 # Scaffold templates (§8 "loopctl new scaffolding")
+#
+# The template text itself lives in bin/skill_import.py (Amendment 2,
+# 2026-07-30) — `skill_import.apply()` needs the exact same SPEC.md/prompt.md/
+# precheck.sh frame `loopctl new` uses, so the strings have a single home and
+# both call sites reference it rather than drifting apart. These names are
+# kept as local aliases purely so `cmd_new` below doesn't need touching.
 # ---------------------------------------------------------------------------
 
-_LOOP_CONF_TEMPLATE = """\
-# Scaffolded by `loopctl new __NAME__` on __DATE__.
-# TODO before installing: pick a real `schedule` (see docs/INTERFACES.md §5.1)
-# and fill in `description`. Optional keys below are commented with their
-# permissive defaults — uncomment and edit only what this loop needs.
-name=__NAME__
-description="TODO: one-line description of what this loop does"
-type=__TYPE__
-engine=__ENGINE__
-# model=
-schedule=manual
-# workdir=$LOOPS_ROOT
-# timeout_s=900
-# enabled=true
-# retention_days=30
-# retry_transient=1
-# perm_fs_write=report_only
-# perm_network=none
-# perm_local_exec=none
-# perm_remote_mutation=none
-# exec_allowlist=
-# credential_env=
-# remote_mutation_justification=
-# notes=
-"""
-
-_PROMPT_MD_TEMPLATE = """\
-# __NAME__ — prompt
-
-TODO: describe what this loop should investigate/monitor and report on.
-
-## Output contract
-
-Your final message MUST be a single JSON object conforming exactly to
-`contract/contract.schema.json` — schema_version, run_id, status,
-status_reason, headline, report_markdown, metrics, findings. No prose
-outside that JSON object.
-
-- `run_id` MUST equal the value from the `## RUN CONTEXT` block the runner
-  appends to this prompt — copy it exactly; never invent your own.
-- `metrics` MUST be a JSON **string** containing a serialized JSON object
-  (e.g. the string `"{}"` when there is nothing to report) — not a nested
-  JSON object.
-- `findings` is required but MAY be an empty array.
-
-## Findings prompt contract
-
-1. Re-emit a still-true finding with its **same `finding_id`** — never
-   invent a new id for a recurring condition.
-2. Do not re-argue a `DISMISSED` finding unless the underlying situation has
-   **materially changed**; if it has, say what changed.
-3. Still emit `SNOOZED` findings if true — suppression is the runner's job,
-   not the model's.
-
-## Finding identity
-
-[FILL: derivation rule — how finding_id is derived from the durable identity
-of the condition being reported, e.g. `<subject>:<condition>`. Must be
-deterministic and stable across runs for the same real-world condition, and
-must NOT embed volatile data (timestamps, run ids, counts, shifting line
-numbers).]
-"""
-
-_SPEC_MD_TEMPLATE = """\
-# __NAME__ — intake spec
-
-1. Purpose & stop condition
-[FILL: what this loop exists to catch/report, and what "done" looks like]
-
-2. Agentic pattern
-[FILL: note — every v1 loop is outer-shape Human-in-the-loop; iterate-across-invocations
-is v2 — record the aspiration here, but ship single-shot for v1]
-
-3. Type & data flow (precheck gathers vs engine interprets)
-[FILL: what precheck.sh deterministically gathers vs what the engine is asked to interpret]
-
-4. Cadence
-[FILL: schedule and why]
-
-5. Scope & exclusions
-[FILL: what's in scope, what's explicitly excluded]
-
-6. Guardrails
-[FILL: verbatim guardrails this loop must respect]
-
-7. Permission axes + justification
-[FILL: perm_fs_write / perm_network / perm_local_exec / perm_remote_mutation values and why]
-
-8. Finding identity (what a finding IS + finding_id derivation rule)
-[FILL: same derivation rule as prompt.md's ## Finding identity section]
-
-9. Tier-1 semantics (ok/warn/alert meaning)
-[FILL: what ok / warn / alert mean for this loop]
-
-10. Tier-2 metrics + panels
-[FILL: metrics this loop emits and how dashboard.json renders them]
-
-11. Engine/model + budget
-[FILL: engine, model, expected tokens/run, retry_transient, timeout_s]
-
-12. Page output
-[FILL: none — OR page class (snapshot|findings), what the page shows, groups/stats]
-"""
-
-_PRECHECK_SH_TEMPLATE = """\
-#!/usr/bin/env bash
-# __NAME__/precheck.sh — deterministic gathering step (script->agent pattern,
-# docs/INTERFACES.md §4.1/§6.2): this script does cheap, deterministic data
-# gathering; its stdout is injected into the engine's prompt as ground truth.
-# It must be idempotent and side-effect-free beyond read-only inspection. For
-# type=watchdog loops, THIS SCRIPT IS THE JOB — a non-zero exit or a
-# failure-shaped result escalates to the engine for diagnosis (§4.1).
-set -euo pipefail
-
-# TODO: gather deterministic signal here and print it to stdout.
-echo "TODO: implement precheck for __NAME__"
-"""
-
-
-def _render_template(template, name, **extra):
-    out = template.replace("__NAME__", name)
-    for key, value in extra.items():
-        out = out.replace(f"__{key.upper()}__", str(value))
-    return out
+_LOOP_CONF_TEMPLATE = skill_import._LOOP_CONF_TEMPLATE
+_PROMPT_MD_TEMPLATE = skill_import._PROMPT_MD_TEMPLATE
+_SPEC_MD_TEMPLATE = skill_import._SPEC_MD_TEMPLATE
+_PRECHECK_SH_TEMPLATE = skill_import._PRECHECK_SH_TEMPLATE
+_render_template = skill_import._render_template
 
 
 # ---------------------------------------------------------------------------
@@ -668,6 +567,10 @@ def cmd_new(args):
     _write_file(precheck_path, _render_template(_PRECHECK_SH_TEMPLATE, args.name))
     os.chmod(precheck_path, 0o755)
 
+    _record_event(
+        args.root, args.name, "created", args.actor, detail={"type": args.type_, "engine": args.engine}
+    )
+
     files = ["loop.conf", "prompt.md", "SPEC.md", "dashboard.json", "precheck.sh"]
     if args.json:
         print(json.dumps({"name": args.name, "dir": loop_dir, "files": files}))
@@ -733,13 +636,161 @@ def cmd_list(args):
                 "schedule": conf.get("schedule"),
                 "enabled": conf.get("enabled"),
                 "installed": _is_installed(args.root, name),
+                "tags": conf.get("tags") or [],
             }
         )
+    total = len(rows)
+    if args.tag:
+        rows = [r for r in rows if args.tag in r["tags"]]
     if args.json:
         print(json.dumps(rows))
     else:
-        _print_table(rows, ["name", "type", "engine", "schedule", "enabled", "installed"])
+        if not rows:
+            # Fix wave (2026-07-30, IMPORTANT #1): a genuinely empty
+            # loops.d/examples and "zero loops matched --tag" are different
+            # claims -- the old code printed the genuinely-empty message in
+            # BOTH cases, which is a false statement about a non-empty fleet
+            # when a --tag filter simply had no match (contradicts
+            # docs/INTERFACES.md's own "zero loops under --from" wording).
+            if args.tag and total:
+                print(f"0 loops matching --tag {args.tag} ({total} loops under {args.from_dir})")
+            else:
+                print(f"0 loops ({args.from_dir} empty)")
+        else:
+            table_rows = [{**r, "tags": ",".join(r["tags"])} for r in rows]
+            _print_table(
+                table_rows, ["name", "type", "engine", "schedule", "enabled", "installed", "tags"]
+            )
     return 0
+
+
+def _is_terminal_run_row(row):
+    """(Amendment 2 — 2026-07-30) A run row counts as "terminal" — safe to use
+    for the displayed status/headline — when it has finished (`finished_at`
+    set) and isn't a `skipped-overlap` placeholder. `skipped-overlap` rows are
+    finished immediately but never carry real status/headline data, so a
+    naive "newest row" lookup blanks the display the instant an overlap skip
+    (or a still-running row) becomes the newest row for a loop."""
+    return (
+        bool(row)
+        and row.get("finished_at") is not None
+        and row.get("runner_status") != "skipped-overlap"
+    )
+
+
+def _resolve_display_row(root, name, last):
+    """Given `last` (the newest run row for `name`, or None), return the row
+    to use for displayed status/headline: `last` itself if terminal,
+    otherwise the newest row among the last 10 that IS terminal, otherwise
+    None (every recent attempt was skipped-overlap or still running)."""
+    if _is_terminal_run_row(last):
+        return last
+    for row in _db_query(root, "last-runs", loop=name, limit=10):
+        if _is_terminal_run_row(row):
+            return row
+    return None
+
+
+def _loop_health(dash, conf, last, now):
+    """The dashboard's own `_resolve_loop` health formula (dashboard/generate.py
+    ~:1275-1323), reapplied here on the RAW latest run row — never the
+    blanking-fix's fallback-resolved row (Amendment 2 — 2026-07-30 fix
+    round 1: "the dashboard is canonical" ruling — an agent must see the
+    same fleet health a human sees on the dashboard). Reuses the dashboard's
+    own primitives (`is_died`/`is_stale`/`compute_light`/`is_overdue`) rather
+    than reimplementing their logic; only the branching glue is duplicated,
+    because `_resolve_loop` itself also does unrelated page-assembly work
+    (sqlite reads, tags, provenance) `loopctl` has no reason to repeat.
+    Returns `(light_color, needs_attention)` — `light_color` in
+    `{"green","amber","red","grey"}`, matching `dashboard/generate.py`'s own
+    vocabulary exactly, including that a `skipped-overlap`/`skipped-precheck`
+    row is unconditionally amber even if the prior run was `ok`."""
+    timeout_s = conf.get("timeout_s", 900)
+    schedule_spec = conf.get("schedule", "manual")
+    try:
+        expected_interval_s = schedule.parse(schedule_spec).get("expected_interval_s", 0)
+    except Exception:  # noqa: BLE001 — a bad schedule must degrade, never crash `status`
+        expected_interval_s = 0
+
+    died = False
+    if last is not None:
+        died = dash.is_died(last.get("finished_at"), last.get("started_at"), timeout_s, now)
+
+    stale = False
+    if last is not None and not died:
+        stale = dash.is_stale(last.get("started_at"), expected_interval_s, now)
+
+    if died:
+        light_color = "red"
+    elif last is not None and last.get("finished_at") is None:
+        fin, st = last.get("finished_at"), last.get("started_at")
+        light_color = "amber" if dash.is_overdue(fin, st, timeout_s, now) else "grey"
+    elif last is not None:
+        light_color, _marker = dash.compute_light(last.get("runner_status"), last.get("effective_status"))
+    else:
+        light_color = "grey"
+
+    needs_attention = (light_color in ("amber", "red")) or stale or died
+    return light_color, needs_attention
+
+
+def _fleet_aggregate(root, from_dir):
+    """`fleet: N loops · ok X · warn Y · alert Z · needs_attention W ·
+    spend7d $S` — the leading line on `status` and the bare-invocation
+    summary (Amendment 2 — 2026-07-30). Loop count comes from the loops.d/
+    (or examples/) directory; `ok`/`warn`/`alert` map `_loop_health`'s
+    green/amber/red 1:1 (grey — never run, or a still-running run within its
+    own timeout budget — is counted toward `N` but not toward any of the
+    three); `needs_attention` is `_loop_health`'s own boolean, so it agrees
+    with the dashboard exactly, including staleness and the harness-died
+    case, neither of which `ok`/`warn`/`alert` alone would catch. `spend7d`
+    sums `cost_usd` across `db.py query spend --days 7`. Status data comes
+    from one `db.py query loops-summary` call for the whole fleet (one row
+    per loop: its newest run, RAW — not the blanking-fix's fallback-resolved
+    row, which is for the per-loop status/headline TEXT only, see
+    `_resolve_display_row`)."""
+    dash = _dashboard_module()
+    now = datetime.now(timezone.utc)
+    names = _discover_loop_names(root, from_dir)
+    summary_by_loop = {r["loop_name"]: r for r in _db_query(root, "loops-summary")}
+
+    ok = warn = alert = needs_attention = 0
+    for name in names:
+        last = summary_by_loop.get(name)
+        if last is None:
+            continue  # never run — not yet actionable, doesn't count as needing attention
+        conf_path = os.path.join(root, from_dir, name, "loop.conf")
+        conf, _errors = loopconf.parse(conf_path)
+        light_color, loop_needs_attention = _loop_health(dash, conf, last, now)
+        if light_color == "green":
+            ok += 1
+        elif light_color == "amber":
+            warn += 1
+        elif light_color == "red":
+            alert += 1
+        # grey: uncounted in ok/warn/alert, matching the dashboard's own grey bucket
+        if loop_needs_attention:
+            needs_attention += 1
+
+    spend_rows = _db_query(root, "spend", days=7)
+    spend7d = round(float(sum((r.get("cost_usd") or 0) for r in spend_rows)), 2)
+
+    return {
+        "loops": len(names),
+        "ok": ok,
+        "warn": warn,
+        "alert": alert,
+        "needs_attention": needs_attention,
+        "spend7d": spend7d,
+    }
+
+
+def _format_fleet_line(fleet):
+    return (
+        f"fleet: {fleet['loops']} loops · ok {fleet['ok']} · warn {fleet['warn']} · "
+        f"alert {fleet['alert']} · needs_attention {fleet['needs_attention']} · "
+        f"spend7d ${fleet['spend7d']:.2f}"
+    )
 
 
 def cmd_status(args):
@@ -753,6 +804,8 @@ def cmd_status(args):
         conf, _errors = loopconf.parse(conf_path)
         last_runs = _db_query(args.root, "last-runs", loop=name, limit=1)
         last = last_runs[0] if last_runs else None
+        display = _resolve_display_row(args.root, name, last)
+        in_flight = bool(last) and last.get("finished_at") is None
 
         next_text = "—"
         sched_spec = conf.get("schedule")
@@ -763,23 +816,43 @@ def cmd_status(args):
             if next_dt:
                 next_text = dash.format_relative(next_dt.strftime("%Y-%m-%dT%H:%M:%SZ"), now)
 
+        ev = _db_query(
+            args.root, "loop-events", loop=name, events="created,imported", limit=1
+        )
+        prov = ev[0] if ev else None
+        provenance = (
+            {"event": prov["event"], "actor": prov["actor"], "ts": prov["ts"]}
+            if prov
+            else None
+        )
+
         rows.append(
             {
                 "name": name,
-                "runner_status": last.get("runner_status") if last else None,
-                "effective_status": last.get("effective_status") if last else None,
-                "headline": last.get("headline") if last else None,
-                "started_at": last.get("started_at") if last else None,
+                "runner_status": display.get("runner_status") if display else None,
+                "effective_status": display.get("effective_status") if display else None,
+                "headline": display.get("headline") if display else None,
+                "started_at": display.get("started_at") if display else None,
                 "next_run": next_text,
+                "tags": conf.get("tags") or [],
+                "provenance": provenance,
+                "in_flight": in_flight,
             }
         )
 
+    fleet = _fleet_aggregate(args.root, args.from_dir)
+
     if args.json:
-        print(json.dumps(rows))
+        print(json.dumps({"fleet": fleet, "loops": rows}))
     else:
-        _print_table(
-            rows, ["name", "runner_status", "effective_status", "headline", "started_at", "next_run"]
-        )
+        print(_format_fleet_line(fleet))
+        if not rows:
+            print(f"0 loops ({args.from_dir} empty)")
+        else:
+            _print_table(
+                rows,
+                ["name", "runner_status", "effective_status", "headline", "started_at", "next_run"],
+            )
     return 0
 
 
@@ -816,6 +889,19 @@ def cmd_install(args):
         print(f"refusing to install {name}: fails validate", file=sys.stderr)
         for e in errors:
             print(f"  - {e}", file=sys.stderr)
+        return 1
+
+    # Amendment 2 (2026-07-30): install requires a prior non-failed supervised
+    # run to already exist — makes the documented validate -> supervised run ->
+    # install gauntlet mechanical rather than advisory. Applies to ALL loops,
+    # not only imported ones. Note this checks EXISTING run rows already in
+    # the db (e.g. from `loopctl run`), independent of the post-kickstart
+    # freshness poll further down, which verifies a NEW run after this install.
+    ok_runs = [r for r in _db_query(root, "last-runs", loop=name, limit=50)
+               if r.get("runner_status") in ("completed", "skipped-precheck")]
+    if not ok_runs:
+        print(f"refusing to install {name}: no non-failed supervised run recorded — "
+              f"run 'loopctl run {name}' first", file=sys.stderr)
         return 1
 
     label = _service_label(name)
@@ -887,6 +973,7 @@ def cmd_install(args):
         _launchctl(["bootout", f"gui/{uid}/{label}"])
         return 1
 
+    _record_event(root, name, "installed", args.actor)
     print(f"installed {name} -> {plist_path}")
     return 0
 
@@ -901,6 +988,7 @@ def cmd_uninstall(args):
     if os.path.isfile(plist_path):
         os.remove(plist_path)
         removed = True
+    _record_event(root, name, "uninstalled", args.actor)
     suffix = "" if removed else " (no plist was present)"
     print(f"uninstalled {name}{suffix}")
     return 0
@@ -925,6 +1013,7 @@ def _set_enabled(args, enabled_value):
             _launchctl(["bootout", f"gui/{uid}/{label}"])
 
     verb = "resumed" if enabled_value else "paused"
+    _record_event(root, name, verb, args.actor)
     print(f"{verb} {name}")
     return 0
 
@@ -1026,7 +1115,10 @@ def cmd_findings(args):
     if args.json:
         print(json.dumps(out_rows))
     else:
-        _print_table(out_rows, ["finding_id", "severity", "age", "times_seen", "disposition"])
+        if not out_rows:
+            print(f"0 open findings for {loop_name}")
+        else:
+            _print_table(out_rows, ["finding_id", "severity", "age", "times_seen", "disposition"])
     return 0
 
 
@@ -1071,6 +1163,188 @@ def cmd_disposition(args, action):
     return 0
 
 
+def _print_import_analysis(skill_path, analysis):
+    """Human-readable form of an `analyze()` dict — header, rubric table,
+    flags line, precheck proposal (with the safety framing the controller
+    required: commented lines are NOT live, and "[read-only?]" is a
+    heuristic hint, not a guarantee), and a numbered answers-needed list.
+    `--json` bypasses this entirely and prints the dict verbatim."""
+    print(f"skill: {skill_path}")
+    print(f"proposed name : {analysis.get('proposed_name')}")
+    print(f"type          : {analysis.get('type')}")
+    print(f"engine        : {analysis.get('engine')}")
+    print(f"blocked       : {analysis.get('blocked')}")
+    for reason in analysis.get("blocked_reasons") or []:
+        print(f"  - {reason}")
+    print()
+
+    print("Rubric:")
+    rubric = analysis.get("rubric", {}) or {}
+    rows = [
+        {
+            "question": qid,
+            "bucket": (rubric.get(qid) or {}).get("bucket", "—"),
+            "value": (rubric.get(qid) or {}).get("value", "—"),
+        }
+        for qid in skill_import.RUBRIC_IDS
+    ]
+    _print_table(rows, ["question", "bucket", "value"])
+    print()
+
+    flags = analysis.get("flags", {}) or {}
+    print("Flags: " + ", ".join(f"{k}={v}" for k, v in flags.items()))
+    print()
+
+    print(
+        "Precheck proposal — COMMENTED PROPOSALS requiring human review before "
+        'uncommenting any line into precheck.sh; "[read-only?]" is a heuristic '
+        "hint, not a guarantee:"
+    )
+    precheck = analysis.get("precheck_proposal") or []
+    if precheck:
+        for line in precheck:
+            print(f"  {line}")
+    else:
+        print("  (none proposed)")
+    print()
+
+    answers_needed = analysis.get("answers_needed") or []
+    print(f"Answers needed ({len(answers_needed)}):")
+    if not answers_needed:
+        print("  (none)")
+    for i, a in enumerate(answers_needed, start=1):
+        print(f"  {i}. [{a.get('question_id')}] suggested_answerer={a.get('suggested_answerer')}")
+        print(f"     {a.get('prompt')}")
+        options = a.get("options") or []
+        if options:
+            opt_text = "; ".join(
+                f"{o.get('id')} ({o.get('label')})" for o in options
+            )
+            print(f"     options: {opt_text}")
+
+
+def cmd_import(args):
+    if args.apply:
+        return _cmd_import_apply(args)
+
+    try:
+        skill = skill_import.parse_skill(args.skill_path)
+    except skill_import.SkillParseError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    analysis = skill_import.analyze(skill)
+
+    if args.json:
+        print(json.dumps(analysis))
+    else:
+        _print_import_analysis(args.skill_path, analysis)
+    return 0
+
+
+def _cmd_import_apply(args):
+    """`loopctl import <skill-path> --apply --answers <path>` (Task 12 —
+    Amendment 2, 2026-07-30, docs/INTERFACES.md §8). Collision handling
+    (existing `loops.d/<name>` dir) lives HERE rather than in
+    `skill_import.apply()` — it's a `--overwrite` CLI concern, not something
+    `apply()` itself needs to know about."""
+    if not args.answers:
+        print("--apply requires --answers <path to answers.json>", file=sys.stderr)
+        return 2
+
+    try:
+        with open(args.answers, "r") as f:
+            answers = json.load(f)
+    except OSError as e:
+        print(f"cannot read answers file {args.answers!r}: {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:  # json.JSONDecodeError is a ValueError subclass
+        print(f"invalid JSON in answers file {args.answers!r}: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        skill = skill_import.parse_skill(args.skill_path)
+    except skill_import.SkillParseError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    analysis = skill_import.analyze(skill)
+
+    name = args.name or analysis["proposed_name"]
+    if not loopconf.NAME_RE.match(name):
+        print(
+            f"invalid loop name {name!r}: must match ^[a-z][a-z0-9-]{{1,40}}$",
+            file=sys.stderr,
+        )
+        return 2
+
+    dest_dir = os.path.join(args.root, args.from_dir, name)
+    if os.path.exists(dest_dir) and not args.overwrite:
+        print(
+            f"refusing to scaffold {name}: {dest_dir} already exists (use --overwrite)",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Fix wave (2026-07-30, IMPORTANT #2a): --overwrite must never rewrite an
+    # INSTALLED loop's files in place. The next launchd firing would run the
+    # new prompt/loop.conf with none of the validate -> supervised run ->
+    # install gauntlet re-applied, and (worse) apply() forces
+    # schedule=manual for an acknowledged-blocked skill while the OLD plist
+    # stays bootstrapped and keeps firing on its old schedule (see the
+    # matching guard in bin/run-loop.sh). Refuse outright rather than adding
+    # a force-past flag -- uninstall, re-import, re-validate, re-run,
+    # re-install is the only supported path back in.
+    if os.path.exists(dest_dir) and args.overwrite and _is_installed(args.root, name):
+        print(
+            f"refusing to overwrite {name}: it is currently installed — "
+            f"run 'loopctl uninstall {name}' first, then re-import, "
+            "loopctl validate, loopctl run, and loopctl install again",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        written = skill_import.apply(skill, analysis, answers, dest_dir)
+    except skill_import.SkillApplyError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    _record_event(
+        args.root,
+        name,
+        "imported",
+        args.actor,
+        detail={
+            "source_skill": os.path.abspath(args.skill_path),
+            "skill_sha256": skill["sha256"],
+            "answers_provenance": answers.get("provenance") or {},
+            "overwrite": bool(args.overwrite),
+        },
+    )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "name": name,
+                    "dir": dest_dir,
+                    "files": [os.path.basename(p) for p in written],
+                }
+            )
+        )
+    else:
+        print(f"imported {name} -> {dest_dir}")
+        for p in written:
+            print(f"  wrote {os.path.relpath(p, args.root)}")
+        print()
+        print("Next steps (import never installs by itself):")
+        print(f"  loopctl validate {name}")
+        print(f"  loopctl run {name}       # read the report against ground truth")
+        print(f"  loopctl install {name}")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # argparse wiring
 # ---------------------------------------------------------------------------
@@ -1079,66 +1353,144 @@ def _default_root():
     return os.environ.get("LOOPS_ROOT", os.path.expanduser("~/projects/loops"))
 
 
+def _common_parser(*, hidden=False, suppress_defaults=False, include_from=True):
+    """The `--root`/`--json`/`--from`/`--actor` flags shared by every verb's
+    subparser, AND (Amendment 2 — 2026-07-30 fix round 1) by the top-level
+    parser `p` itself, in two deliberately different flavors — conflating
+    them was a verified Critical (see the long comment on `build_parser`
+    below for the mechanism):
+
+    - `hidden=True` (top-level `p`'s copy): real defaults, `help=SUPPRESS`
+      on every flag — parseable (so a bare/pre-verb `--root R` etc. doesn't
+      get mis-swallowed as a positional) but invisible in `loopctl --help`,
+      which must read identically to before this amendment.
+    - `suppress_defaults=True` (every subparser's copy): `default=SUPPRESS`
+      on every flag, normal (visible, unchanged) help — so that when a verb
+      invocation doesn't repeat a flag after the verb, the subparser's own
+      re-parse doesn't clobber whatever the top-level parser already
+      resolved for it with a fresh default.
+    - `include_from=False` (merge with main, 2026-07-30): omit `--from`
+      entirely. Only `serve` uses it — bin/console.py reads loops.d
+      unconditionally and has no --from plumbing, so accepting the flag
+      there would silently ignore it, a flag that lies.
+    """
+    common = argparse.ArgumentParser(add_help=False)
+    help_ = argparse.SUPPRESS if hidden else None
+    sup = argparse.SUPPRESS
+
+    common.add_argument(
+        "--root", default=(sup if suppress_defaults else _default_root()), help=help_
+    )
+    common.add_argument(
+        "--json",
+        action="store_true",
+        default=(sup if suppress_defaults else False),
+        help=help_,
+    )
+    if include_from:
+        common.add_argument(
+            "--from",
+            dest="from_dir",
+            choices=["loops.d", "examples"],
+            default=(sup if suppress_defaults else "loops.d"),
+            help=help_,
+        )
+    common.add_argument(
+        "--actor",
+        default=(sup if suppress_defaults else os.environ.get("USER", "unknown")),
+        help=help_,
+    )
+    return common
+
+
 def build_parser():
-    # `common_base` is `common` minus `--from`. Only `serve` uses it: bin/console.py reads
-    # loops.d unconditionally (_loop_names/_state) and has no --from plumbing, so accepting
-    # the flag there would silently ignore it — a flag that lies. Dropping it is the smaller
-    # correct change; threading a source dir through the console would widen the console's
-    # surface for a directory (examples/) that is never installed or scheduled anyway.
-    common_base = argparse.ArgumentParser(add_help=False)
-    common_base.add_argument("--root", default=_default_root())
-    common_base.add_argument("--json", action="store_true")
+    # (Amendment 2 — 2026-07-30 fix round 1) `common_top` (real defaults,
+    # hidden help) vs `common_sub` (SUPPRESS defaults, normal help) — see
+    # `_common_parser`'s docstring for what each is for. The mechanism this
+    # exists to avoid: argparse's `_SubParsersAction.__call__` parses a
+    # chosen subparser's trailing tokens into a **fresh** sub-namespace
+    # (`parser.parse_known_args(arg_strings, None)` — the `None` is the
+    # fresh namespace, not the outer one), then unconditionally copies EVERY
+    # key from that sub-namespace onto the outer namespace. If the
+    # subparser's own `--root` etc. carry real defaults too, an invocation
+    # like `loopctl --root R status --json` gets `--root R` correctly
+    # resolved by `p` first, then immediately clobbered back to
+    # `_default_root()` when `status`'s sub-namespace (which never saw
+    # `--root` — it only received `["--json"]`) gets copied over wholesale.
+    # `default=SUPPRESS` on the subparser's copy means that when a flag
+    # isn't repeated after the verb, it's simply absent from the
+    # sub-namespace — `vars(subnamespace)` doesn't contain the key at all —
+    # so the copy loop never touches it, and the top-level parser's already-
+    # resolved value survives. When a flag IS repeated after the verb (the
+    # existing, most common convention — e.g. `status --root R`), the
+    # subparser parses it for real and correctly overwrites the top-level's
+    # default with it. Verified against the full flag x placement matrix in
+    # `TestGlobalFlagPlacement`.
+    common_top = _common_parser(hidden=True)
+    common_sub = _common_parser(suppress_defaults=True)
+    common_sub_nofrom = _common_parser(suppress_defaults=True, include_from=False)
 
-    common = argparse.ArgumentParser(add_help=False, parents=[common_base])
-    common.add_argument("--from", dest="from_dir", default="loops.d", choices=["loops.d", "examples"])
-
-    p = argparse.ArgumentParser(prog="loopctl")
+    p = argparse.ArgumentParser(prog="loopctl", parents=[common_top])
     sub = p.add_subparsers(dest="verb")
 
-    new_p = sub.add_parser("new", parents=[common])
+    new_p = sub.add_parser("new", parents=[common_sub])
     new_p.add_argument("name")
     new_p.add_argument("--type", dest="type_", default="agent", choices=["agent", "watchdog"])
     new_p.add_argument("--engine", default="codex", choices=["codex", "claude"])
 
-    validate_p = sub.add_parser("validate", parents=[common])
+    validate_p = sub.add_parser("validate", parents=[common_sub])
     validate_p.add_argument("name", nargs="?")
     validate_p.add_argument("--all", action="store_true")
 
-    run_p = sub.add_parser("run", parents=[common])
+    run_p = sub.add_parser("run", parents=[common_sub])
     run_p.add_argument("name")
     run_p.add_argument("--trigger", default="manual")
 
-    sub.add_parser("list", parents=[common])
+    list_p = sub.add_parser("list", parents=[common_sub])
+    list_p.add_argument("--tag", default=None)
 
-    status_p = sub.add_parser("status", parents=[common])
+    status_p = sub.add_parser("status", parents=[common_sub])
     status_p.add_argument("name", nargs="?")
 
-    install_p = sub.add_parser("install", parents=[common])
+    install_p = sub.add_parser("install", parents=[common_sub])
     install_p.add_argument("name")
 
-    uninstall_p = sub.add_parser("uninstall", parents=[common])
+    uninstall_p = sub.add_parser("uninstall", parents=[common_sub])
     uninstall_p.add_argument("name")
 
-    pause_p = sub.add_parser("pause", parents=[common])
+    pause_p = sub.add_parser("pause", parents=[common_sub])
     pause_p.add_argument("name")
 
-    resume_p = sub.add_parser("resume", parents=[common])
+    resume_p = sub.add_parser("resume", parents=[common_sub])
     resume_p.add_argument("name")
 
-    set_schedule_p = sub.add_parser("set-schedule", parents=[common])
+    set_schedule_p = sub.add_parser("set-schedule", parents=[common_sub])
     set_schedule_p.add_argument("name")
     set_schedule_p.add_argument("spec")
 
-    sub.add_parser("dashboard", parents=[common])
+    sub.add_parser("dashboard", parents=[common_sub])
 
-    serve_p = sub.add_parser("serve", parents=[common_base])  # no --from: see above
+    # `serve` takes the no-`--from` flavor (rationale in `_common_parser`).
+    # `main()` additionally rejects a PRE-verb `--from` with `serve`: this
+    # branch's top-level parser carries a hidden `--from` that main's did
+    # not, so without that check the flag would be silently swallowed.
+    serve_p = sub.add_parser("serve", parents=[common_sub_nofrom])
     serve_p.add_argument("--port", type=int, default=8929)
 
-    findings_p = sub.add_parser("findings", parents=[common])
+    findings_p = sub.add_parser("findings", parents=[common_sub])
     findings_p.add_argument("loop")
 
+    import_p = sub.add_parser("import", parents=[common_sub])
+    import_p.add_argument("skill_path")
+    import_group = import_p.add_mutually_exclusive_group(required=True)
+    import_group.add_argument("--analyze", action="store_true")
+    import_group.add_argument("--apply", action="store_true")
+    import_p.add_argument("--answers", default=None)
+    import_p.add_argument("--name", default=None)
+    import_p.add_argument("--overwrite", action="store_true")
+
     for verb in ("ack", "dismiss", "snooze", "reopen"):
-        vp = sub.add_parser(verb, parents=[common])
+        vp = sub.add_parser(verb, parents=[common_sub])
         vp.add_argument("loop")
         vp.add_argument("finding_id")
         if verb in ("ack", "dismiss"):
@@ -1151,12 +1503,31 @@ def build_parser():
 
 def main(argv=None):
     parser = build_parser()
-    args = parser.parse_args(argv)
-    if not args.verb:
-        parser.print_usage(sys.stderr)
-        return 2
+    # parse_known_args (not parse_args): `p` now carries --root/--json/--from/
+    # --actor directly (see build_parser), so a bare invocation with no verb
+    # — `loopctl` alone, or `loopctl --root R` — parses those flags onto
+    # `args` same as always; `args.verb` just comes back None (no subparser
+    # ever ran). `extra` is only non-empty for genuinely unrecognized
+    # arguments — checked unconditionally below, BEFORE the verb-is-None
+    # branch (Amendment 2 — 2026-07-30 fix round 2: checking verb-is-None
+    # first let a typo'd flag like `--root-dir=X` silently print the
+    # DEFAULT-root fleet at exit 0 instead of erroring — the exact
+    # signal-loss the flag-placement fix eliminated for the "clobbered"
+    # case, now closed for "genuinely unrecognized" too).
+    args, extra = parser.parse_known_args(argv)
 
-    args.root = os.path.abspath(args.root)
+    if extra:
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
+
+    # (merge with main, 2026-07-30) `serve` deliberately has no `--from`
+    # (bin/console.py reads loops.d unconditionally). On main that made a
+    # pre-verb `--from` an argparse error; this branch's top-level parser
+    # carries a hidden `--from`, which would otherwise swallow it silently —
+    # exactly the flag-that-lies main's own comment set out to avoid.
+    if getattr(args, "verb", None) == "serve" and any(
+        a == "--from" or a.startswith("--from=") for a in (argv or sys.argv[1:])
+    ):
+        parser.error("serve does not accept --from (the console always reads loops.d)")
 
     dispatch = {
         "new": cmd_new,
@@ -1172,11 +1543,42 @@ def main(argv=None):
         "dashboard": cmd_dashboard,
         "serve": cmd_serve,
         "findings": cmd_findings,
+        "import": cmd_import,
         "ack": lambda a: cmd_disposition(a, "ack"),
         "dismiss": lambda a: cmd_disposition(a, "dismiss"),
         "snooze": lambda a: cmd_disposition(a, "snooze"),
         "reopen": lambda a: cmd_disposition(a, "reopen"),
     }
+
+    if args.verb is None:
+        # (fix round 2) An `extra`-free parse with no verb ISN'T always a
+        # genuine bare invocation: `--root`/`--actor`/`--from` each take a
+        # value, so a verb placed right after one of them with nothing
+        # following gets silently consumed AS that value instead of ever
+        # reaching the subparsers positional — `loopctl --actor status`
+        # parses cleanly as actor="status", verb=None, extra=[] — nothing
+        # for the check above to catch, yet the user's `status` verb just
+        # vanished. This is indistinguishable from a genuinely-intended
+        # literal value by parsing alone, so treat any raw argv token that
+        # exactly matches a known verb name as a near-certain mistake and
+        # refuse loudly rather than silently defaulting to the default
+        # root. `--flag=value` syntax (e.g. `--actor=status`) is the
+        # escape hatch: it never appears in argv as a bare token equal to
+        # a verb name, so a genuinely-intended literal value survives.
+        raw = argv if argv is not None else sys.argv[1:]
+        collided = [tok for tok in raw if tok in dispatch]
+        if collided:
+            parser.error(
+                f"ambiguous invocation: {collided[0]!r} looks like a verb but was "
+                "consumed as a flag's value — use --flag=value syntax, or reorder, "
+                "if that's intentional"
+            )
+        args.root = os.path.abspath(args.root)
+        args.name = None
+        return cmd_status(args)
+
+    args.root = os.path.abspath(args.root)
+
     fn = dispatch.get(args.verb)
     if fn is None:
         parser.print_usage(sys.stderr)

@@ -526,6 +526,67 @@ test_enabled_false_refused() {
 }
 
 # ===========================================================================
+# schedule=manual refused on a launchd-triggered firing, except --trigger
+# manual (IMPORTANT #2b, fix wave 2026-07-30) -- same shape as the
+# enabled=false guard above. `loopctl install` already refuses to bootstrap a
+# schedule=manual loop, but a loop's live loop.conf can end up schedule=manual
+# while an OLDER plist stays bootstrapped (e.g. an --overwrite that forces
+# schedule=manual for an acknowledged-blocked skill without touching the
+# plist) -- every launchd-triggered firing always arrives as --trigger
+# launchd regardless of whether launchd fired it on schedule or via an
+# explicit kickstart, so this guard is what actually stops it from running
+# unattended.
+# ===========================================================================
+
+test_schedule_manual_refused_on_launchd_trigger() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopman agent >/dev/null  # make_loop's own default is schedule=manual
+
+  run_runner "$root" loopman --trigger launchd
+  assert_eq "schedule=manual: launchd trigger exit 0" "0" "$RUNNER_EXIT"
+  assert_eq "schedule=manual: launchd trigger creates no run row" "0" "$(run_count "$root" loopman)"
+
+  run_runner "$root" loopman --trigger manual
+  assert_eq "schedule=manual: manual trigger exit 0" "0" "$RUNNER_EXIT"
+  assert_eq "schedule=manual: manual trigger DOES run" "1" "$(run_count "$root" loopman)"
+  assert_eq "schedule=manual: manual trigger completes" "completed" "$(last_run_field "$root" loopman runner_status)"
+  rm -rf "$root"
+}
+
+test_schedule_manual_refused_on_kickstart_trigger() {
+  # kickstart is the other non-manual --trigger value run-loop.sh's own arg
+  # parsing accepts (usage comment: --trigger launchd|manual|kickstart) --
+  # covered separately from launchd so the guard's `!= manual` condition
+  # (not a narrower `== launchd` check) is what's actually pinned.
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopman2 agent >/dev/null
+
+  run_runner "$root" loopman2 --trigger kickstart
+  assert_eq "schedule=manual: kickstart trigger exit 0" "0" "$RUNNER_EXIT"
+  assert_eq "schedule=manual: kickstart trigger creates no run row" "0" "$(run_count "$root" loopman2)"
+  rm -rf "$root"
+}
+
+test_non_manual_schedule_still_runs_on_launchd_trigger() {
+  # The guard must be specific to schedule=manual -- a loop with a real
+  # interval schedule must still run normally on --trigger launchd (the
+  # enabled=false guard's own sibling test already covers this shape for
+  # enabled; this pins it for the new schedule guard so it can't have been
+  # written as an unconditional "launchd never runs" refusal).
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopint agent "schedule=interval:15m" >/dev/null
+
+  run_runner "$root" loopint --trigger launchd
+  assert_eq "schedule=interval: launchd trigger exit 0" "0" "$RUNNER_EXIT"
+  assert_eq "schedule=interval: launchd trigger DOES run" "1" "$(run_count "$root" loopint)"
+  assert_eq "schedule=interval: launchd trigger completes" "completed" "$(last_run_field "$root" loopint runner_status)"
+  rm -rf "$root"
+}
+
+# ===========================================================================
 # --dry-run: prompt to stdout, no lock/db/engine touched
 # ===========================================================================
 
@@ -584,6 +645,90 @@ EOF
 }
 
 # ===========================================================================
+# start-of-run non-blocking dashboard regen (Amendment 2 -- 2026-07-30)
+# ===========================================================================
+
+test_start_regen_never_blocks_or_fails_when_dashboard_lock_held() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopdash agent >/dev/null
+
+  mkdir -p "$root/state/locks"
+  local fifo="$root/state/locks/.testhold-dash-$$"
+  rm -f "$fifo"
+  mkfifo "$fifo"
+  local outfile; outfile="$(mktemp "${TMPDIR:-/tmp}/loops-testlock-dash-out.XXXXXX")"
+  python3 "$root/bin/lock.py" acquire --name _dashboard --root "$root" < "$fifo" > "$outfile" 2>/dev/null &
+  local lockpid=$!
+  exec 9> "$fifo"
+  local waited=0
+  while [ ! -s "$outfile" ] && kill -0 "$lockpid" 2>/dev/null && [ "$waited" -lt 50 ]; do
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+
+  assert_file_missing "start-regen: no dashboard yet" "$root/dashboard/loops.html"
+
+  run_runner "$root" loopdash
+
+  exec 9>&-
+  wait "$lockpid" 2>/dev/null || true
+  rm -f "$fifo" "$outfile"
+
+  assert_eq "start-regen: exit code unaffected by held dashboard lock" "0" "$RUNNER_EXIT"
+  assert_eq "start-regen: run row completed despite held dashboard lock" "completed" "$(last_run_field "$root" loopdash runner_status)"
+  # both the new start-of-run check (must skip, lock held) and the existing
+  # end-of-run --wait-s 30 acquire (also can't get in while held throughout)
+  # degrade silently -- neither is allowed to write a partial file or fail the run.
+  assert_file_missing "start-regen: dashboard still not regenerated while lock was held throughout" "$root/dashboard/loops.html"
+
+  # once the lock is free, a later run's start-of-run regen fires immediately.
+  run_runner "$root" loopdash
+  assert_eq "start-regen: second run exit code" "0" "$RUNNER_EXIT"
+  assert_file_exists "start-regen: dashboard regenerated once the lock is free" "$root/dashboard/loops.html"
+  rm -rf "$root"
+}
+
+# test_start_regen_fires_before_engine_finishes — the discriminating case:
+# proves the regen actually happens at start-of-run (immediately after
+# db.py start-run, step 3), not only at end-of-run (step 7). A slow fake
+# engine (FAKE_SLEEP_S) gives a window to observe dashboard.html already
+# written WHILE the run is still in flight (kill -0 on the runner's pid
+# still succeeds) — end-of-run's regen alone could never produce that.
+test_start_regen_fires_before_engine_finishes() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopmid agent >/dev/null
+  export FAKE_SLEEP_S=3
+
+  local out err
+  out="$(mktemp "${TMPDIR:-/tmp}/loops-midrun-out.XXXXXX")"
+  err="$(mktemp "${TMPDIR:-/tmp}/loops-midrun-err.XXXXXX")"
+  LOOPS_ROOT="$root" "$RUNNER" loopmid --trigger manual > "$out" 2> "$err" &
+  local pid=$!
+
+  local waited=0 seen=0
+  while [ "$waited" -lt 50 ]; do
+    if [ -f "$root/dashboard/loops.html" ]; then seen=1; break; fi
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  local still_running=0
+  kill -0 "$pid" 2>/dev/null && still_running=1
+
+  wait "$pid" 2>/dev/null
+  local ec=$?
+  unset FAKE_SLEEP_S
+  rm -f "$out" "$err"
+
+  assert_eq "start-regen-mid: dashboard.html appeared before the engine finished" "1" "$seen"
+  assert_eq "start-regen-mid: run was still in-flight when it appeared" "1" "$still_running"
+  assert_eq "start-regen-mid: run exit code" "0" "$ec"
+  assert_eq "start-regen-mid: runner_status" "completed" "$(last_run_field "$root" loopmid runner_status)"
+  rm -rf "$root"
+}
+
+# ===========================================================================
 # main
 # ===========================================================================
 
@@ -629,11 +774,20 @@ test_retention_pruning_cross_loop_isolation
 echo "== bin/run-loop.sh: enabled=false =="
 test_enabled_false_refused
 
+echo "== bin/run-loop.sh: schedule=manual (IMPORTANT #2b) =="
+test_schedule_manual_refused_on_launchd_trigger
+test_schedule_manual_refused_on_kickstart_trigger
+test_non_manual_schedule_still_runs_on_launchd_trigger
+
 echo "== bin/run-loop.sh: --dry-run =="
 test_dry_run
 
 echo "== bin/run-loop.sh: prompt composition =="
 test_prompt_composition
+
+echo "== bin/run-loop.sh: start-of-run non-blocking dashboard regen =="
+test_start_regen_never_blocks_or_fails_when_dashboard_lock_held
+test_start_regen_fires_before_engine_finishes
 
 echo
 echo "passed: $TR_PASSED, failed: $TR_FAILED"

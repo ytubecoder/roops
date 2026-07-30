@@ -321,6 +321,7 @@ CONF_MODEL="$(conf_get model)"
 CONF_WORKDIR="$(conf_get workdir)"
 CONF_TIMEOUT_S="$(conf_get timeout_s)"
 CONF_ENABLED="$(conf_get enabled)"
+CONF_SCHEDULE="$(conf_get schedule)"
 CONF_RETENTION_DAYS="$(conf_get retention_days)"
 CONF_RETRY_TRANSIENT="$(conf_get retry_transient)"
 CONF_PERM_FS_WRITE="$(conf_get perm_fs_write)"
@@ -358,6 +359,24 @@ chmod 700 "$ROOT/state" "$ROOT/reports" "$ROOT/state/runs" "$ROOT/state/locks" 2
 "$PY" "$ROOT/bin/db.py" init --root "$ROOT" >/dev/null
 
 if [ "$CONF_ENABLED" != "true" ] && [ "$TRIGGER" != "manual" ]; then
+  finalize_exit 0
+fi
+
+# Fix wave (2026-07-30, IMPORTANT #2b): schedule=manual is refused at
+# `loopctl install` time (a schedule=manual loop is never installed to
+# launchd in the first place) -- but a loop CAN end up schedule=manual
+# while its plist is STILL bootstrapped: e.g. an already-installed loop's
+# loop.conf gets rewritten to schedule=manual later (`loopctl import
+# --apply --overwrite` forces this for an acknowledged-blocked skill,
+# bin/skill_import.py's apply()) without the plist itself ever being
+# touched. The plist keeps firing on its OLD schedule regardless of what
+# the live loop.conf now says, and every launchd-triggered firing always
+# arrives here as `--trigger launchd` (the plist's ProgramArguments is
+# fixed at install time -- see loopctl's _plist_dict). Without this guard
+# a credential-blocked or otherwise-manual-only skill could keep running
+# unattended on a schedule. Same shape as the enabled guard above:
+# `--trigger manual` (what `loopctl run` uses) always still works.
+if [ "$CONF_SCHEDULE" = "manual" ] && [ "$TRIGGER" != "manual" ]; then
   finalize_exit 0
 fi
 
@@ -410,6 +429,13 @@ mkdir -p "$OUT_DIR"
 chmod 700 "$OUT_DIR"
 
 db_start_run
+
+# (Amendment 2) best-effort "running now" regen — NEVER blocks or fails the run.
+# check-then-generate is advisory (TOCTOU: the lock could be taken between the check and
+# the generate call) — safe only because generate.py always writes via a unique tmp file +
+# atomic os.rename, so a racing writer can never corrupt or interleave with another's output.
+"$PY" "$ROOT/bin/lock.py" check --name _dashboard --root "$ROOT" >/dev/null 2>&1 && \
+  "$PY" "$ROOT/dashboard/generate.py" --root "$ROOT" >/dev/null 2>&1 || true
 
 # finish_run <runner_status> <loop_status> <effective_status> <attempts> \
 #            <status_reason> <headline> <report_path> <contract_path> \

@@ -1,6 +1,6 @@
 # Roops — recurring automation harness (mechanical name: loops)
 
-Custom thin harness for scheduled agent "loops" (recurring maintenance/monitoring jobs across ~/projects). **Status: BUILT + live-verified 2026-07-22** (real launchd firing, codex AND claude, findings memory/dispositions, enforcement denial, full dashboard matrix; 756 hermetic tests via `bash tests/run-tests.sh` — 425 python + 331 shell, measured 2026-07-30).
+Custom thin harness for scheduled agent "loops" (recurring maintenance/monitoring jobs across ~/projects). **Status: BUILT + live-verified 2026-07-22** (real launchd firing, codex AND claude, findings memory/dispositions, enforcement denial, full dashboard matrix; 1000 hermetic tests via `bash tests/run-tests.sh` — 633 python + 367 shell, measured 2026-07-30).
 
 **Fleet state (2026-07-30):** two loops installed to launchd — `loop-sensei` (the fleet examiner — diagnoses failed loops, proposes fixes as findings; `daily:20:00` local) and `kagi-ban` (CLI-secrets exposure audit, the first page-enabled loop; `daily:07:40`). Everything else is supervised-only. Install state is machine-local: `launchd/*.plist` is gitignored, so a fresh clone shows installed=False for everything until reinstalled.
 
@@ -8,6 +8,7 @@ Custom thin harness for scheduled agent "loops" (recurring maintenance/monitorin
 
 ## Start here (cold start)
 - **Building a LOOP:** `docs/LOOP_AUTHORING.md` + `bin/loopctl new` — run the intake interview first (12 questions, in the doc — q12 is the optional report page); fill SPEC.md; `loopctl validate` gates it.
+- **Converting an existing Agent Skill into a loop:** `docs/SKILL_IMPORT.md` + `loopctl import <skill-path> --analyze/--apply` — static, zero-token gap analysis that scaffolds a loop from a `SKILL.md`; same gates as hand-authored loops (validate → supervised run → install). Discoverability layer for Claude-family agents: `skills/loops/SKILL.md`.
 - **Touching HARNESS code:** `docs/INTERFACES.md` is the frozen mechanical contract — conform or amend it explicitly, never drift. Design rationale: `docs/HARNESS_PLAN.md` + `docs/HARNESS_PLAN_AMENDMENT_1.md` (do not relitigate settled decisions). Verified engine CLI facts: `docs/ENGINE_PROBES.md`.
 - **Choosing/specifying loops:** work from `docs/LOOPS_WARMSTART.md`.
 - **Ads loops (five per-network checks + the `/ads/actions` console surface):** `docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md` — current state, the three open issues with their re-check commands, and the acceptance bar (a manual "run everything" trigger is phase 1; launchd scheduling is phase 2, explicitly not before).

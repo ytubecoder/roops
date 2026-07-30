@@ -99,6 +99,16 @@ CREATE TABLE IF NOT EXISTS dispositions (
 );
 CREATE INDEX IF NOT EXISTS idx_disp_loop_finding ON dispositions(loop_name, finding_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS loop_events (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  loop_name TEXT NOT NULL,
+  event     TEXT NOT NULL,
+  actor     TEXT NOT NULL,
+  ts        TEXT NOT NULL,
+  detail    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_loop_ts ON loop_events(loop_name, ts DESC);
+
 CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -190,6 +200,13 @@ class FixtureRoot:
                 error_detail,
                 exit_code,
             ),
+        )
+        conn.commit()
+
+    def add_event(self, conn, loop_name, event, actor, ts=None, detail=None):
+        conn.execute(
+            "INSERT INTO loop_events(loop_name, event, actor, ts, detail) VALUES (?,?,?,?,?)",
+            (loop_name, event, actor, ts or iso(NOW), detail),
         )
         conn.commit()
 
@@ -358,6 +375,37 @@ class PureFunctionTests(unittest.TestCase):
     def test_died_false_when_finished(self):
         started = NOW - timedelta(seconds=5000)
         self.assertFalse(generate.is_died(iso(NOW), iso(started), 800, NOW))
+
+    # -- running/overdue trichotomy (Amendment 2 -- 2026-07-30) --------------------------
+
+    def test_overdue_true_between_timeout_and_grace(self):
+        started = NOW - timedelta(seconds=850)
+        # timeout_s=800 -> overdue window (800, 920]; 850 is inside it
+        self.assertTrue(generate.is_overdue(None, iso(started), 800, NOW))
+
+    def test_overdue_false_within_timeout(self):
+        started = NOW - timedelta(seconds=500)
+        self.assertFalse(generate.is_overdue(None, iso(started), 800, NOW))
+
+    def test_overdue_false_past_grace(self):
+        started = NOW - timedelta(seconds=1000)
+        self.assertFalse(generate.is_overdue(None, iso(started), 800, NOW))
+
+    def test_overdue_false_when_finished(self):
+        started = NOW - timedelta(seconds=850)
+        self.assertFalse(generate.is_overdue(iso(NOW), iso(started), 800, NOW))
+
+    def test_running_true_within_timeout(self):
+        started = NOW - timedelta(seconds=500)
+        self.assertTrue(generate.is_running(None, iso(started), 800, NOW))
+
+    def test_running_false_past_timeout(self):
+        started = NOW - timedelta(seconds=850)
+        self.assertFalse(generate.is_running(None, iso(started), 800, NOW))
+
+    def test_running_false_when_finished(self):
+        started = NOW - timedelta(seconds=500)
+        self.assertFalse(generate.is_running(iso(NOW), iso(started), 800, NOW))
 
     def test_disposition_text_dismissed(self):
         text = generate.disposition_text(
@@ -1554,6 +1602,463 @@ class FailureSurfacingTests(unittest.TestCase):
         conn.close()
         html = self._generate()
         self.assertNotIn('class="report-drawer"', html)
+
+
+class FindingHandoffTests(unittest.TestCase):
+    """Per-finding paste-into-an-agent blocks (Amendment 2) — mirrors the run-failure
+    handoff block's deterministic-template style, but scoped to one open finding."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+
+    def _root_with_finding(
+        self,
+        loop_name,
+        finding_id,
+        severity="warn",
+        detail=None,
+        title=None,
+        times_seen=1,
+        dismiss=False,
+        in_latest_json=True,
+    ):
+        conn = self.fx.init_db()
+        self.fx.add_loop(loop_name)
+        self.fx.add_run(
+            conn,
+            "r1",
+            loop_name,
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            severity,
+            severity,
+            "issues found",
+        )
+        title = title or f"{loop_name} finding {finding_id}"
+        conn.execute(
+            "INSERT INTO findings (finding_id, loop_name, title, severity, first_seen_run, "
+            "first_seen_at, last_seen_run, last_seen_at, times_seen, resolved_at) VALUES "
+            "(?,?,?,?,?,?,?,?,?,NULL)",
+            (
+                finding_id,
+                loop_name,
+                title,
+                severity,
+                "r0",
+                iso(NOW - timedelta(days=1)),
+                "r1",
+                iso(NOW - timedelta(minutes=4)),
+                times_seen,
+            ),
+        )
+        if dismiss:
+            conn.execute(
+                "INSERT INTO dispositions (loop_name, finding_id, action, note, "
+                "snooze_until, created_at) VALUES (?,?,?,?,?,?)",
+                (
+                    loop_name,
+                    finding_id,
+                    "dismiss",
+                    "handled elsewhere",
+                    None,
+                    iso(NOW - timedelta(hours=1)),
+                ),
+            )
+        conn.commit()
+        conn.close()
+        if in_latest_json:
+            finding_entry = {
+                "finding_id": finding_id,
+                "title": title,
+                "severity": severity,
+            }
+            if detail is not None:
+                finding_entry["detail"] = detail
+            self.fx.write_latest_json(
+                loop_name,
+                {
+                    "schema_version": 1,
+                    "run_id": "r1",
+                    "status": severity,
+                    "status_reason": "x",
+                    "headline": "issues found",
+                    "report_markdown": "# x",
+                    "metrics": "{}",
+                    "findings": [finding_entry],
+                },
+            )
+        return self.fx.root
+
+    def _generate(self, root):
+        out = os.path.join(root, "dashboard", "loops.html")
+        generate.generate(
+            root=root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            return f.read()
+
+    def test_finding_paste_block(self):
+        root = self._root_with_finding(
+            "l1", "repo:no-remote", severity="warn", detail="23 unpushed commits"
+        )
+        html = self._generate(root)
+        self.assertIn("finding-handoff", html)
+        self.assertIn("repo:no-remote", html)
+        self.assertIn("23 unpushed commits", html)  # detail from latest.json
+        # MINOR #3 (fix wave, 2026-07-30): the visible one-liner now includes
+        # --root (root here is a non-default temp dir), same as the handoff
+        # block below it -- see test_visible_dismiss_command_includes_root_
+        # when_nondefault for the dedicated non-default-root pin.
+        self.assertIn(f"loopctl dismiss l1 repo:no-remote --root {root} --note", html)
+        self.assertNotIn("approve", html.lower())
+
+    def test_paste_block_includes_root_when_nondefault(self):
+        root = self._root_with_finding("l1", "a:b")  # temp root ≠ ~/projects/loops
+        self.assertIn(f"--root {root}", self._generate(root))
+
+    def test_visible_dismiss_command_includes_root_when_nondefault(self):
+        # MINOR #3 (fix wave, 2026-07-30): the pre-existing VISIBLE one-liner
+        # (<code class="cmd">loopctl dismiss ...) used to omit --root while
+        # the handoff block below it already included it -- on a non-default
+        # root the easiest-to-copy visible command targeted the wrong root.
+        # test_paste_block_includes_root_when_nondefault above only proves
+        # "--root <root>" appears SOMEWHERE on the page, which the handoff
+        # block alone already satisfied before this fix -- this pins the
+        # visible command specifically.
+        root = self._root_with_finding("l1", "repo:no-remote")
+        html = self._generate(root)
+        self.assertIn(f"loopctl dismiss l1 repo:no-remote --root {root} --note", html)
+
+    def test_visible_reopen_command_includes_root_when_nondefault(self):
+        # Same bug, same fix, in the suppressed-finding branch's "reopen"
+        # one-liner.
+        root = self._root_with_finding("l1", "repo:no-remote", dismiss=True)
+        html = self._generate(root)
+        self.assertIn(f"loopctl reopen l1 repo:no-remote --root {root}", html)
+
+    def test_suppressed_finding_gets_no_paste_block(self):
+        root = self._root_with_finding("l1", "repo:no-remote", dismiss=True)
+        html = self._generate(root)
+        # suppressed finding is still shown (greyed), just without a handoff block --
+        # exact rendered markup, not just the substring "finding-handoff" which also
+        # appears in the page's static CSS rule regardless of wiring
+        self.assertIn("repo:no-remote", html)
+        self.assertNotIn('<details class="finding-handoff"', html)
+
+    def test_finding_missing_from_latest_json_still_renders_without_crash(self):
+        # sqlite has the open finding but latest.json doesn't carry it (e.g. resolved
+        # since, or the file is simply missing) — must degrade, never crash.
+        root = self._root_with_finding("l1", "repo:no-remote", in_latest_json=False)
+        html = self._generate(root)
+        self.assertIn('<details class="finding-handoff"', html)
+        self.assertIn("repo:no-remote", html)
+
+
+class TagsProvenanceEventsTests(unittest.TestCase):
+    """Tag chips, per-loop provenance line, and the fleet-wide recent-events strip
+    (Amendment 2 -- 2026-07-30). loop_events rows are inserted directly against the
+    §3 schema fixture; tags are injected via fake_loopconf_parse's conf_overrides seam
+    (the fake KEY=value fixture parser doesn't replicate loopconf.py's real `tags=`
+    comma-split/quoting grammar -- that's covered by bin/loopconf.py's own tests)."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+        self.fx.init_db().close()
+        self._tag_overrides = {}
+
+    def _root_with_loop(self, name, tags=None, description="a loop"):
+        self.fx.add_loop(name, description=description)
+        if tags is not None:
+            self._tag_overrides[name] = {"tags": tags}
+        return self.fx.root
+
+    def _insert_event(self, root, loop_name, event, actor, detail=None, ts=None):
+        conn = sqlite3.connect(self.fx.db_path)
+        try:
+            self.fx.add_event(conn, loop_name, event, actor, ts=ts, detail=detail)
+        finally:
+            conn.close()
+
+    def _generate(self, root):
+        out = os.path.join(root, "dashboard", "loops.html")
+        generate.generate(
+            root=root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(self._tag_overrides),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            return f.read()
+
+    def test_tags_and_provenance_render(self):
+        root = self._root_with_loop("tagged", tags=["project:x"])
+        self._insert_event(
+            root,
+            "tagged",
+            "imported",
+            "claude/maguyva",
+            detail='{"source_skill": "~/.claude/skills/seo-audit"}',
+        )
+        html = self._generate(root)
+        self.assertIn('class="tag"', html)
+        self.assertIn("project:x", html)
+        self.assertIn("claude/maguyva", html)
+        self.assertIn("seo-audit", html)
+
+    def test_provenance_without_source_skill_falls_back_to_actor_and_date(self):
+        root = self._root_with_loop("plain")
+        self._insert_event(
+            root, "plain", "created", "tester", ts=iso(NOW - timedelta(days=2))
+        )
+        html = self._generate(root)
+        self.assertIn("created by tester", html)
+        self.assertIn((NOW - timedelta(days=2)).strftime("%Y-%m-%d"), html)
+
+    def test_no_events_no_provenance_line_for_that_loop(self):
+        root = self._root_with_loop("lonely")
+        html = self._generate(root)
+        self.assertNotIn('class="provenance', html)
+
+    def test_no_tags_no_chip_but_data_tags_attribute_present_empty(self):
+        # Fix round 1: an untagged loop must still carry `data-tags=""` (not omit the
+        # attribute) -- the client-side filter only touches `[data-tags]` elements, so an
+        # element missing the attribute entirely would stay visible under every tag
+        # selection instead of being correctly hidden. No visible chips either way.
+        root = self._root_with_loop("untagged")
+        html = self._generate(root)
+        self.assertNotIn('class="tag"', html)
+        self.assertIn('<div class="loop-row" data-tags="">', html)
+        self.assertIn('id="loop-untagged" data-tags=""', html)
+
+    def test_tag_filter_hides_untagged_loops_structural_precondition(self):
+        # Selecting a tag must show ONLY loops carrying that tag (matches loopctl's
+        # `list --tag` exact-match contract) -- an untagged loop must never leak through.
+        # We can't run the browser-side JS in this test, so we assert the structural
+        # precondition the JS logic depends on: every loop row/section carries a
+        # `data-tags` attribute (queryable via `[data-tags]`), empty for the untagged
+        # loop, so `''.split(' ')` -> `['']` never matches a real tag and the JS hides it.
+        root = self._root_with_loop("tagged", tags=["project:x"])
+        self.fx.add_loop("untagged")
+        html = self._generate(root)
+        self.assertIn('<div class="loop-row" data-tags="project:x">', html)
+        self.assertIn('<div class="loop-row" data-tags="">', html)
+        self.assertIn('id="loop-tagged" data-tags="project:x"', html)
+        self.assertIn('id="loop-untagged" data-tags=""', html)
+        # the JS must match tags exactly against the split list, not treat a missing
+        # attribute as "always visible"
+        self.assertIn("querySelectorAll('[data-tags]')", html)
+
+    def test_tag_filter_select_only_rendered_when_tags_exist(self):
+        root = self._root_with_loop("untagged")
+        html = self._generate(root)
+        self.assertNotIn('id="tag-filter"', html)
+
+    def test_tag_filter_select_rendered_and_populated_when_tags_exist(self):
+        root = self._root_with_loop("tagged", tags=["project:x", "seo"])
+        html = self._generate(root)
+        self.assertIn('id="tag-filter"', html)
+        self.assertIn('<option value="project:x">', html)
+        self.assertIn('<option value="seo">', html)
+
+    def test_data_tags_attribute_on_row_and_section_space_separated(self):
+        root = self._root_with_loop("tagged", tags=["project:x", "seo"])
+        html = self._generate(root)
+        self.assertIn('data-tags="project:x seo"', html)
+
+    def test_chips_render_in_both_fleet_row_and_loop_section(self):
+        root = self._root_with_loop("tagged", tags=["project:x"])
+        html = self._generate(root)
+        self.assertEqual(html.count('<span class="tag">project:x</span>'), 2)
+
+    def test_recent_events_strip(self):
+        root = self._root_with_loop("l1")
+        self._insert_event(root, "l1", "created", "tester")
+        html = self._generate(root)
+        self.assertIn('id="recent-events"', html)
+        self.assertIn("created", html)
+
+    def test_recent_events_strip_empty_state(self):
+        root = self._root_with_loop("l1")
+        html = self._generate(root)
+        self.assertIn('id="recent-events"', html)
+        self.assertIn("no lifecycle events yet", html)
+
+    def test_survives_pre_amendment_2_sqlite_missing_loop_events_table(self):
+        # Fix round 1: a state/loops.sqlite created before this branch has no loop_events
+        # table until something re-runs db.py init. generate() must degrade gracefully
+        # (empty events strip, no provenance line) rather than crashing with
+        # sqlite3.OperationalError: no such table: loop_events.
+        root = self._root_with_loop("l1")
+        conn = sqlite3.connect(self.fx.db_path)
+        conn.execute("DROP TABLE loop_events")
+        conn.commit()
+        conn.close()
+        html = self._generate(root)
+        self.assertIn('id="recent-events"', html)
+        self.assertIn("no lifecycle events yet", html)
+        self.assertNotIn('class="provenance', html)
+
+    def test_recent_events_strip_limited_to_15_fleet_wide(self):
+        root = self._root_with_loop("l1")
+        for i in range(20):
+            self._insert_event(
+                root,
+                "l1",
+                "paused" if i % 2 else "resumed",
+                "tester",
+                ts=iso(NOW - timedelta(minutes=20 - i)),
+            )
+        html = self._generate(root)
+        table_start = html.index('id="recent-events"')
+        table_end = html.index("</section>", table_start)
+        strip = html[table_start:table_end]
+        body_start = strip.index("<tbody>")
+        body_end = strip.index("</tbody>")
+        self.assertEqual(strip[body_start:body_end].count("<tr>"), 15)
+
+    def test_event_detail_and_actor_html_escaped(self):
+        root = self._root_with_loop("l1")
+        self._insert_event(
+            root,
+            "l1",
+            "imported",
+            '<script>alert("x")</script>',
+            detail='{"source_skill": "<img src=x onerror=alert(1)>"}',
+        )
+        html = self._generate(root)
+        self.assertNotIn('<script>alert("x")</script>', html)
+        self.assertNotIn("<img src=x onerror=alert(1)>", html)
+        self.assertIn("&lt;script&gt;", html)
+
+    def test_tag_filter_js_toggles_display_none_on_non_matching(self):
+        root = self._root_with_loop("tagged", tags=["project:x"])
+        html = self._generate(root)
+        self.assertIn("onchange=", html)
+        self.assertIn("display", html)
+        self.assertIn("none", html)
+
+
+class RunTrichotomyTests(unittest.TestCase):
+    """running / overdue / died trichotomy for an in-flight run (finished_at IS NULL),
+    per docs/INTERFACES.md §4.6 + §10 (Amendment 2 -- 2026-07-30): age <= timeout_s ->
+    running (live, not a failure, does not count toward needs_attention); age in
+    (timeout_s, timeout_s+120] -> overdue (amber, still running past timeout, amber
+    attention); age > timeout_s+120 -> died (existing rule, unchanged, red harness-
+    problem)."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+        self.fx.init_db().close()
+        self._run_counter = 0
+
+    def _root_with_loop(self, name, conf_extra=""):
+        self.fx.add_loop(name)
+        if conf_extra:
+            conf_path = os.path.join(self.fx.root, "loops.d", name, "loop.conf")
+            with open(conf_path, "a") as f:
+                f.write(conf_extra + "\n")
+        return self.fx.root
+
+    def _insert_unfinished_run(self, root, loop_name, started_secs_ago):
+        self._run_counter += 1
+        conn = sqlite3.connect(self.fx.db_path)
+        try:
+            self.fx.add_run(
+                conn,
+                f"r{self._run_counter}",
+                loop_name,
+                iso(NOW - timedelta(seconds=started_secs_ago)),
+                finished_at=None,
+                runner_status="started",
+            )
+        finally:
+            conn.close()
+
+    def _reset_runs(self, root):
+        conn = sqlite3.connect(self.fx.db_path)
+        try:
+            conn.execute("DELETE FROM runs")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _generate(self, root):
+        out = os.path.join(root, "dashboard", "loops.html")
+        generate.generate(
+            root=root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            return f.read()
+
+    def test_run_states_trichotomy(self):
+        # Fix round 1: the original assertIn("running"/"overdue"/"died", html) forms were
+        # vacuous -- the page's static .badge.running/.badge.overdue/.badge.died CSS rules
+        # (emitted unconditionally, regardless of wiring) already contain those literal
+        # words, so all three passed even against a stub that never emits the badges.
+        # Assert the exact rendered badge markup instead (matches the .badge.stale/.died
+        # precedent elsewhere in this file), and pin both boundaries the spec defines with
+        # <=: age == timeout_s is still "running" (not yet overdue), and age ==
+        # timeout_s+120 is still "overdue" (not yet died) -- the ages most likely to flip
+        # silently under a future off-by-one refactor.
+        root = self._root_with_loop("l1", conf_extra="timeout_s=60")
+
+        self._insert_unfinished_run(root, "l1", started_secs_ago=60)  # == timeout_s
+        html = self._generate(root)
+        self.assertIn('<span class="badge running">running</span>', html)
+        self.assertNotIn('<span class="badge overdue">overdue</span>', html)
+        self.assertNotIn('<span class="badge died">died</span>', html)
+
+        self._reset_runs(root)
+        self._insert_unfinished_run(
+            root, "l1", started_secs_ago=180
+        )  # == timeout_s+120
+        html = self._generate(root)
+        self.assertIn('<span class="badge overdue">overdue</span>', html)
+        self.assertNotIn('<span class="badge running">running</span>', html)
+        self.assertNotIn('<span class="badge died">died</span>', html)
+
+        self._reset_runs(root)
+        self._insert_unfinished_run(
+            root, "l1", started_secs_ago=181
+        )  # == timeout_s+120+1
+        html = self._generate(root)
+        self.assertIn('<span class="badge died">died</span>', html)
+        self.assertNotIn('<span class="badge running">running</span>', html)
+        self.assertNotIn('<span class="badge overdue">overdue</span>', html)
+
+    def test_running_badge_exact_markup_and_not_needs_attention(self):
+        root = self._root_with_loop("l2", conf_extra="timeout_s=60")
+        self._insert_unfinished_run(root, "l2", started_secs_ago=10)
+        html = self._generate(root)
+        self.assertIn('<span class="badge running">running</span>', html)
+        self.assertNotIn("needs attention 1", html)
+
+    def test_overdue_badge_exact_markup_and_counts_toward_needs_attention(self):
+        root = self._root_with_loop("l3", conf_extra="timeout_s=60")
+        self._insert_unfinished_run(root, "l3", started_secs_ago=90)
+        html = self._generate(root)
+        self.assertIn('<span class="badge overdue">overdue</span>', html)
+        self.assertIn("needs attention 1", html)
+
+    def test_died_still_counts_toward_needs_attention_and_red(self):
+        root = self._root_with_loop("l4", conf_extra="timeout_s=60")
+        self._insert_unfinished_run(root, "l4", started_secs_ago=300)
+        html = self._generate(root)
+        self.assertIn('<span class="badge died">died</span>', html)
+        self.assertIn("needs attention 1", html)
 
 
 def _fixture_page(loop, run_id, title="Fixture page"):

@@ -181,9 +181,25 @@ CREATE TABLE IF NOT EXISTS dispositions (
 );
 CREATE INDEX IF NOT EXISTS idx_disp_loop_finding ON dispositions(loop_name, finding_id, created_at DESC);
 
+-- Amendment 2: loop lifecycle event audit trail (additive, NOT a migration — schema_version stays 1)
+CREATE TABLE IF NOT EXISTS loop_events (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  loop_name TEXT NOT NULL,
+  event     TEXT NOT NULL,        -- created | imported | installed | uninstalled | paused | resumed
+  actor     TEXT NOT NULL,
+  ts        TEXT NOT NULL,
+  detail    TEXT                  -- optional JSON blob, opaque to the schema
+);
+CREATE INDEX IF NOT EXISTS idx_events_loop_ts ON loop_events(loop_name, ts DESC);
+
 CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT);
 -- schema_meta('schema_version') = '1'
 ```
+
+**Loop event semantics (Amendment 2 — 2026-07-30):** `loop_events` is an append-only lifecycle
+audit trail, separate from `runs`/findings. `validate` records no event (audit spam); events are
+kept forever (no retention pruning); orphaned events for a since-deleted loop are historical record
+and are never cleaned up.
 
 **Findings semantics (Amendment 1):** on each valid run the runner upserts the emitted findings —
 increment `times_seen`, update `last_seen_*` — and marks previously-open findings for that loop
@@ -221,6 +237,10 @@ db.py dispose         --root R --loop L --finding-id ID --action ack|dismiss|sno
                       [--note X] [--until TS]
                                     # appends a disposition row; dismiss REQUIRES --note;
                                     # snooze REQUIRES --until; unknown (loop,finding) → exit 1
+db.py record-event    --root R --loop L --event E --actor A [--detail JSON]
+                                    # (Amendment 2 — 2026-07-30) appends a loop_events row;
+                                    # E validated against the enum above; --detail, if given,
+                                    # must be valid JSON; unknown event or invalid JSON → exit 1
 db.py query <name> [args...]        # named read queries; JSON to stdout. Names:
                                     #   loops-summary                     (latest run per loop)
                                     #   last-runs   --loop L --limit N
@@ -228,6 +248,15 @@ db.py query <name> [args...]        # named read queries; JSON to stdout. Names:
                                     #   open-findings  --loop L
                                     #   heartbeats  --loop L --limit N
                                     #   spend       --days D              (per-loop token/cost sums)
+                                    #   loop-events [--loop L] [--limit N] [--events E1,E2]
+                                    #     (Amendment 2 — 2026-07-30) newest-first (ts DESC, id
+                                    #     DESC); --loop omitted → all loops; --events filters to a
+                                    #     comma-list of event names, applied in SQL (WHERE event IN
+                                    #     (...)) BEFORE the LIMIT — combine with --limit 1 to get
+                                    #     the single most-recent match without risk of it being
+                                    #     pushed out of a fixed-size window by later non-matching
+                                    #     events; each entry validated against the event enum above
+                                    #     (unknown → exit 1 stderr, consistent with record-event)
 ```
 The dashboard MAY use `db.py query` or read sqlite directly with its own SQL — the §3 schema is
 frozen either way.
@@ -252,12 +281,24 @@ Default `--from loops.d`; `--trigger manual`.
 ### 4.1 Algorithm (exact order — the plan's atomicity guarantees depend on it)
 
 1. Resolve root, `db.py init`, load + validate `loop.conf` (§5). Refuse to run a loop with
-   `enabled=false` unless `--trigger manual` (exit 0, no run row).
+   `enabled=false` unless `--trigger manual` (exit 0, no run row). **(Amendment 2 — 2026-07-30, fix
+   round 3)** Same guard, same shape, for `schedule=manual`: refuse unless `--trigger manual` (exit
+   0, no run row). `loopctl install` already refuses to bootstrap a `schedule=manual` loop, but a
+   loop's live `loop.conf` can still read `schedule=manual` while an OLDER plist from before that
+   change stays bootstrapped (e.g. `loopctl import --apply --overwrite` forces `schedule=manual` for
+   an acknowledged-blocked skill without touching the plist) — every launchd-triggered firing always
+   arrives here as `--trigger launchd` regardless of whether launchd fired it on schedule or via an
+   explicit `kickstart`, so this guard is what actually stops a credential-blocked/manual-only loop
+   from running unattended in that case.
 2. **Acquire lock** (§2, non-blocking). On contention: insert a run row with
    `runner_status=skipped-overlap`, `started_at=finished_at=now`, and exit **0** (an overlap is not
    an error — it must not make launchd think the job is broken).
 3. `run_id` = `<UTC>-<name>-<6 hex>`, e.g. `20260722T140311Z-hello-loop-a1b2c3`. `mkdir -p 0700
-   state/runs/<run_id>`. `db.py start-run`.
+   state/runs/<run_id>`. `db.py start-run`. **(Amendment 2 — 2026-07-30)** Immediately after
+   `start-run`, a best-effort "running now" dashboard regen: `bin/lock.py check --name
+   _dashboard` (exit 0 only when free) gates a `dashboard/generate.py` call, both `|| true`d —
+   a held lock silently skips the regen and nothing here may ever block or fail the run; the
+   step 7 end-of-run regen (`--wait-s 30`) is unchanged and remains the authoritative regen.
 4. **Precheck** (`precheck.sh`, if present and executable): run with the same process-group timeout
    discipline as the engine, capped at `min(timeout_s, 300)`. stdout captured to
    `state/runs/<id>/precheck.out` with a **64 KiB cap** (truncate + append a truncation marker);
@@ -430,7 +471,7 @@ Python, and sourcing arbitrary files is a code-execution footgun):
 | `type` | yes | `agent` \| `watchdog` | — | watchdog ⇒ `precheck.sh` required |
 | `engine` | yes | `codex` \| `claude` | — | must have `engines/<engine>.sh` |
 | `model` | no | string | engine default | passed through as `MODEL` |
-| `schedule` | yes | §5.1 grammar | — | `manual` = never installed |
+| `schedule` | yes | §5.1 grammar | — | `manual` = never installed; runner also refuses to run it except `--trigger manual` (Amendment 2 — 2026-07-30, fix round 3), covering an already-bootstrapped plist left behind by an earlier, non-manual schedule |
 | `workdir` | no | path | `$LOOPS_ROOT` | engine's working root |
 | `timeout_s` | no | int 30–7200 | `900` | runner-owned, process-group |
 | `enabled` | no | `true` \| `false` | `true` | false ⇒ only `--trigger manual` runs |
@@ -444,6 +485,7 @@ Python, and sourcing arbitrary files is a code-execution footgun):
 | `credential_env` | no | comma-separated env var names | — | RESERVED — not implemented in v1: `loopctl validate` hard-fails a non-empty value (real passthrough needs a launchd-env design; do not fake it) |
 | `remote_mutation_justification` | cond | string | — | **required** when `perm_remote_mutation != none` |
 | `notes` | no | string | — | free text |
+| `tags` | no | comma-separated, each `^[a-z][a-z0-9:_-]{1,40}$`, deduped order-preserving, max 8 | — | grouping/filtering only; exact-match filter (Amendment 2 — 2026-07-30) |
 
 ### 5.1 Schedule grammar
 | form | meaning | launchd | expected interval (staleness) |
@@ -641,11 +683,24 @@ claude -p --output-format json --json-schema "$(cat "$SCHEMA_FILE")" \
 ## 8. `bin/loopctl` — CLI surface
 
 ```
+loopctl                                                               # (Amendment 2 — 2026-07-30) bare, no verb: same
+                                                                      #   as `status` — leading fleet line + per-loop
+                                                                      #   table; exit 0 (content-first, not usage)
 loopctl new <name> [--type agent|watchdog] [--engine codex|claude]   # scaffold from templates
 loopctl validate [<name>|--all]                                      # §5 + §5.2 checks; exit 1 on any fail
 loopctl run <name> [--trigger manual]                                # foreground; streams progress
-loopctl list                                                         # table: name, type, engine, schedule, enabled, installed?
-loopctl status [<name>]                                              # last run, status, headline, next-run (best effort)
+loopctl list [--tag TAG]                                             # table: name, type, engine, schedule, enabled,
+                                                                      #   installed?, tags (--tag: exact-match filter,
+                                                                      #   Amendment 2 — 2026-07-30); 0 loops prints
+                                                                      #   "0 loops (<from-dir> empty)" (Amendment 2);
+                                                                      #   a non-empty fleet with zero --tag matches
+                                                                      #   prints "0 loops matching --tag TAG (N loops
+                                                                      #   under <from-dir>)" instead — never the
+                                                                      #   genuinely-empty message (fix round 3)
+loopctl status [<name>]                                              # leading "fleet: N loops · ok X · warn Y ·
+                                                                      #   alert Z · needs_attention W · spend7d $S"
+                                                                      #   line (Amendment 2 — 2026-07-30), then last
+                                                                      #   run/status/headline/next-run per loop
 loopctl install <name>                                               # generate plist → bootstrap → kickstart-verify (§8.1)
 loopctl uninstall <name>                                             # bootout + remove plist
 loopctl pause <name> / resume <name>                                 # sets enabled= and bootout/bootstrap
@@ -657,12 +712,181 @@ loopctl ack <loop> <finding_id> [--note …]                           # Amendme
 loopctl dismiss <loop> <finding_id> --note …                         #   note REQUIRED (audit trail)
 loopctl snooze <loop> <finding_id> --until YYYY-MM-DD                #   --until REQUIRED
 loopctl reopen <loop> <finding_id>
+loopctl import <skill-path> --analyze [--json]                       # Amendment 2 — 2026-07-30:
+loopctl import <skill-path> --apply [--answers F] [--name N]         #   static gap analysis of an
+    [--overwrite]                                                    #   existing Agent Skill /
+                                                                      #   scaffold a loop from it —
+                                                                      #   see docs/SKILL_IMPORT.md
 ```
 Disposition verbs are thin wrappers over `db.py dispose` (+ dashboard regen so the change is
 visible immediately). The dashboard stays static (Change 4, Option A — settled with generalissimo
 2026-07-22): dispositions enter via this CLI only.
 Global flags: `--root R` (default `$LOOPS_ROOT`), `--json` (machine-readable output where sensible),
-`--from loops.d|examples`. Exit codes: `0` ok · `1` operation failed · `2` usage.
+`--from loops.d|examples`, `--actor A` (default `$USER`, or `unknown` if unset — Amendment 2 —
+2026-07-30). Exit codes: `0` ok · `1` operation failed · `2` usage — **except** a bare, verb-less
+invocation (Amendment 2 — 2026-07-30, content-first): that is no longer a usage error, it dispatches
+to `status` and exits `0`. Everything else that used to be a usage error still is, at `2`: an
+unrecognized verb (e.g. `loopctl frobnicate`), genuinely unrecognized arguments regardless of
+whether a verb was given (fix round 2 — 2026-07-30: this check now runs unconditionally, before the
+bare-invocation branch, not after it), and (fix round 2) a verb-less parse where a raw argv token
+exactly matches a known verb name — meaning a preceding `--root`/`--actor`/`--from` almost certainly
+swallowed it as that flag's value instead of it ever reaching the verb position (e.g. `loopctl
+--actor status`) — refused as "ambiguous invocation" rather than silently defaulting to the default
+root at exit `0`. `--help` is unaffected — it still prints usage and exits `0` without dispatching
+anywhere.
+
+**Bare invocation (Amendment 2 — 2026-07-30, fix round 1 — 2026-07-30):** `loopctl` and `loopctl
+--root R` (no verb, in any flag placement) call the exact same code path as `loopctl status` — same
+leading fleet line, same per-loop table/JSON, same exit 0.
+  Mechanically, `main()`'s top-level parser `p` carries a *hidden* copy of `--root`/`--json`/
+`--from`/`--actor` (real defaults, `help=argparse.SUPPRESS`) so a verb-less invocation still has
+real values for them (`argparse`'s `dest="verb"` yields `None` before any subparser ever runs) and
+`loopctl --help` stays unchanged (these four never appear in it — only per-verb `--help`, e.g.
+`loopctl status --help`, shows them, exactly as before). Every subparser's own copy uses
+`default=argparse.SUPPRESS` instead of a real default (fix round 1 — **verified Critical**: giving
+both `p` and every subparser a REAL default for the same flags let a valid verb invocation with
+flags placed *before* the verb — `loopctl --root R status --json` — silently resolve to the WRONG
+root: argparse's `_SubParsersAction.__call__` parses the chosen subparser's trailing tokens into a
+**fresh** sub-namespace, then unconditionally copies every key from it onto the outer namespace —
+if the subparser's own `--root` wasn't repeated after the verb, that fresh sub-namespace's default
+value silently overwrote `p`'s already-correct one, with no warning, at exit 0). `default=SUPPRESS`
+on the subparser's copy means an unrepeated flag is simply absent from the sub-namespace, so the
+clobbering copy loop never touches it and `p`'s resolved value survives; a flag that IS repeated
+after the verb (the pre-existing, still most common convention — `status --root R`) is parsed for
+real by the subparser and correctly wins, same as before. Both flag placements are equivalent for
+all four flags — verified in `TestGlobalFlagPlacement`.
+  **Fix round 2 — the swallowed-verb case:** an `extra`-free parse with `args.verb is None` isn't
+always a genuine bare invocation — `--root`/`--actor`/`--from` each take a value, so a verb token
+placed right after one of them (with nothing following it) is silently consumed AS that value
+instead of ever reaching the subparsers positional: `loopctl --actor status` parses cleanly as
+`actor="status"`, `verb=None`, `extra=[]` — nothing for the "unrecognized arguments" check to catch,
+yet the intended `status` verb vanished, defaulting the root at exit `0`. Indistinguishable from a
+genuinely-intended literal value by parsing alone, so `main()` treats any raw argv token that
+exactly matches a known verb name (once `args.verb is None`) as a near-certain mistake and refuses
+loudly (`"ambiguous invocation: '<token>' looks like a verb but was consumed as a flag's value"`,
+exit `2`) rather than silently defaulting. `--flag=value` syntax (e.g. `--actor=status`) is the
+escape hatch — it's a single argv token, never equal to a bare verb name, so a genuinely-intended
+literal value survives. Covers `loopctl --root-dir=/sandbox` (a typo'd flag name — caught by the
+hoisted `extra` check instead, same fix), `loopctl --actor status`, and `loopctl --root status`.
+
+**`status` aggregates + blanking fix + `in_flight` (Amendment 2 — 2026-07-30, fix round 1 —
+2026-07-30):** `status` (with or without `<name>`) prints a leading line before anything else:
+`fleet: N loops · ok X · warn Y · alert Z · needs_attention W · spend7d $S`. `N` is the loop count
+under `--from` (`loops.d` by default). `spend7d` sums `cost_usd` across `db.py query spend --days
+7`. `--json` wraps the existing per-loop rows in an envelope: `{"fleet": {"loops", "ok", "warn",
+"alert", "needs_attention", "spend7d"}, "loops": [...]}` — this applies whether or not `<name>` was
+given. Table form is unchanged below the new leading line.
+  **`ok`/`warn`/`alert`/`needs_attention` — "the dashboard is canonical" (fix round 1):** these are
+computed by reapplying `dashboard/generate.py`'s own health formula (`compute_light` +
+`is_stale`/`is_died`/`is_overdue`, ~:1275-1323) to each loop's **RAW** newest run row (from `db.py
+query loops-summary`) — never the blanking-fix's fallback-resolved row. `ok`/`warn`/`alert` map the
+dashboard's green/amber/red 1:1; a loop whose light is grey (never run, or a still-running run
+within its own timeout budget) counts toward `N` but not toward any of the three. `needs_attention`
+is the dashboard's own boolean — amber or red light, OR stale (overdue per the schedule), OR died
+(past the harness timeout + grace) — so it necessarily agrees with what a human sees on the
+dashboard for the same fixture, including that a `skipped-overlap`/`skipped-precheck` row is
+unconditionally amber/needs-attention regardless of what the prior run was, and including staleness
+and harness-death, neither of which the blanking-fix's fallback row alone would catch. A completed
+run with a missing/unrecognized `effective_status` falls to grey (`compute_light`'s own documented
+fallback) — uncounted in `ok`/`warn`/`alert`, not a silent special case of `status`'s own. Pinned
+against the dashboard directly on identical fixture data in
+`test_fleet_aggregate_agrees_with_dashboard_on_overlap_over_ok`.
+  **Blanking fix (display text only, unaffected by the above):** a run row is "terminal" (safe to
+display) only if `finished_at` is set AND `runner_status != "skipped-overlap"` — a `skipped-overlap`
+row finishes immediately but never carries real status/headline data, and an unfinished row
+(`finished_at IS NULL`) has none yet either; naively using "the newest row" for either case blanked
+the display. `status` falls back to the newest *terminal* row (within the last 10) for
+`runner_status`/`effective_status`/`headline`/`started_at` shown per loop; if none of the last 10 is
+terminal, those fields stay `None`. This fallback is display-text only — it does NOT feed the health
+counts above. Independently, each row also gains `"in_flight": true/false` — true whenever the
+loop's actual newest run has `finished_at IS NULL` (a real in-progress run), regardless of whether a
+fallback was needed for display. `next_run` estimation is unaffected — it always uses the true
+newest row's `started_at`, never the fallback.
+
+**Definitive empty states (Amendment 2 — 2026-07-30):** `list` (table form) with zero loops under
+`--from` prints `0 loops (<from-dir> empty)` (e.g. `0 loops (loops.d empty)`) instead of the generic
+table placeholder; `status` (no `<name>`) does the same beneath its leading fleet line when the
+fleet is empty (fleet counts all zero, then the empty-state line). `findings <loop>` (table form)
+with no open findings prints `0 open findings for <loop>`. All three still exit `0` — an empty fleet
+or an empty findings list is not a failure. `--json` is unaffected (still `[]`/`{"fleet": …,
+"loops": []}` as appropriate) — these are human-form-only messages.
+  **`list --tag` no-match is a different claim from genuinely empty (fix round 3):** a `--tag` filter
+that matches nothing on a NON-empty fleet must not print the genuinely-empty message — that would be
+a false statement about a fleet that has loops, just none matching the filter. It prints `0 loops
+matching --tag TAG (N loops under <from-dir>)` instead, naming the filter and the true fleet size; the
+genuinely-empty message is reserved for an actually-empty `<from-dir>`. Both still exit `0`.
+
+**`loopctl import` (Amendment 2 — 2026-07-30):** wraps `bin/skill_import.py`'s `parse_skill()` /
+`analyze()` / `apply()` to convert an existing Agent Skill directory into a gap-analysis report or a
+scaffolded loop. `--analyze` is static and zero-token: it prints (or, with `--json`, emits verbatim)
+the `analyze()` dict — proposed name, type, engine, the permission-axes floor, detected flags, the
+eleven-question intake rubric (`q1_purpose`..`q11_budget`, each bucketed
+`answered`/`derived`/`missing`/`incompatible`), a precheck proposal whose every line is COMMENTED
+(never live code — `[read-only?]` is a heuristic hint requiring human review, not a guarantee), and
+the answers still needed to finish the intake. A blocked skill (credentials found, or an MCP
+dependency with no CLI equivalent in the same file) still analyzes successfully — `blocked` is a
+field in the output, never a CLI failure; only a missing/unparseable `SKILL.md`
+(`skill_import.SkillParseError`) exits 1. `--analyze` and `--apply` form a required mutually exclusive
+group (neither given, or both given, is a usage error — exit 2). Full design, the
+rubric-id-to-`LOOP_AUTHORING.md`-§2 mapping, and the reshaping rules: `docs/SKILL_IMPORT.md`.
+
+**`loopctl import --apply` semantics (Amendment 2 — 2026-07-30):** `--apply` requires `--answers
+<path to answers.json>` (missing it is a usage error — exit 2); the file's shape is
+`docs/SKILL_IMPORT.md` §7. `cmd_import` re-parses the skill and re-runs `analyze()` on every
+invocation (never trusts a cached analysis), then calls `skill_import.apply(skill, analysis,
+answers, dest_dir)`, which raises `skill_import.SkillApplyError` (message printed to stderr, exit 1)
+for every refusal:
+- **Stale answers:** `answers["skill_sha256"]` not equal to the freshly re-parsed skill's `sha256`,
+  or `answers["analyzer_version"]` not equal to `analysis["analyzer_version"]` — re-run `--analyze`
+  rather than hand-patching either value.
+- **Blocked without acknowledgement:** `analysis["blocked"]` true and
+  `answers["acknowledge_blocked"]` not true — the message names the blocking reasons.
+- With `acknowledge_blocked: true`, a blocked skill scaffolds anyway, but `apply()` forces
+  `schedule=manual` regardless of any `q4_cadence` answer and appends a
+  `## BLOCKED — read before scheduling` section to `SPEC.md` naming the blockers.
+
+**Collision handling is `cmd_import`'s, not `apply()`'s:** an existing `loops.d/<name>/` (`--name`
+if given, else `analysis["proposed_name"]`) refuses with exit 1 unless `--overwrite` is passed; with
+`--overwrite`, `apply()` runs and overwrites the five scaffold files in place, and the recorded
+`imported` event's detail carries `"overwrite": true`. On success (never installs — same downstream
+gates as any other loop: `validate` → `run` → `install`), `cmd_import` records the `imported` event
+(`db.py record-event`) with detail `{"source_skill", "skill_sha256", "answers_provenance",
+"overwrite"}`. Answer-precedence and template-reuse rules (an explicit `answers` entry always wins
+over the rubric's own value, and `apply()` reuses `loopctl new`'s exact SPEC.md/prompt.md/
+precheck.sh templates rather than duplicating the strings): `docs/SKILL_IMPORT.md` §7.
+  **`--overwrite` refuses an INSTALLED target (Amendment 2 — 2026-07-30, fix round 3):** before
+`apply()` ever runs, `cmd_import` checks `_is_installed(root, name)` (same plist-file + `launchctl
+print` check `list`'s `installed` column uses) and refuses with exit 1, no files touched, no event
+recorded, if the target is currently installed — even with `--overwrite`. Rewriting an installed
+loop's `prompt.md`/`loop.conf`/`precheck.sh` in place would let the next launchd firing run the new
+prompt with none of `validate` → supervised `run` → `install` re-applied, and (concretely) `apply()`
+forcing `schedule=manual` for an acknowledged-blocked skill would leave the OLD plist bootstrapped
+and still firing on its old schedule (closed by the matching `bin/run-loop.sh` guard, §4.1 step 1).
+There is no force-past flag: the message names the required path back in — `loopctl uninstall <name>`,
+then re-import, `loopctl validate`, `loopctl run`, `loopctl install`.
+
+**Lifecycle events (Amendment 2 — 2026-07-30):** `new`, `install`, `uninstall`, `pause`, and
+`resume` each append a `loop_events` row (via `db.py record-event`) on their success path, using
+`--actor` as the actor: `new` → `created` (detail `{"type":…, "engine":…}`); `install` → `installed`
+**only after** kickstart-verify passes (§8.1 step 5) — a failed/aborted install records nothing;
+`uninstall` → `uninstalled`; `pause`/`resume` → `paused`/`resumed`, recorded even when the loop was
+never installed (no plist present) — the event records the intent to pause/resume, not launchd
+state. Recording is best-effort: a `record-event` failure is swallowed and never fails the verb
+itself. `validate` records no event, per the audit-trail semantics in §3.
+
+**Tags + provenance in JSON output (Amendment 2 — 2026-07-30):** `list --json` and `status --json`
+rows each gain `"tags": [...]` (from `loop.conf`'s `tags=`, `conf.get("tags") or []`). `list --tag T`
+filters rows to an exact match against a row's `tags` list (not a substring match — `--tag project`
+does not match a tag of `project:x`). `status --json` rows additionally gain `"provenance"`: the
+most recent `created` or `imported` event for the loop (`db.py query loop-events --loop L --events
+created,imported --limit 1` — the events filter, not a client-side scan of a limited row set, so a
+loop's founding event is never lost behind a large number of later `paused`/`resumed`/etc. events),
+shaped `{"event", "actor", "ts"}`, or `None` if no such event exists (e.g. loops that predate
+lifecycle-event recording, or ones scaffolded by hand). `status` (table form) is unchanged by this
+amendment — only its `--json` rows carry tags/provenance. (Amendment 2 — 2026-07-30: those rows now
+live under the `"loops"` key of the `{"fleet": …, "loops": […]}` envelope described above, each also
+carrying `"in_flight"`; the row shape itself — `tags`/`provenance` included — is otherwise
+unchanged.)
 
 **`loopctl new` scaffolding** additionally seeds `loops.d/<name>/SPEC.md` from the intake template
 (`docs/LOOP_AUTHORING.md` carries the interview script). Template placeholders use the literal
@@ -678,12 +902,29 @@ marker `[FILL: <hint>]`.
 ### 8.1 Install must self-verify
 `install` is not done when `launchctl bootstrap` returns. It must:
 1. Refuse `schedule=manual` and refuse a loop that fails `validate`.
-2. Write `launchd/com.loops.<name>.plist` with **absolute** paths, `WorkingDirectory`,
+2. **(Amendment 2 — 2026-07-30) Run-first precondition:** refuse a loop with zero runs whose
+   `runner_status` is `completed` or `skipped-precheck` already recorded (`_db_query(root,
+   "last-runs", loop=name, limit=50)`), with a message telling the user to run `loopctl run <name>`
+   first. This checks *existing* run rows already in the db — independent of, and prior to, the
+   post-kickstart freshness poll in step 5 below, which verifies a *new* run after this install.
+   Applies to ALL loops, not only imported ones: it makes the documented validate → supervised run
+   → install gauntlet mechanical rather than advisory. There is deliberately no human approval gate
+   on an agent adding a loop; this precondition is one of the two compensating controls (the other
+   is provenance/observability) — an agent can satisfy it itself by running the loop first, it is
+   not a human-in-the-loop gate.
+   **Known limitation (spec-mandated, deferred at review):** the check only looks at the most
+   recent 50 run rows. A loop that succeeded once, long ago, and has since accumulated 50+ newer
+   non-`completed`/`skipped-precheck` runs (e.g. a long streak of failures after a working
+   re-install) is falsely refused on re-install even though it has a real prior success — the
+   fix (widen or drop the limit, or query for existence rather than a bounded window) is
+   intentionally not built; the workaround is the same as the primary case: `loopctl run <name>`
+   again to produce a fresh non-failed row inside the window.
+3. Write `launchd/com.loops.<name>.plist` with **absolute** paths, `WorkingDirectory`,
    `EnvironmentVariables` (at minimum `HOME`, `PATH`, `LOOPS_ROOT`), `StandardOutPath` /
    `StandardErrorPath` under `state/`, and the schedule from §5.1.
-3. `launchctl bootout gui/$UID/com.loops.<name>` (ignore failure) → `launchctl bootstrap
+4. `launchctl bootout gui/$UID/com.loops.<name>` (ignore failure) → `launchctl bootstrap
    gui/$UID <plist>`.
-4. `launchctl kickstart -p gui/$UID/com.loops.<name>` and then **verify a fresh run row appeared
+5. `launchctl kickstart -p gui/$UID/com.loops.<name>` and then **verify a fresh run row appeared
    with a non-failed runner_status**; if not, report failure loudly and leave the job booted out.
    Env/auth breakage only surfaces in the real launchd context — this step is the point.
 
@@ -791,9 +1032,14 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   create a silent way to turn a loop off forever. A deliberate long-term off is
   `set-schedule manual`, which removes the plist and lands in the staleness-exempt 休
   no-schedule state. Paused → keep nagging; manual → exempt. That split is the design.
-- **Died-run detection (§4.6):** a run row with `finished_at IS NULL` older than
-  `timeout_s + 120s` renders as `died` (red, harness-problem marker) and counts toward
-  `needs_attention`.
+- **Running/overdue/died trichotomy (§4.6, Amendment 2 — 2026-07-30):** for a run row with
+  `finished_at IS NULL`, age is measured against the loop's `timeout_s` (missing/unparseable
+  conf falls back to the `900` default, same as elsewhere): age ≤ `timeout_s` renders `running`
+  (a pulsing badge — live and in-flight, **not** a failure, does **not** count toward
+  `needs_attention`); age in `(timeout_s, timeout_s+120]` renders `overdue` (amber badge — still
+  running past its own timeout budget but not yet past the died grace, counts as amber
+  `needs_attention`); age `> timeout_s + 120` renders `died` (red, harness-problem marker, and
+  counts toward `needs_attention`) — this outer boundary is unchanged from the original rule.
 - **Status light** uses `effective_status` (§4.5) under the §4.3 precedence — never raw
   `loop_status`.
 - **Per-loop sections:** declared panels, trends (from the `metrics` table), a **findings list**
@@ -802,6 +1048,22 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   findings shown greyed/collapsed, not hidden; a recent-runs table including runner_status,
   report links, and the raw fallback panel. The dashboard is static (Change 4 Option A):
   dispositions are entered via `loopctl`, and the page may display the ready-to-paste command.
+  **Per-finding agent handoff (Amendment 2 — 2026-07-30):** each **unsuppressed** open finding
+  additionally renders a collapsed `<details class="finding-handoff">` paste-into-an-agent
+  block (`_render_findings`/`finding_handoff_text`) — same deterministic-template pattern as
+  the run-failure handoff block, merging sqlite's recurrence fields (`finding_id`, `severity`,
+  `times_seen`, `first_seen_at`) with `latest.json`'s `title`/`detail` (falling back to
+  sqlite's `title`/`severity` and an empty detail when the finding has no live entry — e.g.
+  resolved since, or `latest.json` missing — never a crash). Model-derived text (`title`,
+  `detail`) is HTML-escaped along with the rest of the composed block; `detail` is clamped at
+  2 KiB (`truncate_value`) with a truncation marker. The template MUST NEVER contain the word
+  "approve" in any form (ack ≠ approval is settled doctrine): it distinguishes acting on the
+  finding in the reader's OWN agent context/permissions from suppressing it via the pasted
+  `loopctl dismiss <loop> <finding_id> [--root R] --note "..."` / `loopctl snooze <loop>
+  <finding_id> [--root R] --until YYYY-MM-DD` command lines. `--root <root>` is included in
+  those pasted commands only when the generating root's realpath differs from the realpath of
+  `~/projects/loops` (`root_flag_for`). Suppressed findings are unaffected — still
+  greyed/collapsed with the existing `reopen` command, no handoff block.
 - **Failure surfacing (amendment 2026-07-29):** runs whose `runner_status` is one of
   `precheck-failed | engine-failed | engine-timeout | auth-failed | tool-denied |
   contract-violation | harness-error` render their `error_detail` + `exit_code` in the
@@ -814,6 +1076,28 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   `report_markdown` from the suppression-filtered `latest.json` inside a collapsed
   `<details>` — HTML-escaped, displayed as text (markdown is not parsed), clamped at 8 KiB
   with a truncation marker; the `latest.md` link is retained alongside.
+- **Tags + provenance + recent-events strip (Amendment 2 — 2026-07-30):** rendered from
+  `loop.conf`'s `tags=` and the `loop_events` table (§3) — never re-derived from markdown.
+  Every loop row and section carries `data-tags="a b c"` (space-separated; `data-tags=""`,
+  present but empty, when the loop has no tags — the attribute is never omitted, so the
+  filter's `[data-tags]` selector reaches every loop and an untagged one is correctly hidden
+  rather than defaulting to always-visible); tag chips (`<span class="tag">`) render next to
+  the loop name in both the fleet row and its per-loop section, but only when the loop has
+  tags. A `<select id="tag-filter">` is rendered only when at least one tag exists fleet-wide,
+  populated from the union of every loop's tags; its `onchange` runs inline vanilla JS that
+  exact-matches the selected tag against each element's split `data-tags` list and toggles
+  `display:none` on non-matching `[data-tags]` elements — **client-side only**, no server
+  round-trip, no query-string state; selecting a tag shows ONLY loops carrying it (same
+  semantics as `loopctl list --tag`, §8). Each per-loop section shows a provenance line for
+  the loop's most recent `created`/`imported` event (found by filtering
+  `event IN ('created','imported')` in SQL before any `LIMIT`, so the founding event is never
+  lost behind later `paused`/`resumed`/etc. rows): `<event> from <source> by <actor>, <date>`
+  when that event's `detail` JSON carries a `source_skill`, else `<event> by <actor>, <date>`;
+  no such event ⇒ no line rendered. A fleet-wide `<section id="recent-events">` lists the last
+  15 `loop_events` rows (newest first, `load_loop_events(conn, limit=15)`); zero events still
+  renders the section, with a literal "no lifecycle events yet" line rather than omitting it.
+  Both `load_loop_events` and the per-loop provenance lookup degrade to `[]`/`None` (not a
+  crash) against a pre-Amendment-2 sqlite whose `loop_events` table doesn't exist yet.
 - **Report pages (Amendment 2):** the generator also writes `dashboard/reports.html`
   (same invocation; each output tmp+rename — per-file atomic, the pair is not). Row
   Report cells prefer `../reports/<name>/latest.html` (md link kept secondary); a page

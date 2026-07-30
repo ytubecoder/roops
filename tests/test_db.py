@@ -68,6 +68,7 @@ class TestInit(DbTestCase):
             "metrics",
             "findings",
             "dispositions",
+            "loop_events",
             "schema_meta",
         ]:
             self.assertIn(t, names)
@@ -95,6 +96,7 @@ class TestInit(DbTestCase):
             "idx_hb_loop_ts",
             "idx_metrics_loop_key_ts",
             "idx_disp_loop_finding",
+            "idx_events_loop_ts",
         ]:
             self.assertIn(idx, names)
 
@@ -1060,6 +1062,53 @@ class TestQuery(DbTestCase):
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["loop_name"], "loopA")
 
+    def test_loops_summary_same_second_tie_returns_one_row_deterministically(self):
+        # MINOR #1 (fix wave, 2026-07-30): the old MAX(started_at) self-join
+        # could return MULTIPLE rows per loop_name when two runs share a
+        # started_at (e.g. a skipped-overlap row written the same second a
+        # real run starts) -- different consumers then disagreed about which
+        # of the tied rows to use. Exactly one row per loop_name now, always,
+        # deterministically tie-broken by rowid DESC (later-inserted wins).
+        same_ts = "2026-07-22T14:00:00Z"
+        for run_id, status in (("run-a", "completed"), ("run-b", "skipped-overlap")):
+            run_cli(
+                [
+                    "start-run",
+                    "--root",
+                    self.tmp,
+                    "--run-id",
+                    run_id,
+                    "--loop",
+                    "loopA",
+                    "--engine",
+                    "codex",
+                    "--trigger",
+                    "manual",
+                    "--started-at",
+                    same_ts,
+                ]
+            )
+            r = run_cli(
+                [
+                    "finish-run",
+                    "--root",
+                    self.tmp,
+                    "--run-id",
+                    run_id,
+                    "--runner-status",
+                    status,
+                    "--finished-at",
+                    same_ts,
+                ]
+            )
+            self.assertEqual(r.returncode, 0, msg=r.stderr)
+
+        r = run_cli(["query", "loops-summary", "--root", self.tmp])
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["run_id"], "run-b")
+
     def test_last_runs(self):
         for i in range(3):
             run_cli(
@@ -1246,6 +1295,121 @@ class TestQuery(DbTestCase):
         loopA = next(row for row in data if row["loop_name"] == "loopA")
         self.assertEqual(loopA["tokens_total"], 150)
         self.assertAlmostEqual(loopA["cost_usd"], 0.01)
+
+
+class TestLoopEvents(DbTestCase):
+    def record_event(self, loop, event, actor, detail=None):
+        args = [
+            "record-event",
+            "--root",
+            self.tmp,
+            "--loop",
+            loop,
+            "--event",
+            event,
+            "--actor",
+            actor,
+        ]
+        if detail is not None:
+            args += ["--detail", detail]
+        return run_cli(args)
+
+    def query_events(self, loop=None, limit=None, events=None):
+        args = ["query", "loop-events", "--root", self.tmp]
+        if loop is not None:
+            args += ["--loop", loop]
+        if limit is not None:
+            args += ["--limit", str(limit)]
+        if events is not None:
+            args += ["--events", events]
+        r = run_cli(args)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        return json.loads(r.stdout)
+
+    def test_record_and_query_roundtrip(self):
+        rc_result = self.record_event(
+            "l1", "created", "tester", detail='{"source_skill": "/tmp/s"}'
+        )
+        self.assertEqual(rc_result.returncode, 0, msg=rc_result.stderr)
+        out = self.query_events(loop="l1")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["event"], "created")
+        self.assertEqual(out[0]["actor"], "tester")
+        self.assertEqual(out[0]["loop_name"], "l1")
+        self.assertEqual(json.loads(out[0]["detail"])["source_skill"], "/tmp/s")
+
+    def test_unknown_event_rejected(self):
+        r = self.record_event("l1", "validated", "t")
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_invalid_detail_json_rejected(self):
+        r = self.record_event("l1", "created", "t", detail="not valid json")
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_detail_optional(self):
+        r = self.record_event("l1", "paused", "t")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        out = self.query_events(loop="l1")
+        self.assertEqual(len(out), 1)
+        self.assertIsNone(out[0]["detail"])
+
+    def test_init_idempotent_on_existing_db(self):
+        # setUp already ran init once; populate the table, then re-init
+        # on top of a populated db and confirm no error and no data loss.
+        self.record_event("l1", "created", "tester")
+        r = run_cli(["init", "--root", self.tmp])
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        out = self.query_events(loop="l1")
+        self.assertEqual(len(out), 1)
+
+    def test_query_newest_first_and_limit(self):
+        self.record_event("l1", "created", "t")
+        self.record_event("l1", "installed", "t")
+        self.record_event("l1", "paused", "t")
+        out = self.query_events(loop="l1", limit=2)
+        self.assertEqual(len(out), 2)
+        # newest first: most recently inserted (paused) comes before
+        # the previous one (installed).
+        self.assertEqual(out[0]["event"], "paused")
+        self.assertEqual(out[1]["event"], "installed")
+
+    def test_query_without_loop_returns_all_loops(self):
+        self.record_event("l1", "created", "t")
+        self.record_event("l2", "created", "t")
+        out = self.query_events()
+        loops = {row["loop_name"] for row in out}
+        self.assertEqual(loops, {"l1", "l2"})
+
+    def test_events_filter_restricts_to_named_events(self):
+        self.record_event("l1", "created", "t")
+        self.record_event("l1", "paused", "t")
+        self.record_event("l1", "resumed", "t")
+        out = self.query_events(loop="l1", events="created,imported")
+        self.assertEqual([row["event"] for row in out], ["created"])
+
+    def test_events_filter_combines_with_loop_filter(self):
+        self.record_event("l1", "created", "t")
+        self.record_event("l2", "created", "t")
+        out = self.query_events(loop="l1", events="created,imported")
+        self.assertEqual([row["loop_name"] for row in out], ["l1"])
+
+    def test_events_filter_unknown_event_rejected(self):
+        r = run_cli(["query", "loop-events", "--root", self.tmp, "--events", "bogus"])
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_events_filter_no_window_loss_beyond_limit(self):
+        # Regression: a naive "scan the newest N rows for a matching event"
+        # loses the founding event once enough later events push it out of
+        # the window. The events filter must apply in SQL (WHERE event IN
+        # (...)) so limit=1 still returns the true most-recent match,
+        # regardless of how many non-matching events came after it.
+        self.record_event("l1", "created", "t")
+        for _ in range(12):
+            self.record_event("l1", "paused", "t")
+            self.record_event("l1", "resumed", "t")
+        out = self.query_events(loop="l1", events="created,imported", limit=1)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["event"], "created")
 
 
 if __name__ == "__main__":

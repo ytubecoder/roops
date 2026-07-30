@@ -167,6 +167,31 @@ def is_died(finished_at, started_at, timeout_s, now):
     return age_s > (timeout_s or 900) + 120
 
 
+def is_running(finished_at, started_at, timeout_s, now):
+    """(Amendment 2 -- 2026-07-30): finished_at IS NULL and age <= timeout_s -- still
+    inside its own budget, a live in-flight run rather than a failure."""
+    if finished_at:
+        return False
+    started = _parse_iso(started_at)
+    if started is None:
+        return False
+    age_s = (now - started).total_seconds()
+    return age_s <= (timeout_s or 900)
+
+
+def is_overdue(finished_at, started_at, timeout_s, now):
+    """(Amendment 2 -- 2026-07-30): finished_at IS NULL and age in (timeout_s,
+    timeout_s+120] -- past its own budget but not yet past the §4.6 died grace."""
+    if finished_at:
+        return False
+    started = _parse_iso(started_at)
+    if started is None:
+        return False
+    age_s = (now - started).total_seconds()
+    to = timeout_s or 900
+    return to < age_s <= to + 120
+
+
 def is_suppressed(action, snooze_until, now):
     """§4.5: current disposition is dismiss, or snooze with snooze_until > now."""
     if action == "dismiss":
@@ -209,6 +234,41 @@ def truncate_value(s, limit=2048):
     if len(s) <= limit:
         return s
     return s[:limit] + " …[truncated]"
+
+
+def root_flag_for(root):
+    """`--root <root>` only when the generating root's realpath differs from the default
+    `~/projects/loops` checkout -- omitted for the common case so pasted commands stay
+    short. Comparison is realpath-to-realpath so symlinked checkouts still match."""
+    default_root = os.path.realpath(os.path.expanduser("~/projects/loops"))
+    if os.path.realpath(root) != default_root:
+        return f" --root {root}"
+    return ""
+
+
+def finding_handoff_text(loop, f, root, root_flag):
+    """Deterministic paste-into-an-agent template for ONE open, unsuppressed finding --
+    same pattern as HANDOFF_TEMPLATE for a failed run: plain text built only from sqlite
+    recurrence fields (`finding_id`, `severity`, `times_seen`, `first_seen_at`) merged with
+    `latest.json`'s `title`/`detail` (the caller falls back to sqlite's title/severity when
+    the finding has no live entry -- e.g. resolved since, or latest.json missing). The whole
+    composed string is HTML-escaped by the caller before embedding, so title/detail need no
+    escaping here. MUST NOT ever say "approve" -- ack/suppress is not approval (settled
+    doctrine): the two actions offered are acting on the finding in the reader's OWN agent
+    context/permissions, or suppressing it via loopctl dismiss/snooze."""
+    detail = truncate_value(f.get("detail") or "", 2048)
+    detail_block = f"\n\n  {detail}" if detail else ""
+    return (
+        f"A scheduled report-only loop ('{loop}') flagged this finding "
+        f"(id {f['finding_id']}, severity {f['severity']}, seen {f['times_seen']}x "
+        f"since {(f.get('first_seen_at') or '')[:10]}):\n\n"
+        f"  {f['title']}{detail_block}\n\n"
+        f"Context files: reports/{loop}/latest.md and state/runs/ under {root}.\n"
+        f"The loop only reports; decide and act in YOUR context and permissions.\n"
+        f"If instead this should stop being reported, suppress it:\n"
+        f'  {root}/bin/loopctl dismiss {loop} {f["finding_id"]}{root_flag} --note "..."\n'
+        f"  {root}/bin/loopctl snooze {loop} {f['finding_id']}{root_flag} --until YYYY-MM-DD\n"
+    )
 
 
 def render_sparkline(points, width=140, height=32):
@@ -396,10 +456,15 @@ def _discover_loops(root):
 
 
 def _latest_run(conn, loop_name):
+    """The newest run row for `loop_name`, tie-broken by `rowid DESC` on a
+    `started_at` tie so this agrees with `bin/db.py`'s `query_loops_summary`
+    (the source `loopctl`'s fleet aggregate uses) — both must pick the same
+    physical row for the same tie, or the dashboard and `loopctl status`
+    disagree about a loop's health from the exact same data."""
     if conn is None:
         return None
     row = conn.execute(
-        "SELECT * FROM runs WHERE loop_name=? ORDER BY started_at DESC LIMIT 1",
+        "SELECT * FROM runs WHERE loop_name=? ORDER BY started_at DESC, rowid DESC LIMIT 1",
         (loop_name,),
     ).fetchone()
     return dict(row) if row else None
@@ -569,6 +634,41 @@ def _latest_heartbeat(conn, loop_name):
         "SELECT * FROM heartbeats WHERE loop_name=? ORDER BY ts DESC LIMIT 1",
         (loop_name,),
     ).fetchone()
+    return dict(row) if row else None
+
+
+def load_loop_events(conn, limit=15):
+    """Fleet-wide most-recent lifecycle events (§3 `loop_events`), newest first.
+    Powers the `<section id="recent-events">` strip. A `state/loops.sqlite` created before
+    Amendment 2 has no `loop_events` table until something re-runs `db.py init` -- degrade to
+    an empty list rather than crashing the whole page (fix round 1, 2026-07-30)."""
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT * FROM loop_events ORDER BY ts DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [dict(r) for r in rows]
+
+
+def _loop_provenance(conn, loop_name):
+    """Most recent created/imported event for a loop (Amendment 2). The `event IN (...)`
+    filter runs in SQL before the LIMIT so the founding event is never lost behind a run of
+    later paused/resumed/etc. rows — same fix as loopctl's `status --json` provenance lookup.
+    Same missing-table degradation as load_loop_events (fix round 1, 2026-07-30)."""
+    if conn is None:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT * FROM loop_events WHERE loop_name=? AND event IN ('created','imported') "
+            "ORDER BY ts DESC, id DESC LIMIT 1",
+            (loop_name,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
     return dict(row) if row else None
 
 
@@ -753,6 +853,12 @@ main { padding: 0 0 8px; }
 .badge.historical { color: var(--ai); border: 1px solid var(--ai); }
 .badge.no-meta { color: var(--nibi); border: 1px dashed var(--nibi); }
 .badge.no-page { color: var(--nibi); border: 1px dashed var(--hair2); background: rgba(255,255,255,.2); }
+.badge.overdue { color: var(--ochre); border: 1px solid var(--ochre); }
+.badge.running {
+  color: var(--ai); border: 1px solid var(--ai);
+  animation: pulse-badge 1.6s ease-in-out infinite;
+}
+@keyframes pulse-badge { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
 
 /* ---------- report pages screen ---------- */
 .reports-list { display: grid; gap: 0; border-top: 1px solid var(--hair); }
@@ -839,6 +945,17 @@ table.list-panel th { color: var(--nibi); font-weight: 400; text-transform: uppe
   display: block; margin-top: 6px; font-family: var(--mono); font-size: 10px;
   color: var(--ai); background: rgba(28,26,23,.05); border: 1px solid var(--hair);
   padding: 3px 8px; border-radius: 2px; width: fit-content; max-width: 100%; overflow-wrap: anywhere;
+}
+details.finding-handoff { margin-top: 8px; }
+details.finding-handoff summary {
+  cursor: pointer; color: var(--nibi); font-family: var(--mono); font-size: 10px;
+  letter-spacing: .14em; text-transform: uppercase;
+}
+.finding-handoff pre {
+  background: var(--washi-shade); border: 1px solid var(--hair); margin-top: 6px;
+  padding: 10px 12px; border-radius: 3px; overflow-x: auto;
+  font-family: var(--mono); font-size: 10px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
 }
 
 /* run history */
@@ -986,7 +1103,125 @@ html.console-active .loop-row { grid-template-columns: 44px 1.1fr 1.5fr 190px mi
   .con-sched { max-width: 84px; }
   html.console-active .loop-row { grid-template-columns: 44px minmax(0, 1fr) minmax(30px, 160px); }
 }
+/* tags + provenance + fleet recent-events strip (Amendment 2 — 2026-07-30) */
+.tags { margin: 4px 0; display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.tag {
+  display: inline-flex; align-items: center; font-family: var(--mono); font-size: 9px;
+  letter-spacing: .1em; text-transform: uppercase; padding: 2px 7px; border-radius: 2px;
+  border: 1px solid var(--hair2); color: var(--ai); background: rgba(46,74,91,.06);
+}
+.provenance { font-family: var(--mono); font-size: 10px; margin: 2px 0 4px; letter-spacing: .04em; }
+#recent-events {
+  padding: 14px clamp(20px, 4vw, 44px); border-bottom: 1px solid var(--hair2);
+  background: rgba(255,255,255,.15);
+}
+#recent-events h3 {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .28em;
+  text-transform: uppercase; color: var(--nibi); font-weight: 400; margin-bottom: 10px;
+}
+.events-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 10.5px; }
+.events-table th {
+  text-align: left; color: var(--nibi); font-weight: 400; text-transform: uppercase;
+  font-size: 9px; letter-spacing: .16em; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair2);
+}
+.events-table td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair); }
+.filter-bar { margin-bottom: 14px; font-family: var(--mono); font-size: 11px; color: var(--nibi); letter-spacing: .04em; }
+.filter-bar select {
+  font-family: var(--mono); font-size: 11px; background: var(--washi); color: var(--sumi);
+  border: 1px solid var(--hair2); border-radius: 3px; padding: 3px 8px; margin-left: 8px;
+}
 """
+
+DASHBOARD_JS = """
+function loopsFilterByTag(tag) {
+  document.querySelectorAll('[data-tags]').forEach(function (el) {
+    if (!tag) { el.style.display = ''; return; }
+    var tags = (el.getAttribute('data-tags') || '').split(' ');
+    el.style.display = tags.indexOf(tag) > -1 ? '' : 'none';
+  });
+}
+"""
+
+
+def _render_tag_chips(tags):
+    if not tags:
+        return ""
+    return (
+        '<div class="tags">'
+        + "".join(f'<span class="tag">{e(t)}</span>' for t in tags)
+        + "</div>"
+    )
+
+
+def _data_tags_attr(tags):
+    """Always emits `data-tags="..."` (empty string when the loop has no tags) -- fix round
+    1, 2026-07-30. The client-side filter only ever touches `[data-tags]` elements; a loop
+    row/section that omitted the attribute entirely would stay visible under every tag
+    selection instead of correctly being hidden alongside every other non-matching loop."""
+    return f' data-tags="{e(" ".join(tags or []))}"'
+
+
+def _event_source_skill(detail):
+    """Pulls `source_skill` out of an event's opaque detail JSON, if present. Detail is
+    imported-file-derived text -- callers must still HTML-escape whatever this returns."""
+    if not detail:
+        return None
+    try:
+        data = json.loads(detail)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(data, dict):
+        val = data.get("source_skill")
+        if val:
+            return str(val)
+    return None
+
+
+def _render_provenance(prov):
+    """Per-loop provenance line for the most recent created/imported event:
+    `<event> from <source> by <actor>, <date>` when detail carries a source_skill,
+    else `<event> by <actor>, <date>`. No qualifying event -> no line."""
+    if not prov:
+        return ""
+    event = prov.get("event") or ""
+    actor = prov.get("actor") or ""
+    date = (prov.get("ts") or "")[:10]
+    source = _event_source_skill(prov.get("detail"))
+    if source:
+        text = f"{event} from {source} by {actor}, {date}"
+    else:
+        text = f"{event} by {actor}, {date}"
+    return f'<div class="provenance muted">{e(text)}</div>'
+
+
+def _render_events_strip(events, now):
+    """Fleet-wide `<section id="recent-events">` — last N loop_events rows, newest first.
+    Zero events still renders the section with an explicit empty-state line."""
+    if not events:
+        body = '<p class="muted">no lifecycle events yet</p>'
+    else:
+        rows = []
+        for ev in events:
+            source = _event_source_skill(ev.get("detail"))
+            detail_text = e(source) if source else ""
+            rows.append(
+                "<tr>"
+                f"<td>{e(format_relative(ev['ts'], now))} "
+                f'<span class="muted">({e(ev["ts"])})</span></td>'
+                f"<td>{e(ev['loop_name'])}</td>"
+                f"<td>{e(ev['event'])}</td>"
+                f"<td>{e(ev['actor'])}</td>"
+                f"<td>{detail_text}</td>"
+                "</tr>"
+            )
+        body = (
+            '<table class="events-table"><thead><tr><th>When</th><th>Loop</th>'
+            "<th>Event</th><th>Actor</th><th>Detail</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
+    return (
+        f'<section id="recent-events"><h3>Recent lifecycle events</h3>{body}</section>'
+    )
 
 
 def _light_html(color, marker=None, extra_badges=()):
@@ -1200,13 +1435,35 @@ def _render_raw_fallback(run_metrics, declared_keys, report_href):
     )
 
 
-def _render_findings(conn, loop_name, latest_json, now):
+def _render_finding_handoff(
+    loop_name, fid, title, severity, detail, f, root, root_flag
+):
+    """Collapsed paste-into-an-agent block for one unsuppressed open finding. `f` is the raw
+    sqlite row (supplies `times_seen`/`first_seen_at`); `title`/`severity`/`detail` are the
+    already-merged (latest.json-preferred) display values computed by the caller."""
+    merged = {
+        "finding_id": fid,
+        "title": title,
+        "severity": severity,
+        "times_seen": f["times_seen"],
+        "first_seen_at": f["first_seen_at"],
+        "detail": detail,
+    }
+    text = finding_handoff_text(loop_name, merged, root, root_flag)
+    return (
+        '<details class="finding-handoff"><summary>hand to an agent</summary>'
+        f"<pre>{e(text)}</pre></details>"
+    )
+
+
+def _render_findings(conn, loop_name, latest_json, now, root):
     findings = _open_findings(conn, loop_name)
     if not findings:
         return ""
     latest_by_id = {}
     if latest_json and isinstance(latest_json.get("findings"), list):
         latest_by_id = {f.get("finding_id"): f for f in latest_json["findings"]}
+    root_flag = root_flag_for(root)
     out = []
     for f in findings:
         fid = f["finding_id"]
@@ -1230,13 +1487,22 @@ def _render_findings(conn, loop_name, latest_json, now):
             severity = live.get("severity", severity)
         cls = "finding suppressed" if suppressed else "finding"
         cmd = ""
+        handoff_html = ""
         if not suppressed:
+            # MINOR #3 (fix wave, 2026-07-30): this visible one-liner used to
+            # omit --root while the handoff block below (finding_handoff_text)
+            # already included it -- on a non-default root the visible
+            # command targeted the wrong root. Use the same root_flag_for()
+            # both blocks share.
             cmd = (
-                f'<code class="cmd">loopctl dismiss {e(loop_name)} {e(fid)} '
-                f'--note "…"</code>'
+                f'<code class="cmd">loopctl dismiss {e(loop_name)} {e(fid)}'
+                f'{e(root_flag)} --note "…"</code>'
+            )
+            handoff_html = _render_finding_handoff(
+                loop_name, fid, title, severity, detail, f, root, root_flag
             )
         else:
-            cmd = f'<code class="cmd">loopctl reopen {e(loop_name)} {e(fid)}</code>'
+            cmd = f'<code class="cmd">loopctl reopen {e(loop_name)} {e(fid)}{e(root_flag)}</code>'
         detail_html = f"<div>{e(detail)}</div>" if detail else ""
         # pancaked — the same finding across N rounds is one stack, one decision
         pchip = ""
@@ -1246,7 +1512,8 @@ def _render_findings(conn, loop_name, latest_json, now):
             f'<div class="{cls}" data-sev="{e(severity)}">'
             f'<span class="sev {e(severity)}">{e(severity)}</span>'
             f'<span class="fid">{e(fid)}</span> — {e(title)} {pchip}'
-            f'<span class="recurrence">{e(recurrence)}</span>{detail_html}{cmd}</div>'
+            f'<span class="recurrence">{e(recurrence)}</span>{detail_html}{cmd}'
+            f"{handoff_html}</div>"
         )
     return f'<div class="findings"><h3>Findings</h3>{"".join(out)}</div>'
 
@@ -1312,6 +1579,10 @@ def _render_loop_row(loop, now):
     badges = []
     if loop["stale"]:
         badges.append("stale")
+    if loop.get("running"):
+        badges.append("running")
+    if loop.get("overdue"):
+        badges.append("overdue")
     if loop["died"]:
         badges.append("died")
     stamp = _stamp_html(loop["light_color"], loop["light_marker"], badges)
@@ -1361,10 +1632,13 @@ def _render_loop_row(loop, now):
         "未", "", '<span class="muted">never run</span>'
     )
     controls = _render_console_controls(loop)
+    tags_html = _render_tag_chips(loop["tags"])
+    data_tags = _data_tags_attr(loop["tags"])
     return (
-        '<div class="loop-row">'
+        f'<div class="loop-row"{data_tags}>'
         f"{stamp}"
         f'<div class="loop-name"><a href="#loop-{e(loop["name"])}">{e(loop["name"])}</a>'
+        f"{tags_html}"
         f"<small>{e(loop['schedule'])} · {e(loop['description'])}</small></div>"
         f'<div class="toko"><div class="toko-scroll">{toko}</div>'
         '<span class="toko-tag">latest</span></div>'
@@ -1430,6 +1704,10 @@ def _render_loop_section(loop, conn, now):
     badges = []
     if loop["stale"]:
         badges.append("stale")
+    if loop.get("running"):
+        badges.append("running")
+    if loop.get("overdue"):
+        badges.append("overdue")
     if loop["died"]:
         badges.append("died")
     stamp = _stamp_html(loop["light_color"], loop["light_marker"], badges)
@@ -1441,7 +1719,9 @@ def _render_loop_section(loop, conn, now):
     panels_html, declared_keys = _render_panels(
         loop["dashboard_json"], conn, loop["name"], run_metrics_by_key, now
     )
-    findings_html = _render_findings(conn, loop["name"], loop["latest_json"], now)
+    findings_html = _render_findings(
+        conn, loop["name"], loop["latest_json"], now, loop["root"]
+    )
     handoff_html = _render_handoff(loop)
     report_drawer_html = _render_report_drawer(loop["latest_json"], loop["report_href"])
     recent_runs_html = _render_recent_runs(loop["recent_runs"], now)
@@ -1462,10 +1742,16 @@ def _render_loop_section(loop, conn, now):
         else:
             hb_html = '<div class="hb muted">Heartbeat: no probes recorded</div>'
 
+    tags_html = _render_tag_chips(loop["tags"])
+    data_tags = _data_tags_attr(loop["tags"])
+    provenance_html = _render_provenance(loop.get("provenance"))
+
     return (
-        f'<section class="loop" id="loop-{e(loop["name"])}">'
+        f'<section class="loop" id="loop-{e(loop["name"])}"{data_tags}>'
         f'<h2>{stamp}<span class="lname">{e(loop["name"])}</span> '
         f'<span class="muted">{e(loop["description"])}</span></h2>'
+        f"{tags_html}"
+        f"{provenance_html}"
         f"{hb_html}"
         f"{handoff_html}"
         f"{panels_html}"
@@ -1505,6 +1791,8 @@ def _resolve_loop(
     latest_run = _latest_run(conn, name)
     recent_runs = _recent_runs(conn, name)
     heartbeat = _latest_heartbeat(conn, name)
+    tags = conf.get("tags") or []
+    provenance = _loop_provenance(conn, name)
 
     timeout_s = conf.get("timeout_s", 900)
     schedule_spec = conf.get("schedule", "manual")
@@ -1515,6 +1803,8 @@ def _resolve_loop(
         expected_interval_s = 0
 
     died = False
+    overdue = False
+    running = False
     if latest_run is not None:
         died = is_died(
             latest_run.get("finished_at"), latest_run["started_at"], timeout_s, now
@@ -1531,8 +1821,18 @@ def _resolve_loop(
     if died:
         light_color, light_marker = "red", "harness-problem"
     elif latest_run is not None and latest_run.get("finished_at") is None:
-        # in-flight, not yet past the died threshold
-        light_color, light_marker = "grey", None
+        # (Amendment 2) in-flight, not yet past the died threshold -- split by age
+        # into running (still inside timeout_s) vs overdue (past it, amber attention).
+        fin, st = latest_run.get("finished_at"), latest_run["started_at"]
+        if is_overdue(fin, st, timeout_s, now):
+            overdue = True
+            light_color, light_marker = "amber", None
+        elif is_running(fin, st, timeout_s, now):
+            running = True
+            light_color, light_marker = "grey", None
+        else:
+            # started_at unparseable -- degrade to the pre-Amendment-2 default (§10)
+            light_color, light_marker = "grey", None
     elif latest_run is not None:
         light_color, light_marker = compute_light(
             latest_run["runner_status"], latest_run.get("effective_status")
@@ -1606,7 +1906,11 @@ def _resolve_loop(
         "latest_run": latest_run,
         "recent_runs": recent_runs,
         "heartbeat": heartbeat,
+        "tags": tags,
+        "provenance": provenance,
         "died": died,
+        "overdue": overdue,
+        "running": running,
         "stale": stale,
         "installed": installed,
         "enabled": str(conf.get("enabled", "true")).lower() != "false",
@@ -1698,9 +2002,17 @@ def generate(
         since_7d = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
         spend_today = _fleet_spend(conn, since_today)
         spend_7d_fleet = _fleet_spend(conn, since_7d)
+        events = load_loop_events(conn, limit=15)
 
         html = _render_page(
-            loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn
+            loops,
+            counts,
+            needs_attention_count,
+            spend_today,
+            spend_7d_fleet,
+            now,
+            conn,
+            events,
         )
         try:
             reports_html = _render_reports_page(report_loops, now)
@@ -1758,7 +2070,7 @@ def generate_reports(
 
 
 def _render_page(
-    loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn
+    loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn, events
 ):
     top_chips = "".join(
         f'<span class="chip"><span class="jp">{_STAMP_KANJI[c]}</span> <b>{n}</b></span>'
@@ -1791,9 +2103,26 @@ def _render_page(
         "</div></div>"
     )
 
+    events_html = _render_events_strip(events, now)
+
     if not loops:
-        body = '<main><div class="empty">No loops configured yet.</div></main>'
+        body = (
+            f"{events_html}"
+            '<main><div class="empty">No loops configured yet.</div></main>'
+        )
         return _wrap_html(top, body)
+
+    tag_options = sorted({t for loop in loops for t in loop["tags"]})
+    filter_html = ""
+    if tag_options:
+        opts = '<option value="">all tags</option>' + "".join(
+            f'<option value="{e(t)}">{e(t)}</option>' for t in tag_options
+        )
+        filter_html = (
+            '<div class="filter-bar"><label>Filter by tag'
+            f'<select id="tag-filter" onchange="loopsFilterByTag(this.value)">{opts}</select>'
+            "</label></div>"
+        )
 
     global_rows = "".join(_render_loop_row(loop, now) for loop in loops)
     garden = (
@@ -1805,7 +2134,7 @@ def _render_page(
 
     sections = "".join(_render_loop_section(loop, conn, now) for loop in loops)
 
-    body = f"<main>{garden}{sections}</main>"
+    body = f"{events_html}<main>{filter_html}{garden}{sections}</main>"
     return _wrap_html(top, body)
 
 
@@ -2025,6 +2354,7 @@ def _wrap_html(top, body):
         "<footer>loops harness — static sheet · report/propose-only · "
         "findings are actions in waiting</footer></div>"
         f"{_CONSOLE_CONTROLS_HTML}"
+        f"<script>{DASHBOARD_JS}</script>"
         "</body></html>"
     )
 

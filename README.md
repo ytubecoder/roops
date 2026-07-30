@@ -118,16 +118,16 @@ That last row matters most in practice. "Stop nagging me about this" is enforced
 
 ## What Lands on the Dashboard
 
-`dashboard/loops.html` is a single static self-contained file (inline CSS/JS, no network, opened as `file://`), rewritten via tmp-file + rename after every run. A loop feeds it through four channels:
+`dashboard/loops.html` is a single static self-contained file (inline CSS/JS, no network, opened as `file://`), rewritten via tmp-file + rename after every run. Since 2026-07-30 it renders in the roops garden style — hanko status stamps (済 ok · 注 warn · 警 alert · 未 no data) over the same precedence rules, a per-loop tokonoma alcove on each fleet row, and a 巡/休/手 column showing whether a schedule is actually loaded. A loop feeds it through four channels:
 
 | Channel | Contract field | Rendered as |
 |---|---|---|
-| **Status + headline** | `status`, `headline` | Precedence-resolved light and one-line summary on the fleet row |
+| **Status + headline** | `status`, `headline` | Precedence-resolved stamp and the tokonoma's first line on the fleet row |
 | **Report** | `report_markdown` | Promoted to `reports/<name>/latest.md`, linked from the row |
 | **Metrics** | `metrics` | Panels declared in the loop's `dashboard.json` — `number` · `table` · `list` · `trend` (sparkline over N days) |
-| **Findings** | `findings` | Per-loop list with recurrence and disposition text — `3rd report · dismissed 2026-06-01 ("note")` |
+| **Findings** | `findings` | Per-loop list with recurrence, a 巡 ×N chip for repeats, and disposition text — `3rd report · dismissed 2026-06-01 ("note")` |
 
-Undeclared metrics are **never hidden** — they render in a capped raw-fallback panel, so a loop can start emitting something new without a dashboard change. The page also carries fleet counts, a `needs_attention` roll-up, 7-day token spend, stale-loop and died-run detection, and a recent-runs table per loop.
+Undeclared metrics are **never hidden** — they render in a capped raw-fallback panel, so a loop can start emitting something new without a dashboard change. The page also carries fleet counts, a `needs_attention` roll-up, 7-day token spend, stale-loop detection (installed loops only — a supervised-only loop shows 休 "no schedule loaded" instead), died-run detection, and a recent-runs table per loop.
 
 One gotcha worth internalizing before you write a loop that wants to show red: **a non-empty `findings` array discards the declared `status`** and the light becomes the max severity of the unsuppressed findings (§4.5). A run that must surface red emits zero findings.
 

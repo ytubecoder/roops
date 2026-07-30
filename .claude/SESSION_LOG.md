@@ -1,5 +1,23 @@
 # Session Log
 
+## 2026-07-30 — Garden dashboard shipped: roops design applied to generate.py (B-07); §10 amended; orphan plists cleaned
+
+### Summary
+- **Garden restyle live** (`be381f5`): `dashboard/generate.py` presentation layer rewritten to the roops design system — hanko stamps (済/注/警/未) rendering the unchanged §4.3 precedence, per-loop tokonoma in the global row (headline + standing findings as marubatsu lines, derived from fields the page already renders), pancake chip 巡 ×N from `times_seen`, measures-style panels, 巡/休/手 schedule-state column. All §10 semantics and B-05 failure surfacing preserved; raw-metrics drawer now defaults closed. Mockup-first flow: a real-data mockup (scratchpad, Playwright-verified at 1440/390) was approved before the generator was touched.
+- **INTERFACES §10 amended twice (dated):** style bullet now specifies the garden system; staleness applies only to *installed* loops (install = plist file presence, display-only, subprocess-free). Supervised-only loops render 休 "no schedule loaded" instead of fleet-wide stale badges + fake next-run estimates. One test updated to install its fixture; one new test pins the uninstalled path (616 total).
+- **Data fixes:** copy-pasted "Open google actions" panel titles corrected in ads-intl/ads-reddit/ads-x `dashboard.json`; five orphaned ads-* launchd plists deleted (files present, `launchctl print` confirmed nothing loaded — contradicted B-03's "scheduling is phase 2").
+
+### Lessons Learned
+- **Accepted:** test-inventory-before-rewrite — an Explore agent enumerated every load-bearing HTML literal in `test_dashboard.py` (~15 exact strings: badge spans, `finding suppressed`, `handoff`, `>7<`, "needs attention N"…) before the template rewrite; the rewrite then passed all 60 dashboard tests first try.
+- **Gotcha:** the no-network test forbids the substring `http://` anywhere in the page — that bans webfonts AND `xmlns="http://www.w3.org/2000/svg"` inside data-URIs, so the garden uses local Hiragino Mincho and attribute-free inline SVG. [Promoted to CLAUDE.md]
+- **Gotcha:** plist file ≠ installed — five ads plists existed unbootstrapped, so the dashboard's file-presence check showed 巡/stale for loops that would never fire; verified with `launchctl print` before deleting. [Promoted to CLAUDE.md]
+- **Rejected:** making dashboard regeneration a loop (user asked "why can't we dogfood?") — the runner already regenerates the page as step 7 of every run (§7), and the dashboard is the oversight surface: model-authored rendering would violate the core invariant. The legit dogfooding shape is a future `niwashi` (庭師) gardener loop that *audits* the garden (plist orphans, panel-label lint, mtime vs sqlite) — it would have caught both data bugs found by hand this session.
+
+### Decisions
+- `skipped-precheck` stays amber (contract-mandated) — only the tokonoma wording improved (loop-sensei's healthy skip now reads as 〇 "precheck produced no output"); a green rendering needs a §4.4/§4.3 amendment, deliberately deferred.
+- Two garden design questions deferred to the owner: the ikebana vase caps at 3 stems but real loops carry 5–7 findings, and shin/soe/hikae tiers double as severity (breaks when all findings share one severity).
+- Interactive hanko buttons (clipboard-copy of loopctl commands), fleet ledger zone, and niwashi loop are the ordered follow-up list; none started.
+
 ## 2026-07-30 — Roops rebrand: brand system, public site, full UI concept (separate repo)
 
 ### Summary

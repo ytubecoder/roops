@@ -2,9 +2,6 @@
 
 ## WIP
 
-### B-07: Garden dashboard: roops design applied to generate.py (stamps, tokonoma, 巡/休 install state; §10 style+staleness amendment)
-Priority: medium | Status: in-progress
-
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)
@@ -14,6 +11,9 @@ Priority: medium | Status: for-review
 Priority: medium | Status: for-review
 
 ### B-06: loop-sensei: fleet examiner loop — built, verified (real-engine planted-failure runs), installed to launchd
+Priority: medium | Status: for-review
+
+### B-07: Garden dashboard: roops design applied to generate.py (stamps, tokonoma, 巡/休 install state; §10 style+staleness amendment)
 Priority: medium | Status: for-review
 
 ## Backlog

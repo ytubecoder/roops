@@ -11,12 +11,18 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from dashboard import generate
+
+# Importable both under `unittest discover -s tests` (tests/ on sys.path) and as
+# `python3 -m unittest tests.test_dashboard` (repo root on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from html_selfcontained import assert_self_contained
 
 # --- §3 schema, copied verbatim from docs/INTERFACES.md -------------------------------------
 
@@ -1224,8 +1230,83 @@ class GenerateIntegrationTests(unittest.TestCase):
         )
         with open(out) as f:
             html = f.read()
-        for token in ("http://", "https://", "//cdn", 'src="http'):
+        assert_self_contained(self, html, "dashboard/loops.html")
+        # Belt and braces on the shapes that motivate the rule. These are asset
+        # references, not the bare scheme: a URL sitting in escaped finding text
+        # is inert and is asserted separately below.
+        for token in ('src="http', "src='http", '@import "http', "//cdn."):
             self.assertNotIn(token, html)
+
+    def test_reports_screen_is_also_self_contained(self):
+        """The reports screen is a second served output with its own <head>, so
+        it needs its own assertion — a webfont added only to _reports_document
+        would otherwise ship unnoticed (found by mutation, 2026-07-30)."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("simple")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "simple",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "fine",
+        )
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        reports_out = os.path.join(self.fx.root, "dashboard", "reports.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            reports_out_file=reports_out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(reports_out) as f:
+            reports_html = f.read()
+        assert_self_contained(self, reports_html, "dashboard/reports.html")
+
+    def test_urls_in_run_text_do_not_make_the_page_fetch_anything(self):
+        """Real loops report URLs — a probe saying `http://127.0.0.1:9/dead`
+        refused a connection puts the scheme straight into the page. That text is
+        escaped and fetches nothing, so self-containment must judge *references*,
+        not the substring `http://`. This is the case a raw substring ban gets
+        wrong: it fails on honest report text while missing `src="//cdn/x.js"`."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("prober")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "prober",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "alert",
+            "alert",
+            "probe failed: http://127.0.0.1:9/dead refused the connection",
+            error_detail=(
+                "curl_exit 7 for http://127.0.0.1:9/dead; "
+                "see https://example.invalid/runbook and //cdn.example/x.js"
+            ),
+        )
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        generate.generate(
+            root=self.fx.root,
+            out_file=out,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            now=NOW,
+        )
+        with open(out) as f:
+            html = f.read()
+        # The text really did land on the page ...
+        self.assertIn("127.0.0.1:9/dead", html)
+        # ... and the page still fetches nothing on load.
+        assert_self_contained(self, html, "dashboard/loops.html with URL text")
 
 
 class FailureSurfacingTests(unittest.TestCase):
@@ -1726,12 +1807,11 @@ class ConsoleControlsTests(unittest.TestCase):
         self.assertIn("data-sched-edit", html)
 
     def test_no_network_still_clean(self):
-        # the existing test_no_network_no_external_assets already covers this; just
-        # confirm the new JS didn't introduce banned tokens — same assertion, run here
-        # against a controls-bearing render:
+        # test_no_network_no_external_assets covers the plain render; this repeats
+        # the check against a controls-bearing render, since the console JS is the
+        # most likely place for someone to reach for a remote helper.
         html = self.render_with(name="alpha", plist=True)
-        for token in ("http://", "https://", "//cdn", 'src="http'):
-            self.assertNotIn(token, html)
+        assert_self_contained(self, html, "dashboard with console controls")
 
     def test_rounds_toggle_carries_loop_name(self):
         html = self.render_with(name="alpha", plist=True)

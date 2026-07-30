@@ -14,6 +14,7 @@ import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from dashboard import generate
 
@@ -492,9 +493,50 @@ class GenerateIntegrationTests(unittest.TestCase):
         self.assertIn("</html>", html.lower())
         reports_out = os.path.join(out_dir, "reports.html")
         leftover_tmp = [
-            p for p in glob.glob(os.path.join(out_dir, "*")) if p not in (out, reports_out)
+            p
+            for p in glob.glob(os.path.join(out_dir, "*"))
+            if p not in (out, reports_out)
         ]
         self.assertEqual(leftover_tmp, [], f"leftover tmp files: {leftover_tmp}")
+
+    def test_reports_render_failure_does_not_prevent_loops_html(self):
+        """§10 degrade-never-crash: a fault in the reports-screen render must not stop
+        loops.html from being written (task 2's isolation guarantee)."""
+        conn = self.fx.init_db()
+        self.fx.add_loop("hello-loop")
+        self.fx.add_run(
+            conn,
+            "r1",
+            "hello-loop",
+            iso(NOW - timedelta(minutes=5)),
+            iso(NOW - timedelta(minutes=4)),
+            "completed",
+            "ok",
+            "ok",
+            "all clear",
+        )
+        conn.close()
+        out = os.path.join(self.fx.root, "dashboard", "loops.html")
+        reports_out = os.path.join(self.fx.root, "dashboard", "reports.html")
+        with patch.object(
+            generate, "_render_reports_page", side_effect=Exception("boom")
+        ):
+            generate.generate(
+                root=self.fx.root,
+                out_file=out,
+                reports_out_file=reports_out,
+                loopconf_parse=fake_loopconf_parse(),
+                schedule_parse=fake_schedule_parse(),
+                now=NOW,
+            )
+        self.assertTrue(os.path.exists(out))
+        with open(out) as f:
+            html = f.read()
+        self.assertIn("hello-loop", html)
+        self.assertIn("all clear", html)
+        self.assertNotIn("Traceback", html)
+        # the reports screen degrades to a safe page rather than taking generate() down with it
+        self.assertTrue(os.path.exists(reports_out))
 
     def test_precedence_in_full_pipeline_completed_alert_renders_red(self):
         conn = self.fx.init_db()
@@ -1519,6 +1561,42 @@ class ReportPagesDashboardTests(unittest.TestCase):
             return_html=True,
         )
         self.assertIn("no meta", reports_html)
+
+    def test_reports_page_historical_badge_for_disabled_loop_with_dated_pages(self):
+        # No render.sh -> not page-enabled; dated snapshots exist but there's no current
+        # latest.html. This exercises the `page.get("dated") and page.get("historical")`
+        # branch in _render_reports_page.
+        self.fx.add_loop("histo")
+        d = os.path.join(self.fx.root, "reports", "histo")
+        os.makedirs(d, exist_ok=True)
+        for stamp in ("2026-07-28-0100", "2026-07-29-0100"):
+            with open(os.path.join(d, f"{stamp}.html"), "w") as f:
+                f.write("x")
+        reports_html = generate.generate_reports(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn('<span class="badge historical">historical</span>', reports_html)
+        self.assertIn("2026-07-29-0100.html", reports_html)
+
+    def test_report_only_loop_not_in_loopsd_appears_on_reports_page(self):
+        # "ghost" has no loops.d entry at all -- discovered only via reports/, exercising the
+        # report-only merge branch in _resolve_dashboard_loops(include_report_only=True).
+        self._write_page(
+            "ghost", _fixture_page("ghost", "20260730T000000Z-ghost-abc123")
+        )
+        reports_html = generate.generate_reports(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+        self.assertIn("Fixture page", reports_html)
+        self.assertIn("../reports/ghost/latest.html", reports_html)
 
     def test_generate_writes_both_files_atomically(self):
         self.fx.add_loop("pgl")

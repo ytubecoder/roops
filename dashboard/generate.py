@@ -1543,9 +1543,12 @@ def generate(
 
     conn = _open_db(root)
     try:
-        loops = _resolve_dashboard_loops(
-            root, conn, _loopconf_parse, _schedule_parse, now, envelope_mod
-        )
+        # Resolve once (§10 perf: this path runs after every loop firing). include_report_only
+        # returns the superset -- loop.d entries plus report-only names -- so filtering it down
+        # to the loop.d names gives the exact same `loops` list _resolve_dashboard_loops(root,
+        # ..., include_report_only=False) would have produced, without a second sqlite/fs pass
+        # per loop. _discover_loops() returns names already sorted alphabetically, matching the
+        # sort order report_loops is built in, so the filter preserves ordering byte-for-byte.
         report_loops = _resolve_dashboard_loops(
             root,
             conn,
@@ -1555,6 +1558,8 @@ def generate(
             envelope_mod,
             include_report_only=True,
         )
+        discovered_names = set(_discover_loops(root))
+        loops = [loop for loop in report_loops if loop["name"] in discovered_names]
 
         counts = {"green": 0, "amber": 0, "red": 0, "grey": 0}
         for loop in loops:
@@ -1569,7 +1574,12 @@ def generate(
         html = _render_page(
             loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn
         )
-        reports_html = _render_reports_page(report_loops, now)
+        try:
+            reports_html = _render_reports_page(report_loops, now)
+        except Exception:  # noqa: BLE001 — §10: a broken reports view must not take down loops.html
+            reports_html = _reports_document(
+                '<div class="empty">Reports view failed to render.</div>', now
+            )
     finally:
         if conn is not None:
             conn.close()

@@ -43,6 +43,7 @@ fetch() { # fetch <name> <path-with-query> — bounded retry: 3 attempts, 3s/6s
 fetch campaigns       "/api/ads/campaigns"
 fetch journal         "/api/ads/journal?limit=60"
 fetch program-events  "/api/ads/program-events"
+fetch scoreboard      "/api/ads/scoreboard"
 
 FETCHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -71,8 +72,10 @@ def load(name):
 camp = load("campaigns")
 jrnl = load("journal")
 prog = load("program-events")
+sb   = load("scoreboard")
 
-INPUT_STATE = {"campaigns": camp, "journal": jrnl, "program_events": prog}
+INPUT_STATE = {"campaigns": camp, "journal": jrnl, "program_events": prog,
+               "scoreboard": sb}
 INPUTS_MISSING = sum(1 for v in INPUT_STATE.values() if not v)
 
 print("# ads-program — precheck digest")
@@ -162,9 +165,19 @@ if isinstance(camp, dict):
     cpa = camp.get("cpa") or {}
     print(f"- CPA readable={cpa.get('readable')} conversions_sitewide={cpa.get('conversions_sitewide')} "
           f"intent_sitewide={cpa.get('intent_sitewide')} (event={cpa.get('conversion_event')})")
-    print("- CONFIGURED caps (scheduler/config.json ads block, not readable via GC — "
-          "cited as configured intent): monthly $1,600 total, google $500. Generalissimo's "
-          "standing SOFT target: keep REAL spend under ~$1,000/mo.")
+    _b = (sb.get("budget") or {}) if isinstance(sb, dict) else {}
+    _caps = _b.get("network_caps_usd") or {}
+    if _caps:
+        _com = _b.get("committed_this_month_usd") or {}
+        _act = _b.get("actual_spend_usd") or {}
+        print(f"- LIVE budget (scoreboard): monthly cap ${(_b.get('monthly_cap_usd') or 0):.0f}; per-network "
+              "committed / actual-MTD / cap: "
+              + " · ".join(f"{n} ${(_com.get(n) or 0):.0f} / ${(_act.get(n) or 0):.2f} / ${(_caps.get(n) or 0):.0f}"
+                           for n in sorted(_caps)))
+    else:
+        print("- scoreboard budget block missing — committed/actual caps not readable this run (input gap).")
+    print("- Generalissimo's standing SOFT target: keep REAL spend under ~$1,000/mo "
+          "(not in config; judged on actual-MTD, not committed).")
     print("- NOTE: the budget GUARD binds on COMMITTED basis FIRST (un-multiplied "
           "monthly cap) before any actual gate — X's paper overcommit + reddit fill "
           "the backstop, so positive-amount orders can be refused with real headroom "

@@ -169,7 +169,7 @@ if isinstance(sb, dict):
             continue
         shown += 1
         ev = r.get("evaluator") or {}
-        verdict = ev.get("verdict") or ev.get("status") or "-"
+        verdict = ev.get("action") or ev.get("verdict") or ev.get("status") or "-"
         impr = r.get("impressions") or 0
         gate = "EVAL" if impr >= EVAL_IMPR_GATE else "sub-gate"
         pls = r.get("placements") or []
@@ -187,6 +187,17 @@ print()
 
 # ---- Budget headroom ----
 print("## Budget headroom / spend basis")
+_b = (sb.get("budget") or {}) if isinstance(sb, dict) else {}
+_caps = _b.get("network_caps_usd") or {}
+if _caps:
+    _com = _b.get("committed_this_month_usd") or {}
+    _act = _b.get("actual_spend_usd") or {}
+    print(f"- LIVE budget (scoreboard): monthly cap ${(_b.get('monthly_cap_usd') or 0):.0f}; per-network "
+          "committed / actual-MTD / cap: "
+          + " · ".join(f"{n} ${(_com.get(n) or 0):.0f} / ${(_act.get(n) or 0):.2f} / ${(_caps.get(n) or 0):.0f}"
+                       for n in sorted(_caps)))
+else:
+    print("- scoreboard budget block missing — committed/actual MTD not readable this run (input gap).")
 if isinstance(camp, dict):
     tot = camp.get("totals") or {}
     print(f"- program total spend (all networks): ${tot.get('spend_usd')} "

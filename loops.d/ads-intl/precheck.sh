@@ -149,7 +149,7 @@ if isinstance(sb, dict):
             continue
         shown += 1
         ev = r.get("evaluator") or {}
-        verdict = ev.get("verdict") or ev.get("status") or "—"
+        verdict = ev.get("action") or ev.get("verdict") or ev.get("status") or "—"
         impr = r.get("impressions") or 0
         gate = "EVAL-ELIGIBLE" if impr >= EVAL_IMPR_GATE else f"below {EVAL_IMPR_GATE}-impr gate"
         pls = r.get("placements") or []
@@ -157,6 +157,8 @@ if isinstance(sb, dict):
                          + (f"/grp {p.get('ad_group_external_id')}" if p.get('ad_group_external_id') else "")
                          for p in pls) or "(no placements)"
         print(f"- {vid} [{r.get('angle')}] status={r.get('status')} verdict={verdict}")
+        if ev.get("reason"):
+            print(f"    evaluator: {str(ev.get('reason'))[:160]}")
         print(f"    impr={impr} clicks={r.get('clicks')} ctr={r.get('ctr')} "
               f"spend=${r.get('spend_usd')} cpc={r.get('cpc_usd')} "
               f"landing_views={r.get('landing_views')} ({gate})")
@@ -170,6 +172,17 @@ print()
 
 # ---- Budget headroom ----
 print("## Budget headroom / spend basis")
+_b = (sb.get("budget") or {}) if isinstance(sb, dict) else {}
+_caps = _b.get("network_caps_usd") or {}
+if _caps:
+    _com = _b.get("committed_this_month_usd") or {}
+    _act = _b.get("actual_spend_usd") or {}
+    print(f"- LIVE budget (scoreboard): monthly cap ${(_b.get('monthly_cap_usd') or 0):.0f}; per-network "
+          "committed / actual-MTD / cap: "
+          + " · ".join(f"{n} ${(_com.get(n) or 0):.0f} / ${(_act.get(n) or 0):.2f} / ${(_caps.get(n) or 0):.0f}"
+                       for n in sorted(_caps)))
+else:
+    print("- scoreboard budget block missing — committed/actual MTD not readable this run (input gap).")
 if isinstance(camp, dict):
     tot = camp.get("totals") or {}
     print(f"- program total spend (all networks): ${tot.get('spend_usd')} "

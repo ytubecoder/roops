@@ -54,7 +54,7 @@ freshness guarantees live in the set/registry logic, not timing.
 **In scope:** the reddit-network experiments — derived at run time from the
 `/api/ads/campaigns` registry (cards with a reddit leg, minus `retired`).
 Today: `r-boost` (r1–r8; reddit-boost-jul26, account a2_jbt3zks411le HK/USD,
-CBO ~$8/day / $0.75 CPC cap; campaign-pause is the kill switch; DESKTOP-ONLY
+CBO $12/day (since 2026-07-21) / $0.75 CPC cap; campaign-pause is the kill switch; DESKTOP-ONLY
 since 2026-07-21 as a bounded test with a revert-if-dead decision).
 **Explicitly excluded:** google (owned by `ads-google`/`ads-intl`) and X
 (`ads-x`); the retired non-CBO campaign; any WRITE (record_and_apply, ads API,

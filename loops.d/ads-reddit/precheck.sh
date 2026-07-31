@@ -182,7 +182,7 @@ if isinstance(camp, dict):
           f"intent_sitewide={cpa.get('intent_sitewide')} (event={cpa.get('conversion_event')})")
     print("- NOTE: the budget GUARD binds on COMMITTED basis first (monthly_cap), "
           "then per-network gates; a positive-spend order may be refused even "
-          "with paper headroom. Reddit is CBO (one campaign budget, ~$8/day, "
+          "with paper headroom. Reddit is CBO (one campaign budget, ~$12/day since 2026-07-21, "
           "$0.75 CPC cap; campaign-pause IS the kill switch). Any positive-spend "
           "action brief MUST state committed-vs-actual basis.")
 else:

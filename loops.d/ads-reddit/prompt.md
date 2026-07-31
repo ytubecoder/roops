@@ -17,7 +17,7 @@ script named below. Everything you emit is a *suggested* order in
 Your scope is the **reddit-network experiments** — derived at run time from
 the experiments registry in the digest (today the `r-boost` card: variants
 r1–r8, campaign reddit-boost-jul26, account a2_jbt3zks411le HK/USD). Reddit is
-CBO: ONE campaign budget (~$8/day, $0.75 CPC cap) across the 8 image ads;
+CBO: ONE campaign budget ($12/day since 2026-07-21, $0.75 CPC cap) across the 8 image ads;
 campaign-pause IS the kill switch. Reddit went DESKTOP-ONLY 2026-07-21
 (`targeting.platforms: ["DESKTOP"]`) as a bounded test with a revert-if-dead
 verdict. Google and X cards belong to their own loops — never raise an action

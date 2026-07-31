@@ -30,8 +30,10 @@ missed firings at wake); the freshness labels in the digest are the truth.
 Go through the digest and flag genuine program-level exceptions only — a
 quiet program should yield few or zero actions. Look for:
 
-- **Budget totals vs caps:** program spend vs the configured caps (monthly
-  $1,600 total / google $500) and Generalissimo's SOFT target of ~$1,000/mo REAL spend.
+- **Budget totals vs caps:** program spend vs the caps on the digest's LIVE
+  budget line (monthly $2,200 total / google $900 / reddit $400 / x $400 as of
+  2026-07-21 — trust the digest line over these figures if they diverge) and
+  Generalissimo's SOFT target of ~$1,000/mo REAL spend.
   🚨 The guard binds on COMMITTED basis FIRST — X's paper overcommit + reddit
   fill the backstop, so positive-amount orders can be refused with real
   headroom (intl 2026-07-17 lesson). Any spend recommendation must state

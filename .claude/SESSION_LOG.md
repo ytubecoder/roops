@@ -1,5 +1,39 @@
 # Session Log
 
+## 2026-08-03 — B-19 garden layout: filters into kicker, compact events strip, recency-default sort (same session as B-17)
+
+### Summary
+- Moved the owner/tag filter selects plus a new sort select into the garden kicker's right side and
+  removed the 床の間/休 glossary note entirely; compacted the recent-events strip (tight paddings, no
+  per-row hairlines — same 15-row content contract). Default garden order is now RECENCY, server-rendered:
+  rows sort by `data-latest-event` (the loop's newest `loop_events` ts of any type), event-less loops
+  trail in name order; the sort select (`recent` default / `name`) re-sorts client-side with a FLIP
+  transform animation. INTERFACES §10 amended (B-19); suite 700 py + 344 sh green; live-verified on the
+  real fleet (kagami, created/installed that day by the concurrent agent, topped the garden — exactly the
+  generalissimo's stated example).
+
+### Lessons Learned
+- **Accepted:** recency keyed on lifecycle EVENTS, not last run — the generalissimo corrected mid-build:
+  "kagami's addition was an event so kagami should have gone to the top." Any-event ts also makes the
+  events strip and garden order tell one consistent story.
+- **Accepted:** server-render the default sort order rather than JS-sorting on load — the static page is
+  correct before any JS runs (fetch-nothing doctrine), and the client select only handles user-initiated
+  re-sorts (FLIP: measure tops → reorder DOM → inverted translateY → transition to zero).
+- **Gotcha:** pinned full-attribute markup assertions broke AGAIN when a third data-* attribute joined the
+  row (`data-tags` → `data-owner` → `data-latest-event`) — second time in one day. Any future row-level
+  data attribute will re-break tests that assert the complete `<details ...>` opening tag; prefer
+  substring/attr-presence asserts for additive surfaces.
+- **Gotcha:** Python's stable sort + `reverse=True` preserves original order for equal keys (it reverses
+  comparison, not stability) — so one `sort(key=ts or "", reverse=True)` over name-discovered loops gives
+  "newest first, ties/event-less in name order" without a compound key.
+
+### Decisions
+- Events-strip row count stays 15 (INTERFACES pins the content contract) — the squeeze is purely visual.
+- Pre-B-18 loops have no lifecycle events (predate event recording), so they sit in name order until any
+  verb touches them — accepted as self-correcting rather than backfilling synthetic events.
+- Small-fix routing (direct edit + INTERFACES amendment in-commit, ticket B-19), not OpenSpec — no new
+  CLI surface or schema, presentation + client-side control only.
+
 ## 2026-08-03 — B-17 loop ownership: owner= field, set-owner verb, garden owner chips + dynamic filtering (foreman solo, OpenSpec lifecycle)
 
 ### Summary

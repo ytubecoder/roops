@@ -59,8 +59,10 @@ is the sole index: `/reports.html` is retired outright.
    `pagekit/kit.css` is rebuilt on the same tokens so report pages match the garden in
    both modes. Anti-drift is enforced by a test (§5).
 7. **Parked, not spec'd** (recorded for later, out of scope for all three WPs):
-   - Recency-sort toggle on the garden (rows reorder by last run, subtle animation) —
-     for when the fleet grows.
+   - Recency-sort toggle on the garden — SHIPPED 2026-08-03 as B-19 (INTERFACES §10):
+     recency keyed on the loop's newest lifecycle EVENT (not last run — generalissimo's
+     call: "kagami's addition was an event so kagami should have gone to the top"),
+     default order, server-rendered, FLIP-animated client re-sort.
    - Orphaned report directories (pages on disk with no `loops.d/<name>` entry — today
      only the `hello-denied` demo) lose their index entry when `/reports.html` retires.
      They remain directly servable by URL. Accepted; revisit only if a real loop is

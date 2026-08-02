@@ -77,6 +77,23 @@ def load_kit_css():
     return _KIT_HEADER_RE.sub("", raw).rstrip("\n")
 
 
+def load_toggle_js():
+    """Return pagekit/toggle.js body, ready to inline in a <script> block.
+
+    Same fatal-on-missing contract as load_kit_css(): toggle.js ships under
+    $PAGEKIT and is the shared theme-persistence script (localStorage key
+    loops-theme, shared with the garden). Never <script src=>."""
+    path = _PAGEKIT_DIR / "toggle.js"
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit(
+            f"render_page.py: cannot read {path} — the shared theme toggle is "
+            "unavailable; refusing to render a page without it."
+        ) from exc
+    return _KIT_HEADER_RE.sub("", raw).rstrip("\n")
+
+
 SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 SEV_LABEL = {"critical": "CRIT", "high": "HIGH", "medium": "MED", "low": "LOW"}
 
@@ -142,11 +159,11 @@ def sev_marker(sev):
     if sev == "high" or sev == "critical":
         return (
             '<svg class="mk" viewBox="0 0 10 10" aria-hidden="true">'
-            '<path d="M5 1 L9.5 9 H0.5 Z" fill="var(--high)"/></svg>'
+            '<path d="M5 1 L9.5 9 H0.5 Z" fill="var(--shu)"/></svg>'
         )
     return (
         '<svg class="mk" viewBox="0 0 10 10" aria-hidden="true">'
-        '<rect x="1" y="1" width="8" height="8" rx="1" fill="var(--med)"/></svg>'
+        '<rect x="1" y="1" width="8" height="8" rx="1" fill="var(--ochre)"/></svg>'
     )
 
 
@@ -298,10 +315,11 @@ $rows
     return "\n".join(out)
 
 
-# $kit_css is $PAGEKIT/kit.css, read at render time and inlined verbatim (delta
-# 7, 2026-07-30). The kit is the single source of the report-page look: a second
-# page loop styles itself by using it, not by copying this file. Pages stay
-# self-contained because the CSS is INLINED, never <link>ed.
+# $kit_css / $toggle_js are $PAGEKIT/{kit.css,toggle.js}, read at render time
+# and inlined verbatim (delta 7, 2026-07-30; WP3 2026-08-02). The kit is the
+# single source of the report-page look; toggle.js is the shared theme
+# persistence (localStorage key loops-theme, same as the garden). Pages stay
+# self-contained because both are INLINED, never <link>ed / <script src=>.
 PAGE = Template("""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -309,6 +327,9 @@ PAGE = Template("""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Exposure audit — $host</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><path d='M5 1 L9.5 9 H0.5 Z' fill='%23279a83'/></svg>">
+<script>
+$toggle_js
+</script>
 <style>
 $kit_css
 </style>
@@ -325,15 +346,16 @@ $kit_css
       host <b>$host</b><br>
       scanner <b>av $av_version</b><br>
       scanned <b>$scanned</b><br>
-      rendered <b>$rendered</b>
+      rendered <b>$rendered</b><br>
+      <button id="theme-toggle" type="button" aria-label="toggle theme">◐</button>
     </p>
   </header>
 
   <div class="stats">
     <div class="stat" style="--i:1"><p class="n hi">$n_high</p>
-      <p class="l"><span class="dot" style="background:var(--high)"></span>high severity</p></div>
+      <p class="l"><span class="dot" style="background:var(--shu)"></span>high severity</p></div>
     <div class="stat" style="--i:2"><p class="n md">$n_med</p>
-      <p class="l"><span class="dot" style="background:var(--med)"></span>medium severity</p></div>
+      <p class="l"><span class="dot" style="background:var(--ochre)"></span>medium severity</p></div>
     <div class="stat" style="--i:3"><p class="n">$n_tools</p>
       <p class="l">tools affected</p></div>
     <div class="stat" style="--i:4"><p class="n">$n_paths</p>
@@ -343,8 +365,8 @@ $kit_css
   <h2>Findings by tool</h2>
   <p class="sub">Count of open findings per detector source.</p>
   <div class="legend">
-    <span><svg class="mk" viewBox="0 0 10 10"><path d="M5 1 L9.5 9 H0.5 Z" fill="var(--high)"/></svg>high</span>
-    <span><svg class="mk" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1" fill="var(--med)"/></svg>medium</span>
+    <span><svg class="mk" viewBox="0 0 10 10"><path d="M5 1 L9.5 9 H0.5 Z" fill="var(--shu)"/></svg>high</span>
+    <span><svg class="mk" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1" fill="var(--ochre)"/></svg>medium</span>
   </div>
   <div class="bars">
 $bars
@@ -436,6 +458,7 @@ def main():
     }
     page = PAGE.substitute(
         kit_css=load_kit_css(),
+        toggle_js=load_toggle_js(),
         host=esc(args.host),
         av_version=esc(args.av_version or "?"),
         scanned=scanned.strftime("%Y-%m-%d %H:%M"),

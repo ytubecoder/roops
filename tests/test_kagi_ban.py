@@ -341,6 +341,10 @@ class PagekitSourcingTests(unittest.TestCase):
             os.makedirs(kit_dir)
             with open(os.path.join(kit_dir, "kit.css"), "w") as f:
                 f.write("/* throwaway header */\n" + marker + "\n")
+            # toggle.js is also required under $PAGEKIT (WP3); seed a stub so
+            # this test isolates the kit.css read path.
+            with open(os.path.join(kit_dir, "toggle.js"), "w") as f:
+                f.write("/* throwaway toggle */\n")
             out = os.path.join(root, "page.html")
             proc = run_renderer(FIXTURE, out, pagekit=kit_dir)
             self.assertEqual(proc.returncode, 0, proc.stderr)

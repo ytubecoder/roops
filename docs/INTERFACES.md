@@ -1154,6 +1154,13 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   Toggle and persistence JS are pure client-side — `localStorage` and `matchMedia` only,
   zero new network surface; the §10 hermetic rule binds this addition exactly as it binds
   everything else. WP3 reuses the same key/attribute/values on report pages verbatim.
+  **Report-page kit (WP3 2026-08-02):** `pagekit/kit.css` shares the garden's exact role
+  + font tokens in both modes (light `:root`, dark via `prefers-color-scheme` and
+  `:root[data-theme="dark"|"light"]`); parity is enforced by `tests/test_token_drift.py`
+  (parser self-tested by `tests/test_token_parser.py`). Report pages carry the same theme
+  toggle, inlined from `$PAGEKIT/toggle.js` (same missing-file-fails-loudly contract as
+  `kit.css`), persisted under the same localStorage key **`loops-theme`**, so a viewer's
+  choice carries between the garden and any report page.
 
 ## 11. Testing conventions
 

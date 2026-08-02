@@ -8,18 +8,40 @@ Rules of the road: `docs/REPORT_PAGES_PLAN.md` §2 (contract, MUST) + §3 (kit, 
   `<style>`. Do not paste a copy into your renderer — a copy drifts, and the kit
   exists so a restyle reaches every page-enabled loop at once. Strip the leading
   `/* … */` header comment; it is for maintainers, not browsers.
-- Never `<link>` it: pages must be self-contained and fetch NOTHING on load.
-  Navigation `<a href="https://…">` is fine, and so is a URL inside escaped report
-  text — the rule is about references the browser dereferences, not about the
-  string `http://`. `tests/html_selfcontained.py` is the check.
-- Treat a missing/unreadable `kit.css` as fatal to the render. It ships in this
-  repo, so its absence means a broken checkout; failing names the path in
-  `page-render.log` instead of promoting a silently unstyled page.
+- **Read** `$PAGEKIT/toggle.js` the same way and inline it into a `<script>` in
+  `<head>` **before** the `<style>` block (so the saved theme stamps onto
+  `<html data-theme>` before first paint — no flash). Same missing-file-is-fatal
+  rule as `kit.css`. Never `<script src=…>`: pages must fetch nothing on load.
+- Never `<link>` the stylesheet either. Navigation `<a href="https://…">` is fine,
+  and so is a URL inside escaped report text — the rule is about references the
+  browser dereferences, not about the string `http://`. `tests/html_selfcontained.py`
+  is the check.
+- Treat a missing/unreadable `kit.css` or `toggle.js` as fatal to the render. Both
+  ship in this repo, so absence means a broken checkout; failing names the path in
+  `page-render.log` instead of promoting a silently unstyled or untoggleable page.
 - Layout vocabulary: `.wrap` page column · `.hd`/`.kicker`/`.hero` header · `.stats`/`.stat`
   stat strip · `.brow` label+bar rows · `.group`/`.ghead`/`.frow`/`.fbody` grouped
   detail rows (`<details>`) · `footer` provenance line · `#tip` tooltip.
-- Palette: high `#d84f63`, medium `#b48c1a`, accent `#279a83` on surface `#0e0f12`.
+- Palette (garden role tokens, both modes — values shared with
+  `dashboard/generate.py`, enforced by `tests/test_token_drift.py`):
+  - light: surface `--washi` `#F2EDE3`, ink `--sumi` `#1C1A17`, alert `--shu` `#C73E2B`,
+    watch `--ochre` `#A87A2A`, accent `--ai` `#2E4A5B`, muted `--nibi` / deeper
+    `--nibi-faint`
+  - dark (OS default via `prefers-color-scheme`, or explicit `data-theme="dark"`):
+    surface `#0E0F12`, ink `#E7E9EC`, alert `#D84F63`, watch `#B48C1A`, accent
+    `#279A83`
   Severity always gets a marker/text label as well as color.
+
+### Theme toggle button (renderer-owned markup)
+
+`toggle.js` wires a click handler on `#theme-toggle` and persists under the same
+localStorage key the garden uses (`loops-theme`). The button HTML is small enough
+to own in the renderer (same tier as the envelope snippet below). Place it near
+header meta:
+
+```html
+<button id="theme-toggle" type="button" aria-label="toggle theme">◐</button>
+```
 
 ## The envelope (required on every page)
 

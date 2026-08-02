@@ -385,6 +385,8 @@ property, not a separate system:
 ```
 1. Spec        — walk the twelve-question intake interview (§2) with generalissimo (or self-interview).
 2. Scaffold     — `loopctl new <name> --type agent|watchdog --engine codex|claude`
+                   (add `--owner <project>` for the owning project/process — defaults to `loops`,
+                   the harness itself; change later with `loopctl set-owner`. B-17, INTERFACES §5).
                    (add `--from examples` if this is a pilot/regression fixture, not a real loop).
                    (or: `loopctl import <skill-path> --analyze / --apply` — see
                    `docs/SKILL_IMPORT.md` — when converting an existing Agent Skill)

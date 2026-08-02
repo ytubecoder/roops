@@ -146,6 +146,7 @@ class FixtureRoot:
         dashboard_json=None,
         timeout_s=900,
         enabled=None,
+        owner=None,
     ):
         d = os.path.join(self.root, "loops.d", name)
         os.makedirs(d, exist_ok=True)
@@ -156,6 +157,8 @@ class FixtureRoot:
             )
             if enabled is not None:
                 f.write(f"enabled={'true' if enabled else 'false'}\n")
+            if owner is not None:
+                f.write(f"owner={owner}\n")
         if dashboard_json is not None:
             with open(os.path.join(d, "dashboard.json"), "w") as f:
                 json.dump(dashboard_json, f)
@@ -547,9 +550,7 @@ class GenerateIntegrationTests(unittest.TestCase):
         with open(out) as f:
             html = f.read()
         self.assertIn("</html>", html.lower())
-        leftover_tmp = [
-            p for p in glob.glob(os.path.join(out_dir, "*")) if p != out
-        ]
+        leftover_tmp = [p for p in glob.glob(os.path.join(out_dir, "*")) if p != out]
         self.assertEqual(leftover_tmp, [], f"leftover tmp files: {leftover_tmp}")
 
     def test_precedence_in_full_pipeline_completed_alert_renders_red(self):
@@ -1747,7 +1748,12 @@ class FindingHandoffTests(unittest.TestCase):
         html = self._generate(root)
         self.assertIn('<span class="stamp-mark"', html)
         self.assertIn('済<span class="en">dismissed</span>', html)
-        self.assertNotIn("data-copy=", html)
+        # No disposition BUTTONS for a suppressed finding. (B-17: scoped to
+        # hanko-btn — the owner chip legitimately carries data-copy on every
+        # row, so the old page-wide "no data-copy at all" phrasing is stale.)
+        self.assertNotIn('class="hanko-btn"', html)
+        self.assertNotIn("loopctl ack l1", html)
+        self.assertNotIn("loopctl dismiss l1", html)
         self.assertIn(f"loopctl reopen l1 repo:no-remote --root {root}", html)
 
 
@@ -1827,7 +1833,8 @@ class TagsProvenanceEventsTests(unittest.TestCase):
         html = self._generate(root)
         self.assertNotIn('class="tag"', html)
         self.assertIn(
-            '<details class="loop-row" name="garden" id="loop-untagged" data-tags="">',
+            '<details class="loop-row" name="garden" id="loop-untagged" '
+            'data-tags="" data-owner="loops">',
             html,
         )
 
@@ -1842,11 +1849,13 @@ class TagsProvenanceEventsTests(unittest.TestCase):
         self.fx.add_loop("untagged")
         html = self._generate(root)
         self.assertIn(
-            '<details class="loop-row" name="garden" id="loop-tagged" data-tags="project:x">',
+            '<details class="loop-row" name="garden" id="loop-tagged" '
+            'data-tags="project:x" data-owner="loops">',
             html,
         )
         self.assertIn(
-            '<details class="loop-row" name="garden" id="loop-untagged" data-tags="">',
+            '<details class="loop-row" name="garden" id="loop-untagged" '
+            'data-tags="" data-owner="loops">',
             html,
         )
         # the JS must match tags exactly against the split list, not treat a missing
@@ -2352,9 +2361,7 @@ class TestGardenAccordion(unittest.TestCase):
     def test_each_loop_emits_one_details_accordion(self):
         html = self._generate("alpha", "beta")
         for name in ("alpha", "beta"):
-            needle = (
-                f'<details class="loop-row" name="garden" id="loop-{name}"'
-            )
+            needle = f'<details class="loop-row" name="garden" id="loop-{name}"'
             self.assertEqual(html.count(needle), 1, name)
             # id appears only on the details element (not on a nested section)
             self.assertEqual(html.count(f'id="loop-{name}"'), 1, name)
@@ -2638,7 +2645,9 @@ class DarkModeTokensTests(unittest.TestCase):
             r"@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]+)\}",
             css,
         )
-        self.assertIsNotNone(m_media, "@media (prefers-color-scheme: dark) :root missing")
+        self.assertIsNotNone(
+            m_media, "@media (prefers-color-scheme: dark) :root missing"
+        )
         m_dark = re.search(r':root\[data-theme="dark"\]\s*\{([^}]+)\}', css)
         self.assertIsNotNone(m_dark, ':root[data-theme="dark"] block missing')
         m_light = re.search(r':root\[data-theme="light"\]\s*\{([^}]+)\}', css)
@@ -2696,7 +2705,11 @@ class DarkModeTokensTests(unittest.TestCase):
         ):
             for line in block.splitlines():
                 stripped = line.strip()
-                if not stripped or stripped.startswith("/*") or stripped.startswith("*"):
+                if (
+                    not stripped
+                    or stripped.startswith("/*")
+                    or stripped.startswith("*")
+                ):
                     continue
                 if stripped.startswith("color-scheme:"):
                     continue
@@ -2765,6 +2778,105 @@ class ThemeToggleTests(unittest.TestCase):
         self.assertGreaterEqual(html.count("'loops-theme'"), 2)
         self.assertIn("localStorage.getItem('loops-theme')", html)
         self.assertIn("localStorage.setItem('loops-theme'", html)
+
+
+class TestOwnerGarden(unittest.TestCase):
+    """B-17: owner chips, data-owner attrs, always-on owner filter, and the
+    copy affordance — plus the lockstep-mirror drift guard."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+
+    def _generate(self, specs):
+        """specs: list of (name, owner-or-None) tuples."""
+        conn = self.fx.init_db()
+        for name, owner in specs:
+            self.fx.add_loop(name, owner=owner)
+        conn.close()
+        return generate.generate(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+
+    def test_resolve_owner_mirror_never_drifts(self):
+        # generate.py cannot import bin/loopconf.py (lazy-seam doctrine), so
+        # it carries a copy of the resolution rule. This pin is what makes
+        # the copy safe — same pattern as test_token_drift.py for the
+        # kit.css token blocks. If this fails, change BOTH files together.
+        import importlib.util as _ilu
+
+        loopconf_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "bin",
+            "loopconf.py",
+        )
+        spec = _ilu.spec_from_file_location("_drift_loopconf", loopconf_path)
+        loopconf = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(loopconf)
+
+        self.assertEqual(generate.DEFAULT_OWNER, loopconf.DEFAULT_OWNER)
+        for conf in (
+            {},
+            {"owner": None},
+            {"owner": "maguyva-marketing"},
+            {"owner": "loops"},
+        ):
+            self.assertEqual(
+                generate.resolve_owner(dict(conf)),
+                loopconf.resolve_owner(dict(conf)),
+                conf,
+            )
+
+    def test_data_owner_always_emitted(self):
+        html = self._generate([("alpha", "maguyva-marketing"), ("beta", None)])
+        self.assertIn(
+            'id="loop-alpha" data-tags="" data-owner="maguyva-marketing"', html
+        )
+        self.assertIn('id="loop-beta" data-tags="" data-owner="loops"', html)
+
+    def test_owner_chip_explicit_vs_assumed(self):
+        html = self._generate([("alpha", "maguyva-marketing"), ("beta", None)])
+        # explicit: chip present, not dimmed
+        alpha = html[
+            html.index('id="loop-alpha"') : html.index(
+                "</details>", html.index('id="loop-alpha"')
+            )
+        ]
+        self.assertIn("owner-chip", alpha)
+        self.assertIn("<b>主</b>maguyva-marketing", alpha)
+        self.assertNotIn("owner-assumed", alpha)
+        # assumed: dimmed class + hint title
+        beta = html[
+            html.index('id="loop-beta"') : html.index(
+                "</details>", html.index('id="loop-beta"')
+            )
+        ]
+        self.assertIn("owner-chip owner-assumed", beta)
+        self.assertIn("owner assumed", beta)
+
+    def test_owner_chip_copies_set_owner_command(self):
+        html = self._generate([("alpha", "maguyva-marketing")])
+        self.assertIn('data-copy="loopctl set-owner alpha maguyva-marketing"', html)
+        self.assertIn("loopsCopyOwnerCmd", html)
+        # copy is clipboard-only — the page still fetches nothing
+        assert_self_contained(self, html, "dashboard with owner chips")
+
+    def test_owner_filter_always_renders_tag_filter_stays_conditional(self):
+        html = self._generate([("alpha", "maguyva-marketing"), ("beta", None)])
+        self.assertIn('id="owner-filter"', html)
+        self.assertIn('<option value="">all owners</option>', html)
+        self.assertIn('<option value="loops">loops</option>', html)
+        self.assertIn(
+            '<option value="maguyva-marketing">maguyva-marketing</option>', html
+        )
+        # no tags anywhere -> no tag select, and the combined filter reads both
+        self.assertNotIn('id="tag-filter"', html)
+        self.assertIn("loopsApplyFilters", html)
+        self.assertNotIn("loopsFilterByTag", html)
 
 
 if __name__ == "__main__":

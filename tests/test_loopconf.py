@@ -417,5 +417,51 @@ class TestTags(unittest.TestCase):
         self.assertTrue(any("tags" in e for e in errors))
 
 
+class TestOwner(unittest.TestCase):
+    """B-17: owner is required-but-assumed — absence is never an error;
+    a present-but-malformed value is a parse error like any field."""
+
+    def _parse_with(self, owner_line):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        p = os.path.join(d, "loop.conf")
+        with open(p, "w") as f:
+            f.write(MINIMAL_VALID)
+            if owner_line is not None:
+                f.write(owner_line + "\n")
+        return loopconf.parse(p)
+
+    def test_owner_absent_is_none_no_error(self):
+        conf, errors = self._parse_with(None)
+        self.assertEqual(errors, [])
+        self.assertIsNone(conf["owner"])
+
+    def test_owner_valid_parses(self):
+        conf, errors = self._parse_with("owner=maguyva-marketing")
+        self.assertEqual(errors, [])
+        self.assertEqual(conf["owner"], "maguyva-marketing")
+
+    def test_owner_malformed_is_parse_error(self):
+        _conf, errors = self._parse_with('owner="Maguyva Marketing!"')
+        self.assertTrue(any("owner" in e for e in errors))
+
+    def test_owner_uppercase_fails(self):
+        _conf, errors = self._parse_with("owner=Loops")
+        self.assertTrue(any("owner" in e for e in errors))
+
+    def test_default_owner_constant(self):
+        self.assertEqual(loopconf.DEFAULT_OWNER, "loops")
+
+    def test_resolve_owner_explicit(self):
+        self.assertEqual(
+            loopconf.resolve_owner({"owner": "maguyva-marketing"}),
+            ("maguyva-marketing", False),
+        )
+
+    def test_resolve_owner_absent_assumed(self):
+        self.assertEqual(loopconf.resolve_owner({"owner": None}), ("loops", True))
+        self.assertEqual(loopconf.resolve_owner({}), ("loops", True))
+
+
 if __name__ == "__main__":
     unittest.main()

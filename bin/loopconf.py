@@ -46,6 +46,7 @@ _NO_DEFAULT = object()
 FIELDS = {
     "name": {"required": True, "type": "name"},
     "description": {"required": True, "type": "str"},
+    "owner": {"required": False, "type": "name", "default": None},
     "type": {"required": True, "type": "enum", "values": ["agent", "watchdog"]},
     "engine": {"required": True, "type": "enum", "values": ["codex", "claude"]},
     "model": {"required": False, "type": "str", "default": None},
@@ -274,6 +275,21 @@ def parse(path: str):
         )
 
     return conf, errors
+
+
+# §5 owner resolution (B-17): owner is required-but-assumed. Absence is never
+# an error anywhere; every surface resolves it here — the ONLY implementation
+# of the rule — so nothing is ever unowned while an assumption stays visible.
+DEFAULT_OWNER = "loops"
+
+
+def resolve_owner(conf):
+    """-> (owner: str, assumed: bool). Explicit owner passes through; a
+    missing one is assumed DEFAULT_OWNER with assumed=True."""
+    owner = conf.get("owner")
+    if owner:
+        return owner, False
+    return DEFAULT_OWNER, True
 
 
 def _typecheck(key, field, raw_value):

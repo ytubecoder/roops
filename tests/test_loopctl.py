@@ -3375,5 +3375,242 @@ class TestSetSchedule(LoopsRootTestCase):
         self.assertIn("schedule=interval:15m", _read(self._conf_path("alpha")))
 
 
+class TestSetOwner(LoopsRootTestCase):
+    """B-17: the set-schedule shape minus launchd — validate before write,
+    rewrite the single key, best-effort dashboard regen, no events."""
+
+    def _conf_path(self, name):
+        return os.path.join(self.fixture.loop_dir(name), "loop.conf")
+
+    def _set_owner(self, name, owner):
+        return run_cli(
+            ["set-owner", name, owner, "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+
+    def test_sets_owner_on_ownerless_conf(self):
+        self.fixture.minimal_valid_loop("alpha")
+        r = self._set_owner("alpha", "maguyva-marketing")
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("owner alpha: loops (assumed) -> maguyva-marketing", r.stdout)
+        conf = _read(self._conf_path("alpha"))
+        self.assertIn("owner=maguyva-marketing", conf)
+        # every other line survives byte-for-byte semantics of _rewrite_conf_key
+        self.assertIn("schedule=interval:15m", conf)
+
+    def test_rewrites_existing_owner_in_place(self):
+        self.fixture.minimal_valid_loop("alpha", extra_lines=["owner=loops"])
+        r = self._set_owner("alpha", "maguyva-marketing")
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("owner alpha: loops -> maguyva-marketing", r.stdout)
+        conf = _read(self._conf_path("alpha"))
+        self.assertEqual(conf.count("owner="), 1)
+        self.assertIn("owner=maguyva-marketing", conf)
+
+    def test_malformed_owner_writes_nothing(self):
+        self.fixture.minimal_valid_loop("alpha")
+        before = _read(self._conf_path("alpha"))
+        r = self._set_owner("alpha", "Bad Owner")
+        self.assertEqual(r.returncode, 2, msg=r.stdout + r.stderr)
+        self.assertIn("invalid owner", r.stderr)
+        self.assertEqual(_read(self._conf_path("alpha")), before)
+
+    def test_unknown_loop_fails(self):
+        r = self._set_owner("ghost", "loops")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("loop not found", r.stderr)
+
+    def test_records_no_lifecycle_event(self):
+        # git history of loops.d/ is the audit trail (§5 owner resolution).
+        self.fixture.minimal_valid_loop("alpha")
+        r = self._set_owner("alpha", "maguyva-marketing")
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertEqual(_query_loop_events(self.root, "alpha"), [])
+
+
+class TestOwnerListStatus(LoopsRootTestCase):
+    """B-17: owner/owner_assumed in list/status rows; --owner exact filter."""
+
+    def test_list_json_owner_fields(self):
+        self.fixture.minimal_valid_loop(
+            "explicit", extra_lines=["owner=maguyva-marketing"]
+        )
+        self.fixture.minimal_valid_loop("bare")
+        r = run_cli(
+            ["list", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = {row["name"]: row for row in json.loads(r.stdout)}
+        self.assertEqual(rows["explicit"]["owner"], "maguyva-marketing")
+        self.assertFalse(rows["explicit"]["owner_assumed"])
+        self.assertEqual(rows["bare"]["owner"], "loops")
+        self.assertTrue(rows["bare"]["owner_assumed"])
+
+    def test_list_table_owner_column(self):
+        self.fixture.minimal_valid_loop("l1", extra_lines=["owner=maguyva-marketing"])
+        r = run_cli(
+            ["list", "--root", self.root], env_overrides=self.fixture.base_env()
+        )
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("owner", r.stdout)
+        self.assertIn("maguyva-marketing", r.stdout)
+
+    def test_list_owner_filter_exact_match(self):
+        self.fixture.minimal_valid_loop("mine", extra_lines=["owner=maguyva-marketing"])
+        self.fixture.minimal_valid_loop("bare")  # resolves to loops
+        r = run_cli(
+            ["list", "--owner", "loops", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        rows = json.loads(r.stdout)
+        self.assertEqual([row["name"] for row in rows], ["bare"])
+        # no substring matching
+        r = run_cli(
+            ["list", "--owner", "maguyva", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(json.loads(r.stdout), [])
+
+    def test_list_owner_no_match_names_the_filter(self):
+        self.fixture.minimal_valid_loop("l1")
+        self.fixture.minimal_valid_loop("l2")
+        r = run_cli(
+            ["list", "--owner", "nobody", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertNotIn("empty)", r.stdout)
+        self.assertIn(
+            "0 loops matching --owner nobody (2 loops under loops.d)", r.stdout
+        )
+
+    def test_list_tag_and_owner_compose(self):
+        self.fixture.minimal_valid_loop(
+            "both", extra_lines=["owner=maguyva-marketing", 'tags="project:x"']
+        )
+        self.fixture.minimal_valid_loop("tag-only", extra_lines=['tags="project:x"'])
+        r = run_cli(
+            [
+                "list",
+                "--tag",
+                "project:x",
+                "--owner",
+                "maguyva-marketing",
+                "--root",
+                self.root,
+                "--json",
+            ],
+            env_overrides=self.fixture.base_env(),
+        )
+        rows = json.loads(r.stdout)
+        self.assertEqual([row["name"] for row in rows], ["both"])
+        # zero-match message names BOTH active filters
+        r = run_cli(
+            [
+                "list",
+                "--tag",
+                "project:x",
+                "--owner",
+                "nobody",
+                "--root",
+                self.root,
+            ],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertIn(
+            "0 loops matching --tag project:x --owner nobody (2 loops under loops.d)",
+            r.stdout,
+        )
+
+    def test_status_json_owner_fields(self):
+        self.fixture.minimal_valid_loop("s1", extra_lines=["owner=maguyva-marketing"])
+        self.fixture.minimal_valid_loop("s2")
+        r = run_cli(["status", "--root", self.root, "--json"])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        rows = {row["name"]: row for row in json.loads(r.stdout)["loops"]}
+        self.assertEqual(rows["s1"]["owner"], "maguyva-marketing")
+        self.assertFalse(rows["s1"]["owner_assumed"])
+        self.assertEqual(rows["s2"]["owner"], "loops")
+        self.assertTrue(rows["s2"]["owner_assumed"])
+
+
+class TestNewOwner(LoopsRootTestCase):
+    """B-17: `new` always stamps an explicit owner= (never scaffolds assumed)."""
+
+    def _conf(self, name):
+        with open(os.path.join(self.root, "loops.d", name, "loop.conf")) as f:
+            return f.read()
+
+    def test_new_stamps_default_owner(self):
+        r = run_cli(
+            ["new", "demo", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("owner=loops", self._conf("demo"))
+
+    def test_new_honors_owner_flag(self):
+        r = run_cli(
+            ["new", "demo", "--owner", "maguyva-marketing", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("owner=maguyva-marketing", self._conf("demo"))
+
+    def test_new_rejects_malformed_owner(self):
+        r = run_cli(
+            ["new", "demo", "--owner", "Bad Owner", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 2, msg=r.stdout + r.stderr)
+        self.assertIn("invalid owner", r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.root, "loops.d", "demo")))
+
+
+class TestValidateOwnerNotices(LoopsRootTestCase):
+    """B-17: assumed owner is a non-fatal notice — never an error, never
+    the exit code."""
+
+    def _add_spec(self, name):
+        # minimal SPEC.md so validate passes its scaffold checks
+        self.fixture.write_spec(name, "filled\n" * 11)
+
+    def test_assumed_owner_is_ok_plus_notice(self):
+        self.fixture.minimal_valid_loop("bare")
+        self._add_spec("bare")
+        r = run_cli(
+            ["validate", "bare", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("OK bare", r.stdout)
+        self.assertIn("note: owner assumed 'loops'", r.stdout)
+
+    def test_assumed_owner_notice_in_json(self):
+        self.fixture.minimal_valid_loop("bare")
+        self._add_spec("bare")
+        r = run_cli(
+            ["validate", "bare", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        payload = json.loads(r.stdout)["bare"]
+        self.assertTrue(payload["ok"])
+        self.assertEqual(len(payload["notices"]), 1)
+        self.assertIn("owner assumed", payload["notices"][0])
+
+    def test_explicit_owner_no_notice(self):
+        self.fixture.minimal_valid_loop("owned", extra_lines=["owner=loops"])
+        self._add_spec("owned")
+        r = run_cli(
+            ["validate", "owned", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        payload = json.loads(r.stdout)["owned"]
+        self.assertEqual(payload["notices"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -76,6 +76,23 @@ def _default_schedule_parse(root):
     return _parse
 
 
+# B-17: lockstep MIRROR of bin/loopconf.py's DEFAULT_OWNER/resolve_owner.
+# generate.py cannot import loopconf (the lazy-seam doctrine above: this module
+# must work against roots where bin/loopconf.py does not exist, and the
+# hermetic dashboard tests assert exactly that), so the rule is copied here and
+# pinned by a drift test in tests/test_dashboard.py — same canonical-copy
+# pattern as the token blocks vs pagekit/kit.css (tests/test_token_drift.py).
+DEFAULT_OWNER = "loops"
+
+
+def resolve_owner(conf):
+    """-> (owner, assumed). Mirror of bin/loopconf.py resolve_owner."""
+    owner = conf.get("owner")
+    if owner:
+        return owner, False
+    return DEFAULT_OWNER, True
+
+
 def _default_page_envelope(root):
     path = os.path.join(root, "bin", "page_envelope.py")
     if not os.path.isfile(path):
@@ -1241,15 +1258,60 @@ html.console-active .loop-row > summary { grid-template-columns: 44px 1.1fr 1.5f
   font-family: var(--mono); font-size: 11px; background: var(--washi); color: var(--sumi);
   border: 1px solid var(--hair2); border-radius: 3px; padding: 3px 8px; margin-left: 8px;
 }
+.filter-bar label + label { margin-left: 16px; }
+/* owner chip (B-17) — 主 = the loop's owning project/process. A button (it
+   copies the set-owner command) styled apart from .tag; assumed owners dim. */
+.owner-chip {
+  display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono);
+  font-size: 9px; letter-spacing: .1em; padding: 2px 7px; margin-left: 8px;
+  border-radius: 2px; border: 1px solid var(--hair2); cursor: copy;
+  color: var(--sumi); background: rgba(var(--sumi-rgb), .05); vertical-align: 1px;
+}
+.owner-chip b { font-weight: 400; color: var(--nibi); }
+.owner-chip.owner-assumed { color: var(--nibi); border-style: dashed; background: transparent; }
+.owner-chip.copied { color: var(--ai); border-color: var(--ai); background: rgba(var(--ai-rgb), .1); }
 """
 
 DASHBOARD_JS = """
-function loopsFilterByTag(tag) {
+function loopsApplyFilters() {
+  var ownerSel = document.getElementById('owner-filter');
+  var tagSel = document.getElementById('tag-filter');
+  var owner = ownerSel ? ownerSel.value : '';
+  var tag = tagSel ? tagSel.value : '';
   document.querySelectorAll('[data-tags]').forEach(function (el) {
-    if (!tag) { el.style.display = ''; return; }
     var tags = (el.getAttribute('data-tags') || '').split(' ');
-    el.style.display = tags.indexOf(tag) > -1 ? '' : 'none';
+    var okTag = !tag || tags.indexOf(tag) > -1;
+    var okOwner = !owner || el.getAttribute('data-owner') === owner;
+    el.style.display = (okTag && okOwner) ? '' : 'none';
   });
+}
+function loopsCopyOwnerCmd(ev, el) {
+  /* Chip lives inside <summary>: without preventDefault the click also
+     toggles the accordion. Copy is clipboard-only -- no request, no mutation. */
+  ev.preventDefault();
+  ev.stopPropagation();
+  var cmd = el.getAttribute('data-copy') || '';
+  var done = function () {
+    el.classList.add('copied');
+    setTimeout(function () { el.classList.remove('copied'); }, 900);
+  };
+  var fallback = function () {
+    var ta = document.createElement('textarea');
+    ta.value = cmd;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    done();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cmd).then(done, fallback);
+  } else {
+    fallback();
+  }
 }
 function loopsOpenHash() {
   var h = location.hash;
@@ -1283,6 +1345,32 @@ def _render_tag_chips(tags):
         + "".join(f'<span class="tag">{e(t)}</span>' for t in tags)
         + "</div>"
     )
+
+
+def _render_owner_chip(loop):
+    """B-17 owner chip: 主 <owner>. A <button> because clicking copies the
+    ready-made `loopctl set-owner` command (the static page's edit
+    affordance — the page itself never mutates anything). Assumed owners
+    render dashed/dim so the missing owner= line stays visible."""
+    owner = loop["owner"]
+    cmd = f"loopctl set-owner {loop['name']} {owner}"
+    cls = "owner-chip"
+    title = f"owner — click to copy: {cmd}"
+    if loop["owner_assumed"]:
+        cls += " owner-assumed"
+        title = (
+            f"owner assumed {owner!r} (no owner= in loop.conf) — click to copy: {cmd}"
+        )
+    return (
+        f'<button type="button" class="{cls}" data-copy="{e(cmd)}" title="{e(title)}" '
+        f'onclick="loopsCopyOwnerCmd(event, this)"><b>主</b>{e(owner)}</button>'
+    )
+
+
+def _data_owner_attr(loop):
+    """Always emitted, like _data_tags_attr below: the combined filter reads
+    data-owner off every [data-tags] row, and every loop resolves an owner."""
+    return f' data-owner="{e(loop["owner"])}"'
 
 
 def _data_tags_attr(tags):
@@ -1807,7 +1895,7 @@ def _render_report_block(loop):
         )
     return (
         f'<div class="report-block"><div class="report-links">'
-        f'{" · ".join(links)}</div>{history}</div>'
+        f"{' · '.join(links)}</div>{history}</div>"
     )
 
 
@@ -1864,7 +1952,7 @@ def _render_loop_summary(loop, now):
         )
         next_html = (
             f'<span class="rm-next">next 巡{_en("run")} '
-            f'{e(loop["next_run_text"])}</span>'
+            f"{e(loop['next_run_text'])}</span>"
         )
     elif loop["installed"]:
         sw = _switch.format(
@@ -1891,9 +1979,10 @@ def _render_loop_summary(loop, now):
     )
     controls = _render_console_controls(loop)
     tags_html = _render_tag_chips(loop["tags"])
+    owner_html = _render_owner_chip(loop)
     return (
         f"{stamp}"
-        f'<div class="loop-name">{e(loop["name"])}'
+        f'<div class="loop-name">{e(loop["name"])}{owner_html}'
         f"{tags_html}"
         f"<small>{e(loop['schedule'])} · {e(loop['description'])}</small></div>"
         f'<div class="toko"><div class="toko-scroll">{toko}</div>'
@@ -1907,11 +1996,12 @@ def _render_loop_summary(loop, now):
 def _render_loop_row(loop, conn, now):
     """One garden accordion: <details name="garden"> with summary glance + section body."""
     data_tags = _data_tags_attr(loop["tags"])
+    data_owner = _data_owner_attr(loop)
     name = loop["name"]
     summary = _render_loop_summary(loop, now)
     body = _render_loop_section(loop, conn, now)
     return (
-        f'<details class="loop-row" name="garden" id="loop-{e(name)}"{data_tags}>'
+        f'<details class="loop-row" name="garden" id="loop-{e(name)}"{data_tags}{data_owner}>'
         f"<summary>{summary}</summary>"
         f"{body}"
         f"</details>"
@@ -2068,6 +2158,7 @@ def _resolve_loop(
     recent_runs = _recent_runs(conn, name)
     heartbeat = _latest_heartbeat(conn, name)
     tags = conf.get("tags") or []
+    owner, owner_assumed = resolve_owner(conf)
     provenance = _loop_provenance(conn, name)
 
     timeout_s = conf.get("timeout_s", 900)
@@ -2183,6 +2274,8 @@ def _resolve_loop(
         "recent_runs": recent_runs,
         "heartbeat": heartbeat,
         "tags": tags,
+        "owner": owner,
+        "owner_assumed": owner_assumed,
         "provenance": provenance,
         "died": died,
         "overdue": overdue,
@@ -2320,17 +2413,29 @@ def _render_page(
         )
         return _wrap_html(top, body)
 
+    # B-17: the owner select always renders (every loop resolves an owner);
+    # the tag select keeps its only-when-tags-exist rule. One combined
+    # client-side function applies owner ∧ tag.
+    owner_options = sorted({loop["owner"] for loop in loops})
+    owner_opts = '<option value="">all owners</option>' + "".join(
+        f'<option value="{e(o)}">{e(o)}</option>' for o in owner_options
+    )
+    filter_parts = [
+        "<label>Filter by owner"
+        f'<select id="owner-filter" onchange="loopsApplyFilters()">{owner_opts}</select>'
+        "</label>"
+    ]
     tag_options = sorted({t for loop in loops for t in loop["tags"]})
-    filter_html = ""
     if tag_options:
         opts = '<option value="">all tags</option>' + "".join(
             f'<option value="{e(t)}">{e(t)}</option>' for t in tag_options
         )
-        filter_html = (
-            '<div class="filter-bar"><label>Filter by tag'
-            f'<select id="tag-filter" onchange="loopsFilterByTag(this.value)">{opts}</select>'
-            "</label></div>"
+        filter_parts.append(
+            "<label>Filter by tag"
+            f'<select id="tag-filter" onchange="loopsApplyFilters()">{opts}</select>'
+            "</label>"
         )
+    filter_html = f'<div class="filter-bar">{"".join(filter_parts)}</div>'
 
     # Accordion rows include each loop's section body; no separate sections stack below.
     global_rows = "".join(_render_loop_row(loop, conn, now) for loop in loops)

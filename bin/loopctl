@@ -552,13 +552,22 @@ def cmd_new(args):
             file=sys.stderr,
         )
         return 2
+    owner = args.owner or loopconf.DEFAULT_OWNER
+    if not loopconf.NAME_RE.match(owner):
+        print(
+            f"invalid owner {owner!r}: must match ^[a-z][a-z0-9-]{{1,40}}$",
+            file=sys.stderr,
+        )
+        return 2
 
     os.makedirs(loop_dir)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     _write_file(
         os.path.join(loop_dir, "loop.conf"),
-        _render_template(_LOOP_CONF_TEMPLATE, args.name, type=args.type_, engine=args.engine, date=today),
+        _render_template(
+            _LOOP_CONF_TEMPLATE, args.name, type=args.type_, engine=args.engine, date=today, owner=owner
+        ),
     )
     _write_file(os.path.join(loop_dir, "prompt.md"), _render_template(_PROMPT_MD_TEMPLATE, args.name))
     _write_file(os.path.join(loop_dir, "SPEC.md"), _render_template(_SPEC_MD_TEMPLATE, args.name))
@@ -590,15 +599,24 @@ def cmd_validate(args):
     names = _discover_loop_names(args.root, args.from_dir) if args.all else [args.name]
 
     results = {}
+    notices = {}
     any_fail = False
     for name in names:
         errors = _validate_one(args.root, args.from_dir, name)
         results[name] = errors
+        notices[name] = _owner_notices(args.root, args.from_dir, name)
         if errors:
             any_fail = True
 
     if args.json:
-        print(json.dumps({n: {"ok": not e, "errors": e} for n, e in results.items()}))
+        print(
+            json.dumps(
+                {
+                    n: {"ok": not e, "errors": e, "notices": notices[n]}
+                    for n, e in results.items()
+                }
+            )
+        )
     else:
         for name, errors in results.items():
             if errors:
@@ -607,8 +625,27 @@ def cmd_validate(args):
                     print(f"  - {e}")
             else:
                 print(f"OK {name}")
+            for note in notices[name]:
+                print(f"  note: {note}")
 
     return 1 if any_fail else 0
+
+
+def _owner_notices(root, from_dir, name):
+    """B-17: non-fatal notices — an assumed owner is worth saying, never
+    worth failing (owner is required-but-assumed, §5). Notices never touch
+    the exit code."""
+    conf_path = os.path.join(root, from_dir, name, "loop.conf")
+    if not os.path.isfile(conf_path):
+        return []
+    conf, _errors = loopconf.parse(conf_path)
+    _owner, assumed = loopconf.resolve_owner(conf)
+    if assumed:
+        return [
+            f"owner assumed {loopconf.DEFAULT_OWNER!r} — set owner= in loop.conf "
+            f"or run `loopctl set-owner {name} <owner>`"
+        ]
+    return []
 
 
 def cmd_run(args):
@@ -628,9 +665,12 @@ def cmd_list(args):
     for name in names:
         conf_path = os.path.join(args.root, args.from_dir, name, "loop.conf")
         conf, _errors = loopconf.parse(conf_path)
+        owner, owner_assumed = loopconf.resolve_owner(conf)
         rows.append(
             {
                 "name": name,
+                "owner": owner,
+                "owner_assumed": owner_assumed,
                 "type": conf.get("type"),
                 "engine": conf.get("engine"),
                 "schedule": conf.get("schedule"),
@@ -642,6 +682,10 @@ def cmd_list(args):
     total = len(rows)
     if args.tag:
         rows = [r for r in rows if args.tag in r["tags"]]
+    if args.owner:
+        # Exact match on the RESOLVED owner (assumed rows match their
+        # default), mirroring --tag's no-substring rule.
+        rows = [r for r in rows if r["owner"] == args.owner]
     if args.json:
         print(json.dumps(rows))
     else:
@@ -652,14 +696,23 @@ def cmd_list(args):
             # BOTH cases, which is a false statement about a non-empty fleet
             # when a --tag filter simply had no match (contradicts
             # docs/INTERFACES.md's own "zero loops under --from" wording).
-            if args.tag and total:
-                print(f"0 loops matching --tag {args.tag} ({total} loops under {args.from_dir})")
+            active_filters = []
+            if args.tag:
+                active_filters.append(f"--tag {args.tag}")
+            if args.owner:
+                active_filters.append(f"--owner {args.owner}")
+            if active_filters and total:
+                print(
+                    f"0 loops matching {' '.join(active_filters)} "
+                    f"({total} loops under {args.from_dir})"
+                )
             else:
                 print(f"0 loops ({args.from_dir} empty)")
         else:
             table_rows = [{**r, "tags": ",".join(r["tags"])} for r in rows]
             _print_table(
-                table_rows, ["name", "type", "engine", "schedule", "enabled", "installed", "tags"]
+                table_rows,
+                ["name", "owner", "type", "engine", "schedule", "enabled", "installed", "tags"],
             )
     return 0
 
@@ -826,9 +879,12 @@ def cmd_status(args):
             else None
         )
 
+        owner, owner_assumed = loopconf.resolve_owner(conf)
         rows.append(
             {
                 "name": name,
+                "owner": owner,
+                "owner_assumed": owner_assumed,
                 "runner_status": display.get("runner_status") if display else None,
                 "effective_status": display.get("effective_status") if display else None,
                 "headline": display.get("headline") if display else None,
@@ -1077,6 +1133,37 @@ def cmd_set_schedule(args):
     return 0
 
 
+def cmd_set_owner(args):
+    """B-17: the set-schedule shape minus every launchd concern — owner is
+    not in the plist. Validate BEFORE any write; dashboard regen is
+    best-effort; no loop_events row (loops.d/ is git-tracked — git history
+    is the audit trail, same as set-schedule)."""
+    conf_path = os.path.join(args.root, args.from_dir, args.name, "loop.conf")
+    if not os.path.isfile(conf_path):
+        print(f"loop not found: {args.name}", file=sys.stderr)
+        return 1
+    if not loopconf.NAME_RE.match(args.owner):
+        print(
+            f"invalid owner {args.owner!r}: must match ^[a-z][a-z0-9-]{{1,40}}$",
+            file=sys.stderr,
+        )
+        return 2
+
+    conf, _errors = loopconf.parse(conf_path)
+    old_owner, old_assumed = loopconf.resolve_owner(conf)
+    _rewrite_conf_key(conf_path, "owner", args.owner)
+
+    try:
+        dash = _dashboard_module()
+        dash.generate(root=args.root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
+    except Exception as e:  # noqa: BLE001 — dashboard regen is best-effort; the owner change itself succeeded
+        print(f"warning: dashboard regen failed: {e}", file=sys.stderr)
+
+    old_text = f"{old_owner} (assumed)" if old_assumed else old_owner
+    print(f"owner {args.name}: {old_text} -> {args.owner}")
+    return 0
+
+
 def cmd_dashboard(args):
     dash = _dashboard_module()
     out = dash.generate(root=args.root, loopconf_parse=loopconf.parse, schedule_parse=schedule.parse)
@@ -1278,6 +1365,14 @@ def _cmd_import_apply(args):
         )
         return 2
 
+    owner = args.owner or loopconf.DEFAULT_OWNER
+    if not loopconf.NAME_RE.match(owner):
+        print(
+            f"invalid owner {owner!r}: must match ^[a-z][a-z0-9-]{{1,40}}$",
+            file=sys.stderr,
+        )
+        return 2
+
     dest_dir = os.path.join(args.root, args.from_dir, name)
     if os.path.exists(dest_dir) and not args.overwrite:
         print(
@@ -1305,7 +1400,7 @@ def _cmd_import_apply(args):
         return 1
 
     try:
-        written = skill_import.apply(skill, analysis, answers, dest_dir)
+        written = skill_import.apply(skill, analysis, answers, dest_dir, owner=owner)
     except skill_import.SkillApplyError as e:
         print(str(e), file=sys.stderr)
         return 1
@@ -1437,6 +1532,7 @@ def build_parser():
     new_p.add_argument("name")
     new_p.add_argument("--type", dest="type_", default="agent", choices=["agent", "watchdog"])
     new_p.add_argument("--engine", default="codex", choices=["codex", "claude"])
+    new_p.add_argument("--owner", default=None)
 
     validate_p = sub.add_parser("validate", parents=[common_sub])
     validate_p.add_argument("name", nargs="?")
@@ -1448,6 +1544,7 @@ def build_parser():
 
     list_p = sub.add_parser("list", parents=[common_sub])
     list_p.add_argument("--tag", default=None)
+    list_p.add_argument("--owner", default=None)
 
     status_p = sub.add_parser("status", parents=[common_sub])
     status_p.add_argument("name", nargs="?")
@@ -1468,6 +1565,10 @@ def build_parser():
     set_schedule_p.add_argument("name")
     set_schedule_p.add_argument("spec")
 
+    set_owner_p = sub.add_parser("set-owner", parents=[common_sub])
+    set_owner_p.add_argument("name")
+    set_owner_p.add_argument("owner")
+
     sub.add_parser("dashboard", parents=[common_sub])
 
     # `serve` takes the no-`--from` flavor (rationale in `_common_parser`).
@@ -1487,6 +1588,7 @@ def build_parser():
     import_group.add_argument("--apply", action="store_true")
     import_p.add_argument("--answers", default=None)
     import_p.add_argument("--name", default=None)
+    import_p.add_argument("--owner", default=None)
     import_p.add_argument("--overwrite", action="store_true")
 
     for verb in ("ack", "dismiss", "snooze", "reopen"):
@@ -1540,6 +1642,7 @@ def main(argv=None):
         "pause": cmd_pause,
         "resume": cmd_resume,
         "set-schedule": cmd_set_schedule,
+        "set-owner": cmd_set_owner,
         "dashboard": cmd_dashboard,
         "serve": cmd_serve,
         "findings": cmd_findings,

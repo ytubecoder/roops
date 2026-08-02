@@ -467,6 +467,7 @@ Python, and sourcing arbitrary files is a code-execution footgun):
 |---|---|---|---|---|
 | `name` | yes | `^[a-z][a-z0-9-]{1,40}$` | — | must equal the directory name |
 | `description` | yes | string | — | one line, shown on the dashboard |
+| `owner` | no* | `^[a-z][a-z0-9-]{1,40}$` | — (resolved `loops`, flagged assumed) | B-17 (2026-08-03): the project/process this loop belongs to. *Required-but-assumed: absence is NEVER a hard failure; every surface resolves it via `loopconf.resolve_owner()` (below). A present-but-malformed value IS a parse error like any field. |
 | `type` | yes | `agent` \| `watchdog` | — | watchdog ⇒ `precheck.sh` required |
 | `engine` | yes | `codex` \| `claude` | — | must have `engines/<engine>.sh` |
 | `model` | no | string | engine default | passed through as `MODEL` |
@@ -485,6 +486,18 @@ Python, and sourcing arbitrary files is a code-execution footgun):
 | `remote_mutation_justification` | cond | string | — | **required** when `perm_remote_mutation != none` |
 | `notes` | no | string | — | free text |
 | `tags` | no | comma-separated, each `^[a-z][a-z0-9:_-]{1,40}$`, deduped order-preserving, max 8 | — | grouping/filtering only; exact-match filter (Amendment 2 — 2026-07-30) |
+
+**Owner resolution (B-17 — 2026-08-03).** `bin/loopconf.py` exports `DEFAULT_OWNER = "loops"` and
+`resolve_owner(conf) -> (owner, assumed)`: an explicit owner passes through (`assumed=False`); a
+missing one resolves to `DEFAULT_OWNER` (`assumed=True`). This is the ONLY implementation of the
+rule — `loopctl` calls it directly; `dashboard/generate.py` carries a lockstep mirror (it must run
+against roots where `bin/loopconf.py` doesn't exist — its lazy-seam doctrine) pinned by a drift
+test in `tests/test_dashboard.py`, the same canonical-copy pattern as the §12 token blocks.
+Owner is a label, not a path: nothing verifies it against the filesystem (portability), and no
+`loop_events` row records owner changes — `loops.d/` is git-tracked; git history is the audit
+trail (same as `set-schedule`). `loopctl new` and `import --apply` always stamp an explicit
+`owner=` (default `DEFAULT_OWNER`, `--owner` flag on both), so tooling-scaffolded loops never
+land assumed; `loopctl validate` surfaces assumed owners as non-fatal notices (§8).
 
 ### 5.1 Schedule grammar
 | form | meaning | launchd | expected interval (staleness) |
@@ -685,17 +698,25 @@ claude -p --output-format json --json-schema "$(cat "$SCHEMA_FILE")" \
 loopctl                                                               # (Amendment 2 — 2026-07-30) bare, no verb: same
                                                                       #   as `status` — leading fleet line + per-loop
                                                                       #   table; exit 0 (content-first, not usage)
-loopctl new <name> [--type agent|watchdog] [--engine codex|claude]   # scaffold from templates
-loopctl validate [<name>|--all]                                      # §5 + §5.2 checks; exit 1 on any fail
+loopctl new <name> [--type agent|watchdog] [--engine codex|claude]   # scaffold from templates; --owner stamps an
+    [--owner OWNER]                                                  #   explicit owner= (default `loops`; B-17)
+loopctl validate [<name>|--all]                                      # §5 + §5.2 checks; exit 1 on any fail. B-17:
+                                                                      #   assumed owner → non-fatal `note:` line
+                                                                      #   (table) / `notices` list (--json rows are
+                                                                      #   now {ok, errors, notices}); notices never
+                                                                      #   touch the exit code
 loopctl run <name> [--trigger manual]                                # foreground; streams progress
-loopctl list [--tag TAG]                                             # table: name, type, engine, schedule, enabled,
-                                                                      #   installed?, tags (--tag: exact-match filter,
-                                                                      #   Amendment 2 — 2026-07-30); 0 loops prints
+loopctl list [--tag TAG] [--owner OWNER]                             # table: name, owner, type, engine, schedule,
+                                                                      #   enabled, installed?, tags (--tag: exact-match
+                                                                      #   filter, Amendment 2 — 2026-07-30; --owner:
+                                                                      #   exact match on the RESOLVED owner, B-17;
+                                                                      #   filters compose); 0 loops prints
                                                                       #   "0 loops (<from-dir> empty)" (Amendment 2);
-                                                                      #   a non-empty fleet with zero --tag matches
-                                                                      #   prints "0 loops matching --tag TAG (N loops
-                                                                      #   under <from-dir>)" instead — never the
-                                                                      #   genuinely-empty message (fix round 3)
+                                                                      #   a non-empty fleet with zero filter matches
+                                                                      #   prints "0 loops matching <active filters>
+                                                                      #   (N loops under <from-dir>)" instead — never
+                                                                      #   the genuinely-empty message (fix round 3;
+                                                                      #   B-17 extends it to name every active filter)
 loopctl status [<name>]                                              # leading "fleet: N loops · ok X · warn Y ·
                                                                       #   alert Z · needs_attention W · spend7d $S"
                                                                       #   line (Amendment 2 — 2026-07-30), then last
@@ -704,6 +725,7 @@ loopctl install <name>                                               # generate 
 loopctl uninstall <name>                                             # bootout + remove plist
 loopctl pause <name> / resume <name>                                 # sets enabled= and bootout/bootstrap
 loopctl set-schedule <name> <spec>                                   # §5.1-validate; rewrite conf; re-render+reload plist iff installed; NEVER kickstart; best-effort dashboard regen
+loopctl set-owner <name> <owner>                                     # B-17: owner-grammar-validate BEFORE any write; rewrite conf key; best-effort dashboard regen; no launchd work (owner isn't in the plist), no loop_events row
 loopctl dashboard                                                    # regenerate + print path
 loopctl serve [--port PORT]                                          # local console (§13), default port 8929
 loopctl findings <loop>                                              # open findings: id, severity, age, times_seen, disposition
@@ -713,7 +735,7 @@ loopctl snooze <loop> <finding_id> --until YYYY-MM-DD                #   --until
 loopctl reopen <loop> <finding_id>
 loopctl import <skill-path> --analyze [--json]                       # Amendment 2 — 2026-07-30:
 loopctl import <skill-path> --apply [--answers F] [--name N]         #   static gap analysis of an
-    [--overwrite]                                                    #   existing Agent Skill /
+    [--owner OWNER] [--overwrite]                                    #   existing Agent Skill /
                                                                       #   scaffold a loop from it —
                                                                       #   see docs/SKILL_IMPORT.md
 ```
@@ -876,7 +898,10 @@ itself. `validate` records no event, per the audit-trail semantics in §3.
 **Tags + provenance in JSON output (Amendment 2 — 2026-07-30):** `list --json` and `status --json`
 rows each gain `"tags": [...]` (from `loop.conf`'s `tags=`, `conf.get("tags") or []`). `list --tag T`
 filters rows to an exact match against a row's `tags` list (not a substring match — `--tag project`
-does not match a tag of `project:x`). `status --json` rows additionally gain `"provenance"`: the
+does not match a tag of `project:x`). **(B-17 — 2026-08-03)** the same rows additionally gain
+`"owner"` (resolved, never null) and `"owner_assumed"` (bool), both from
+`loopconf.resolve_owner()`; `list --owner X` exact-matches the RESOLVED owner (assumed rows match
+`loops`) and composes with `--tag`. `status --json` rows additionally gain `"provenance"`: the
 most recent `created` or `imported` event for the loop (`db.py query loop-events --loop L --events
 created,imported --limit 1` — the events filter, not a client-side scan of a limited row set, so a
 loop's founding event is never lost behind a large number of later `paused`/`resumed`/etc. events),
@@ -1007,6 +1032,13 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
 
 - **Global view:** one row per loop — precedence-resolved status light (§4.3), headline, last run
   (relative + absolute), schedule + best-effort next run, 7-day token spend, link to latest report.
+- **Owner (B-17 — 2026-08-03):** each row shows an owner chip (主 + resolved owner) in the summary
+  tier; assumed owners render dimmed/dashed with a title hint. Every `.loop-row` carries
+  `data-owner="<resolved>"` (always emitted, like `data-tags`). The filter bar always renders an
+  owner `<select>` (the tag select stays conditional on tags existing); one client-side function
+  applies owner ∧ tag. Clicking the chip copies `loopctl set-owner <loop> <owner>` to the
+  clipboard (inline JS, clipboard-only) — the page's owner-edit affordance; the page itself still
+  mutates nothing and fetches nothing.
 - **Top strip:** fleet counts by status, `needs_attention` count, spend today / 7d, last regen time.
 - **Stale detection:** a loop overdue by > 1.5 × its `expected_interval_s` (§5.1) is flagged
   `stale` and counts toward `needs_attention`. `manual` loops are exempt.

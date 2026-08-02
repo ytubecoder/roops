@@ -1132,6 +1132,7 @@ _LOOP_CONF_TEMPLATE = """\
 # permissive defaults — uncomment and edit only what this loop needs.
 name=__NAME__
 description="TODO: one-line description of what this loop does"
+owner=__OWNER__
 type=__TYPE__
 engine=__ENGINE__
 # model=
@@ -1552,6 +1553,7 @@ def _render_loop_conf(
     answers: dict,
     blocked: bool,
     acknowledge_blocked: bool,
+    owner: str = None,
 ) -> str:
     """loop.conf: name/description/type/engine from analysis+rubric,
     schedule from `q4_cadence`, tags from the optional top-level
@@ -1609,6 +1611,14 @@ def _render_loop_conf(
         "# deliberately if this loop genuinely needs more (docs/LOOP_AUTHORING.md §4).",
         f"name={name}",
         f"description={_quote_conf_value(description, 'description')}",
+    ]
+    # B-17: owner is stamped only when the caller resolved one (loopctl's
+    # --owner flag, default DEFAULT_OWNER). A direct apply() caller passing
+    # none scaffolds an ownerless conf, which parses fine and resolves as
+    # assumed — the CLI path always stamps.
+    if owner:
+        lines.append(f"owner={owner}")
+    lines += [
         f"type={loop_type}",
         f"engine={engine}",
     ]
@@ -1688,7 +1698,9 @@ def _render_dashboard_json(rubric: dict, answers: dict) -> str:
     return '{"panels": []}\n'
 
 
-def apply(skill: dict, analysis: dict, answers: dict, dest_dir: str) -> list:
+def apply(
+    skill: dict, analysis: dict, answers: dict, dest_dir: str, owner: str = None
+) -> list:
     """Scaffold a loop at `dest_dir` from a parsed `skill`, its `analysis`
     (`analyze(skill)`'s output), and a filled-in `answers.json` dict
     (docs/SKILL_IMPORT.md §7). Returns the list of paths written. Never
@@ -1764,7 +1776,7 @@ def apply(skill: dict, analysis: dict, answers: dict, dest_dir: str) -> list:
         (
             "loop.conf",
             _render_loop_conf(
-                name, analysis, rubric, answers, blocked, acknowledge_blocked
+                name, analysis, rubric, answers, blocked, acknowledge_blocked, owner
             ),
             False,
         ),

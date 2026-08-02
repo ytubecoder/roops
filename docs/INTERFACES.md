@@ -1261,6 +1261,8 @@ never this module. No daemon mode, no LaunchAgent in v1.
 | `GET /api/state` | `{loops:[{name, schedule, enabled, plist_present, loaded}]}` |
 | `POST /api/loops/<name>/rounds {on}` | resume/pause (sets `enabled=` + bootstrap/bootout). `on` must be a real JSON boolean, else 400. 409 if no plist — install/uninstall stay CLI-only (supervised verification gate, §8.1). |
 | `POST /api/loops/<name>/schedule {spec}` | `set-schedule`: §5.1-validate, rewrite conf, re-render plist, bootout+bootstrap iff loaded. NEVER kickstart. `spec` must be a JSON string, else 400; 400 on bad grammar. **`spec: "manual"` is refused 400 by the console** even though it is valid §5.1 grammar: `_apply_schedule` implements manual as an UNINSTALL (bootout + remove the plist), and install/uninstall stay CLI-only (§8.1). The refusal is console-layer only — `loopctl set-schedule <name> manual` is unchanged. |
+| `POST /api/loops/<name>/run {}` | B-13 (§13.3): start ONE supervised run (`loopctl run <name>`) in a background worker. 202 `{ok:true, state:<run-status dict>}` snapshot; 404 unknown loop; 409 `{error, loop, started_at}` while the console-wide job slot is busy; body must be a JSON object (uniform 400). **POST only — any other method is a route MISS (generic 404), never matched-then-refused**: §13.1's Content-Type gate binds only POST, so a GET-matched run route would be a plain cross-origin CSRF that fires real runs. **No installed/enabled/schedule gate** — firing a paused or never-installed loop from the page is a deliberate human act (the whole point of B-13; contrast `rounds`' 409-without-plist). |
+| `GET /api/run/status` | bare run-status dict `{running, loop, started_at, finished_at, exit_code, ok, error}` (timestamps ISO-8601 UTC). Idle = `running:false` + nulls; the terminal snapshot persists across polls until the next job RESETS it (`loop` = new name, other fields back to null mid-flight). GET only — POST is a route miss. |
 
 **Report pages are sandboxed off this origin.** Report HTML is loop/model-derived content and
 the promotion gate (§12) blocks only EXTERNAL-fetch markup — an inline `<script>` is allowed.
@@ -1331,3 +1333,42 @@ rule — without it `.con-cell`/`.sp-form`'s own `display` values un-hide the co
 file-opened page shows toggles it cannot actuate. §10's hermeticity binds
 `dashboard/generate.py` only; the console itself is trusted harness code and is not subject to
 that rule.
+
+The run-now control (`con-run`, B-13) rides the same gate: inert hidden markup inside
+`.con-cell`, rendered for EVERY loop (never `disabled` on account of install state). On the
+`api/state` success branch the page fetches `api/run/status` once and reflects any in-flight
+job (all `con-run` buttons disabled, the running loop's marked). The click branch calls
+`ev.preventDefault()` first (the controls sit inside `<summary>` — an ungated click toggles
+the garden accordion), POSTs through the shared `post()` normalizer, and gates
+`location.reload()` on the success path only: an error re-enables the button and surfaces via
+the existing alert path, and polling (`api/run/status`, ~3s) reloads only once `running` flips
+false.
+
+### 13.3 Run trigger (`/api/loops/<name>/run` + `/api/run/status`) — B-13, added 2026-08-03
+
+The ONLY console path that fires a run — `rounds` and `schedule` are unchanged and
+set-schedule's "NEVER kickstart" rule stands. Contract:
+
+- **Worker.** The POST handler never blocks on the run: it starts a
+  `threading.Thread(daemon=True)` whose whole body is `try/finally`; the `finally`
+  publishes the terminal status and releases the slot under the same status lock, so no
+  exception path can strand `running:true` (the dmp_regen :180 lesson) and a reader can
+  never observe a torn terminal snapshot. The worker calls the existing
+  `_loopctl(root, ["run", name])` — one code path for CLI and console, `--` separator
+  preserved — records the exit code VERBATIM (`ok` iff 0), and never reinterprets run
+  results: `state/` and the regenerated dashboard stay authoritative.
+- **Error field.** On non-zero exit, `error` carries the stderr TAIL bounded at 4096
+  characters (the end survives, the head drops); `null` on success.
+- **Regen.** After the subprocess exits — regardless of exit code — the worker runs
+  `_regen_dashboard(root)` best-effort: a regen failure warns on stderr and never alters
+  the recorded outcome or the already-sent response.
+- **One job console-wide.** A single non-blocking `threading.Lock`; a busy POST for ANY
+  loop is 409. Per-loop overlap with scheduled/CLI runs stays the runner's fcntl lock's
+  concern (`skipped-overlap`). Two consoles on different ports have independent slots —
+  documented, not defended.
+- **Console killed mid-run.** The daemon thread dies with the process but the `loopctl`
+  child keeps running and records normally; only the status dict is lost, and the next
+  console boot reports idle. Accepted for v1.
+- **Security.** §13.1's Host/Content-Type gate applies unchanged; the console still emits
+  no `Access-Control-*` headers; `<name>` stays `[A-Za-z0-9_-]+`; the status GET leaks
+  nothing beyond `/api/state`'s existing confidentiality class.

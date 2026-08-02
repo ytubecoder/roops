@@ -112,9 +112,15 @@ produce the same checks, so the rows are redundant.
 
 ## The next build, if phase 1 still isn't met: a "run everything" button
 
-No manual trigger exists in the console today (verified — no loop-run endpoint, no button).
-`/ads/actions` currently just *tells* the reader to run `loopctl run <loop>` by hand
-(`templates/ads_actions.html:88`).
+> **Update 2026-08-03 (B-13):** the ROOPS console now has a per-loop run-now trigger —
+> `POST /api/loops/<name>/run` + a 走 button on the garden dashboard (INTERFACES §13.3).
+> Each ads loop can be fired on demand from `loopctl serve`, no launchd needed. The
+> growth-console "run everything" button below remains a separate, unbuilt thing; if it
+> gets built, it should call the roops console's endpoint rather than shelling out.
+
+No manual trigger existed in the growth console when this was written (verified — no
+loop-run endpoint, no button). `/ads/actions` currently just *tells* the reader to run
+`loopctl run <loop>` by hand (`templates/ads_actions.html:88`).
 
 **Copy the DMP/CRO pattern — it is exactly the shape he asked to mirror:**
 - `POST /api/dmp/regenerate` → `dmp_regen.start(root)`, returns immediately

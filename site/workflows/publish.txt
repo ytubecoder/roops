@@ -36,7 +36,10 @@
    - If fails: pull/rebase, resolve, re-commit
 
 5. Publish to the Pages host repo
-   - Run: cp ~/projects/loops/site/index.html ~/projects/loops/site/ui.html ~/projects/ytubecoder.github.io/roops/
+   - NOTE (2026-08-03): roops/ui.html is OWNED BY THE KAGAMI LOOP (generated shape-mirror
+     of the live garden; refreshed via kagami's PR, merge = approval). NEVER copy
+     site/ui.html over it — that file is the retired concept page, kept as an archive.
+   - Run: cp ~/projects/loops/site/index.html ~/projects/ytubecoder.github.io/roops/
    - Run: mkdir -p ~/projects/ytubecoder.github.io/roops/brandkit && cp ~/projects/loops/site/brandkit/index.html ~/projects/ytubecoder.github.io/roops/brandkit/
    - Run: cd ~/projects/ytubecoder.github.io && git add roops/ && git commit -m "publish roops site" && git push
    - Expected outcome: push accepted; Pages legacy build starts automatically

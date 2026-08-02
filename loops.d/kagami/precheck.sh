@@ -16,13 +16,13 @@ case "$AUDIT_PATH" in
   *) echo "WARN: could not resolve login-shell PATH; using inherited PATH" >&2 ;;
 esac
 
-LIVE_URL="https://ytubecoder.github.io/roops/mock-garden.html"
+LIVE_URL="https://ytubecoder.github.io/roops/ui.html"
 PAGES_REPO="ytubecoder/ytubecoder.github.io"
 BRANCH="roops/mock-garden-refresh"
 PAT_FILE="$HOME/.config/roops-kagami/pat"
 MOCK_PATH="/Users/niwa/roops"
 FIX="$LOOPS_ROOT/state/kagami-fixture"
-ART="$OUT_DIR/mock-garden.html"
+ART="$OUT_DIR/ui.html"
 
 CHECKS_OUT=""
 TESTS_FAILED=0
@@ -44,7 +44,7 @@ PY
 
 # --- check: regenerate (fixture -> real generator, pinned clock, path rewrite) ---
 REGEN_OK=1
-if PINNED_NOW=$(python3 "$LOOPS_ROOT/loops.d/kagami/fixture/build_root.py" "$FIX") \
+if PINNED_NOW=$(python3 "$LOOPS_ROOT/loops.d/kagami/fixture/build_root.py" "$FIX" --source "$LOOPS_ROOT") \
    && python3 "$LOOPS_ROOT/dashboard/generate.py" --root "$FIX" \
         --now "$PINNED_NOW" --out "$ART" >/dev/null; then
   python3 - "$ART" "$FIX" "$MOCK_PATH" <<'PY'
@@ -132,8 +132,9 @@ if [ "$DRIFT" = yes ] && [ "$TESTS_FAILED" = 0 ]; then
   if PR_ERR=$( { git clone --quiet --depth 1 "$CLONE_URL" "$WORK" \
       && git -C "$WORK" checkout --quiet -B "$BRANCH" \
       && mkdir -p "$WORK/roops" \
-      && cp "$ART" "$WORK/roops/mock-garden.html" \
-      && git -C "$WORK" add roops/mock-garden.html; } 2>&1 ) \
+      && cp "$ART" "$WORK/roops/ui.html" \
+      && git -C "$WORK" rm -q --ignore-unmatch roops/mock-garden.html \
+      && git -C "$WORK" add roops/ui.html; } 2>&1 ) \
       && git -C "$WORK" diff --cached --quiet; then
     # regenerated artifact == repo default branch: the refresh is already merged
     # and only the Pages deploy lags. Nothing to propose.
@@ -141,7 +142,7 @@ if [ "$DRIFT" = yes ] && [ "$TESTS_FAILED" = 0 ]; then
   elif [ -d "$WORK/.git" ] \
       && PR_ERR=$( { git -C "$WORK" -c user.name="roops mirror" \
            -c user.email="roops-mirror@users.noreply.github.com" \
-           commit --quiet -m "roops: refresh mock garden (mirror drift)" \
+           commit --quiet -m "roops: refresh ui mockup (mirror drift)" \
       && git -C "$WORK" push --quiet --force origin "$BRANCH"; } 2>&1 ); then
     EXISTING=$(gh pr list -R "$PAGES_REPO" --head "$BRANCH" --state open \
       --json url -q '.[0].url' 2>/dev/null || true)
@@ -150,9 +151,9 @@ if [ "$DRIFT" = yes ] && [ "$TESTS_FAILED" = 0 ]; then
     else
       BODY="$OUT_DIR/pr-body.md"
       {
-        echo "Automated refresh of the public mock garden: the interface changed"
-        echo "and the published mirror no longer matches the generator's output"
-        echo "over the pinned mock fixture. Merging publishes the refresh."
+        echo "Automated refresh of the public ui mockup: the interface or fleet"
+        echo "shape changed and the published mirror no longer matches the real"
+        echo "garden's current rendering over mock data. Merging publishes it."
         echo
         echo "| check | result |"
         echo "|---|---|"
@@ -164,7 +165,7 @@ if [ "$DRIFT" = yes ] && [ "$TESTS_FAILED" = 0 ]; then
         echo "merge to approve publication — the loop never merges."
       } > "$BODY"
       if PR_URL=$(gh pr create -R "$PAGES_REPO" --head "$BRANCH" \
-          --title "roops: refresh mock garden" --body-file "$BODY" 2>&1); then
+          --title "roops: refresh ui mockup" --body-file "$BODY" 2>&1); then
         PR_STATE=opened
       else
         PR_STATE=failed PR_NOTE="gh pr create: $(printf '%s' "$PR_URL" | tail -1)"

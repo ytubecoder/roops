@@ -1,11 +1,14 @@
-"""kagami fixture + drift-signal invariants (hermetic, no network).
+"""kagami shape-mirror invariants (hermetic, no network).
 
-The loop's drift detection is `hash(regenerate(fixture, pinned_now)) != hash(live)`,
-which is only sound if regeneration is byte-deterministic and the published artifact
-carries no real-world names or paths after the precheck rewrite. Pin both here.
+The loop's drift detection is `hash(regenerate(mirror(fleet), pinned_now)) !=
+hash(live)`, which is only sound if mirroring + regeneration is byte-deterministic
+for a fixed fleet shape, and no string from the source fleet survives into the
+artifact. Pin both against a SYNTHETIC source root (never the live fleet).
 """
 
+import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -18,21 +21,107 @@ GENERATE = os.path.join(REPO, "dashboard", "generate.py")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from html_selfcontained import external_subresources
 
+SOURCE_LOOPS = ("zz-secret-alpha", "zz-secret-beta")
 
-class KagamiFixture(unittest.TestCase):
+
+def build_source_root(base):
+    """A tiny synthetic 'real fleet': two loops, one warn finding, one failure."""
+    src = os.path.join(base, "source-root")
+    for sub in ("loops.d", "state", "reports", "launchd"):
+        os.makedirs(os.path.join(src, sub))
+    for name, extra in (
+        (SOURCE_LOOPS[0], "schedule=daily:06:10\n"),
+        (SOURCE_LOOPS[1], "schedule=interval:30m\ntype=watchdog\n"),
+    ):
+        d = os.path.join(src, "loops.d", name)
+        os.makedirs(d)
+        with open(os.path.join(d, "loop.conf"), "w") as f:
+            f.write(
+                f'name={name}\ndescription="internal secret job"\n'
+                f"owner=secret-team\ntype=agent\nengine=codex\n{extra}"
+            )
+    with open(
+        os.path.join(src, "loops.d", SOURCE_LOOPS[0], "dashboard.json"), "w"
+    ) as f:
+        json.dump(
+            {
+                "panels": [
+                    {"title": "secret metric", "metric": "secret.n", "type": "number"}
+                ]
+            },
+            f,
+        )
+    with open(
+        os.path.join(src, "launchd", f"com.loops.{SOURCE_LOOPS[0]}.plist"), "w"
+    ) as f:
+        f.write("<plist/>\n")
+    subprocess.run(
+        [sys.executable, os.path.join(REPO, "bin", "db.py"), "init", "--root", src],
+        check=True,
+        capture_output=True,
+    )
+    conn = sqlite3.connect(os.path.join(src, "state", "loops.sqlite"))
+    conn.execute(
+        "INSERT INTO runs (run_id, loop_name, started_at, runner_status, "
+        "loop_status, effective_status, headline) VALUES (?,?,?,?,?,?,?)",
+        (
+            "r1",
+            SOURCE_LOOPS[0],
+            "2026-08-01T06:11:00Z",
+            "completed",
+            "warn",
+            "warn",
+            "secret business headline",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO runs (run_id, loop_name, started_at, runner_status) "
+        "VALUES (?,?,?,?)",
+        ("r2", SOURCE_LOOPS[1], "2026-08-01T07:00:00Z", "engine-failed"),
+    )
+    conn.execute(
+        "INSERT INTO findings (loop_name, finding_id, title, severity, "
+        "first_seen_run, first_seen_at, last_seen_run, last_seen_at, times_seen) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            SOURCE_LOOPS[0],
+            "secret-client:overspend",
+            "secret client overspending",
+            "warn",
+            "r1",
+            "2026-07-30T06:11:00Z",
+            "r1",
+            "2026-08-01T06:11:00Z",
+            3,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    d = os.path.join(src, "reports", SOURCE_LOOPS[0])
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "latest.json"), "w") as f:
+        json.dump(
+            {"status": "warn", "headline": "secret business headline", "findings": []},
+            f,
+        )
+    return src
+
+
+class KagamiMirror(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        cls.fix = os.path.join(cls.tmp.name, "fixture-root")
-        out = subprocess.run(
-            [sys.executable, BUILDER, cls.fix],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        cls.pinned_now = out.stdout.strip()
+        cls.source = build_source_root(cls.tmp.name)
+        cls.fix = os.path.join(cls.tmp.name, "mirror-root")
 
-        def gen(dest):
+        def build_and_render(dest_html):
+            out = subprocess.run(
+                [sys.executable, BUILDER, cls.fix, "--source", cls.source],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            pinned = out.stdout.strip()
             subprocess.run(
                 [
                     sys.executable,
@@ -40,22 +129,23 @@ class KagamiFixture(unittest.TestCase):
                     "--root",
                     cls.fix,
                     "--now",
-                    cls.pinned_now,
+                    pinned,
                     "--out",
-                    dest,
+                    dest_html,
                 ],
                 check=True,
                 capture_output=True,
             )
-            with open(dest, encoding="utf-8") as f:
-                return f.read()
+            with open(dest_html, encoding="utf-8") as f:
+                html = f.read()
+            for real in {cls.fix, os.path.realpath(cls.fix)}:
+                html = html.replace(real, "/Users/niwa/roops")
+            return pinned, html
 
-        cls.html_a = gen(os.path.join(cls.tmp.name, "a.html"))
-        cls.html_b = gen(os.path.join(cls.tmp.name, "b.html"))
-        # the precheck rewrite, replicated
-        cls.rewritten = cls.html_a
-        for real in {cls.fix, os.path.realpath(cls.fix)}:
-            cls.rewritten = cls.rewritten.replace(real, "/Users/niwa/roops")
+        cls.pinned_now, cls.html_a = build_and_render(
+            os.path.join(cls.tmp.name, "a.html")
+        )
+        _, cls.html_b = build_and_render(os.path.join(cls.tmp.name, "b.html"))
 
     @classmethod
     def tearDownClass(cls):
@@ -64,29 +154,22 @@ class KagamiFixture(unittest.TestCase):
     def test_builder_prints_pinned_now(self):
         self.assertRegex(self.pinned_now, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
-    def test_regeneration_is_byte_deterministic(self):
+    def test_mirror_is_byte_deterministic(self):
         self.assertEqual(self.html_a, self.html_b)
 
-    def test_rewrite_removes_generating_root_path(self):
-        self.assertIn(self.fix, self.html_a)  # sanity: rewrite has work to do
-        self.assertNotIn(self.fix, self.rewritten)
-        self.assertNotIn(os.path.realpath(self.fix), self.rewritten)
+    def test_row_count_mirrors_source_fleet(self):
+        self.assertEqual(self.html_a.count('class="loop-row'), len(SOURCE_LOOPS))
 
-    def test_no_real_loop_names_after_rewrite(self):
-        real_names = set(os.listdir(os.path.join(REPO, "loops.d")))
-        mock_names = set(os.listdir(os.path.join(self.fix, "loops.d")))
-        self.assertFalse(
-            real_names & mock_names, "fixture must never reuse a real loop name"
-        )
-        for name in real_names:
-            self.assertNotIn(name, self.rewritten)
+    def test_no_source_strings_survive(self):
+        for leak in (*SOURCE_LOOPS, "secret", "zz-"):
+            self.assertNotIn(leak, self.html_a)
+
+    def test_no_real_loop_names_in_artifact(self):
+        for name in os.listdir(os.path.join(REPO, "loops.d")):
+            self.assertNotIn(name, self.html_a.replace("/Users/niwa/roops", ""))
 
     def test_artifact_is_self_contained(self):
-        self.assertEqual(external_subresources(self.rewritten), [])
-
-    def test_mock_fleet_renders(self):
-        for name in ("tls-certs", "dead-links", "smoke-probe", "log-rotate"):
-            self.assertIn(name, self.rewritten)
+        self.assertEqual(external_subresources(self.html_a), [])
 
 
 if __name__ == "__main__":

@@ -1,16 +1,27 @@
 #!/usr/bin/env python3
-"""kagami fixture — builds the pinned mock loops-root the public garden renders from.
+"""kagami shape-mirror — builds the mock loops-root the public ui.html renders from.
 
-Usage: build_root.py DEST   (wipes DEST, rebuilds, prints PINNED_NOW on stdout)
+Usage: build_root.py DEST [--source ROOT]   (wipes DEST, prints PINNED_NOW)
 
-Everything here is deterministic: fixed PINNED_NOW, fixed rows, fixed names. The
-regenerated page therefore changes ONLY when dashboard/generate.py (or pagekit
-tokens) change — that byte-diff is kagami's drift signal. Mock data rules
-(site/workflows/publish.txt): genericized loop names, organic never-round numbers,
-no real loop names / paths / business data. The real-name leak gate in precheck.sh
-is the enforcement backstop; this file is the front line.
+The public mockup must look like the REAL garden does right now, so this builder
+mirrors the real fleet's SHAPE and synthesizes every string and value:
+
+  crosses the boundary : loop count, per-loop type/engine/schedule/enabled,
+                         install state, latest run + statuses, run-history length,
+                         age (bucketed), finding count/severity/times_seen,
+                         panel count/types, report-file presence
+  NEVER crosses        : names (mapped to a generic pool), headlines/titles/details
+                         (templates), metric keys/values, tokens/spend, thresholds,
+                         timestamps (rebased onto PINNED_NOW), paths, owners
+
+Numbers are seeded from md5(mock-name + field) so output is deterministic for a
+given fleet shape: the page changes only when the UI code or the fleet's coarse
+shape changes — that byte-diff is kagami's drift signal. The precheck name-leak
+gate remains the backstop behind this file.
 """
 
+import argparse
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -22,237 +33,188 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 PINNED_NOW = datetime(2026, 8, 9, 21, 47, 0, tzinfo=timezone.utc)
 
+NAME_POOL = [
+    "tls-certs",
+    "dead-links",
+    "deps-drift",
+    "backup-verify",
+    "smoke-probe",
+    "log-rotate",
+    "cert-renew",
+    "queue-depth",
+    "mail-relay",
+    "disk-usage",
+    "cron-audit",
+    "dns-health",
+    "cache-warm",
+    "quota-watch",
+    "mirror-sync",
+    "uptime-probe",
+]
+OWNER_POOL = ["infra", "ops", "docs", "web", "data", "core"]
+
+HEADLINES = {
+    "ok": "all {n} targets clear",
+    "warn": "{n} items need a look",
+    "alert": "{n} checks failing",
+}
+FINDING_TITLES = [
+    "target drifted from its recorded baseline",
+    "response slower than the watched threshold",
+    "expected artifact missing from last sweep",
+    "stale entry survived past its horizon",
+    "count moved outside the tracked band",
+    "endpoint refused connection on last probe",
+]
+PANEL_TITLES = ["volume", "flagged", "backlog", "coverage", "lag", "burn"]
+
 
 def iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def ago(**kw):
-    return PINNED_NOW - timedelta(**kw)
+def seeded(name, field, lo, hi):
+    """Deterministic pseudo-value in [lo, hi] — never derived from real data."""
+    h = int.from_bytes(hashlib.md5(f"{name}:{field}".encode()).digest()[:4], "big")
+    return lo + h % (hi - lo + 1)
 
 
-# name: (description, owner, type, engine, schedule, installed, enabled)
-LOOPS = {
-    "tls-certs": (
-        "certificate inventory — expiry horizon across served domains",
-        "infra",
-        "agent",
-        "codex",
-        "daily:06:10",
-        True,
-        True,
-    ),
-    "dead-links": (
-        "docs link rot — crawl published docs, report 404s",
-        "docs",
-        "agent",
-        "claude",
-        "daily:07:20",
-        True,
-        True,
-    ),
-    "deps-drift": (
-        "dependency freshness — outdated + security-flagged packages",
-        "infra",
-        "agent",
-        "codex",
-        "weekly:mon:08:30",
-        True,
-        True,
-    ),
-    "backup-verify": (
-        "nightly snapshot verification probe",
-        "ops",
-        "watchdog",
-        "codex",
-        "interval:4h",
-        True,
-        True,
-    ),
-    "smoke-probe": (
-        "staging endpoint reachability probe",
-        "ops",
-        "watchdog",
-        "codex",
-        "interval:30m",
-        True,
-        True,
-    ),
-    "log-rotate": (
-        "archive rotation audit (paused for the season)",
-        "ops",
-        "agent",
-        "codex",
-        "daily:23:50",
-        False,
-        False,
-    ),
-}
-
-DASHBOARDS = {
-    "tls-certs": {
-        "panels": [
-            {
-                "title": "Expiring ≤30d",
-                "metric": "certs.expiring_30d",
-                "type": "number",
-                "unit": "certs",
-                "direction": "higher_is_worse",
-                "thresholds": {"warn": 1, "alert": 3},
-                "missing": "gap",
-            },
-            {
-                "title": "Certs tracked",
-                "metric": "certs.total",
-                "type": "trend",
-                "window_days": 30,
-                "missing": "hold",
-            },
-        ]
-    },
-    "dead-links": {
-        "panels": [
-            {
-                "title": "Broken links",
-                "metric": "links.broken",
-                "type": "number",
-                "unit": "links",
-                "direction": "higher_is_worse",
-                "thresholds": {"warn": 1, "alert": 5},
-                "missing": "gap",
-            }
-        ]
-    },
-    "deps-drift": {
-        "panels": [
-            {
-                "title": "Outdated",
-                "metric": "deps.outdated",
-                "type": "trend",
-                "window_days": 60,
-                "missing": "hold",
-            }
-        ]
-    },
-}
-
-CONTRACTS = {
-    "tls-certs": {
-        "status": "ok",
-        "headline": "34 certs checked — nearest expiry in 41 days",
-        "findings": [],
-        "report_markdown": "# tls-certs\n34 certificates inventoried across 6 served "
-        "domains. Nearest expiry: `edge-cache` in 41 days. No renewals due inside "
-        "the 30-day window.\n",
-    },
-    "dead-links": {
-        "status": "warn",
-        "headline": "2 links rotting in docs",
-        "findings": [
-            {
-                "finding_id": "docs-setup:404",
-                "severity": "warn",
-                "title": "setup guide links a moved install page (404)",
-                "detail": "docs/setup.md → /install/quickstart returns 404; target "
-                "moved during the docs reshuffle. 412 links crawled.",
-            },
-            {
-                "finding_id": "api-ref:404",
-                "severity": "info",
-                "title": "api reference footnote target gone",
-                "detail": "single footnote link in api-ref.md returns 404.",
-            },
-        ],
-        "report_markdown": "# dead-links\n412 links crawled, 2 broken. The setup-guide "
-        "break is user-facing; the api-ref one is a footnote.\n",
-    },
-    "deps-drift": {
-        "status": "ok",
-        "headline": "7 packages behind — none security-flagged",
-        "findings": [],
-        "report_markdown": "# deps-drift\n7 of 143 packages have newer releases; none "
-        "carry security advisories. Largest lag: `imgtool` at 3 minors.\n",
-    },
-    "smoke-probe": {
-        "status": "alert",
-        "headline": "staging endpoint unreachable — 2 consecutive probes",
-        "findings": [
-            {
-                "finding_id": "target:unreachable",
-                "severity": "alert",
-                "title": "staging endpoint refused connection twice running",
-                "detail": "probe at :17 and :47 both refused; last success 61 minutes "
-                "ago. Diagnosis engine suspects the reverse proxy restart loop.",
-            }
-        ],
-        "report_markdown": "# smoke-probe\nTwo consecutive refused probes. The window "
-        "matches the proxy's crash-loop signature.\n",
-    },
-}
+def bucket_age(seconds):
+    if seconds < 0:
+        return 0
+    if seconds < 172800:
+        return round(seconds / 3600.0) * 3600
+    return round(seconds / 86400.0) * 86400
 
 
-def write_conf(root, name):
-    desc, owner, type_, engine, schedule, _inst, enabled = LOOPS[name]
-    d = root / "loops.d" / name
-    d.mkdir(parents=True)
-    lines = [
-        f"name={name}",
-        f'description="{desc}"',
-        f"owner={owner}",
-        f"type={type_}",
-        f"engine={engine}",
-        f"schedule={schedule}",
-        "timeout_s=900",
-    ]
-    if not enabled:
-        lines.append("enabled=false")
-    (d / "loop.conf").write_text("\n".join(lines) + "\n")
-    if name in DASHBOARDS:
-        (d / "dashboard.json").write_text(json.dumps(DASHBOARDS[name]))
+def cadence_seconds(schedule):
+    s = (schedule or "").strip()
+    if s.startswith("interval:"):
+        v = s.split(":", 1)[1]
+        mult = {"m": 60, "h": 3600, "d": 86400}.get(v[-1:], 60)
+        try:
+            return int(v[:-1]) * mult
+        except ValueError:
+            return 86400
+    if s.startswith("weekly:"):
+        return 7 * 86400
+    if s.startswith("monthly:"):
+        return 30 * 86400
+    if s.startswith("times:"):
+        return 86400 // max(1, s.count(",") + 1)
+    return 86400
 
 
-def add_run(
-    cur,
-    run_id,
-    loop,
-    started,
-    status,
-    headline,
-    engine,
-    tokens=None,
-    cost=None,
-    eff=None,
-):
-    cur.execute(
-        "INSERT INTO runs (run_id, loop_name, started_at, finished_at, engine, "
-        "trigger, runner_status, loop_status, effective_status, headline, "
-        "tokens_total, cost_usd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            run_id,
-            loop,
-            iso(started),
-            iso(started + timedelta(seconds=64)),
-            engine,
-            "launchd",
-            "completed",
-            status,
-            eff or status,
-            headline,
-            tokens,
-            cost,
-        ),
+def parse_conf(path):
+    conf = {}
+    try:
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            conf[k.strip()] = v.strip().strip('"')
+    except OSError:
+        pass
+    return conf
+
+
+def read_fleet(source):
+    """Read the real fleet's SHAPE (read-only; no string leaves this dict
+    except via explicit mapping)."""
+    fleet = []
+    loops_d = source / "loops.d"
+    names = (
+        sorted(p.name for p in loops_d.iterdir() if (p / "loop.conf").is_file())
+        if loops_d.is_dir()
+        else []
     )
+    conn = None
+    db = source / "state" / "loops.sqlite"
+    if db.is_file():
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
 
+    def q(sql, args):
+        if conn is None:
+            return []
+        try:
+            return conn.execute(sql, args).fetchall()
+        except sqlite3.OperationalError:
+            return []
 
-def metric(cur, run_id, loop, ts, key, num):
-    cur.execute(
-        "INSERT INTO metrics (run_id, loop_name, ts, key, num) VALUES (?,?,?,?,?)",
-        (run_id, loop, iso(ts), key, num),
-    )
+    now_real = datetime.now(timezone.utc)
+    for name in names:
+        conf = parse_conf(loops_d / name / "loop.conf")
+        panels = []
+        try:
+            dj = json.loads((loops_d / name / "dashboard.json").read_text())
+            panels = [str(p.get("type", "number")) for p in dj.get("panels", [])]
+        except (OSError, ValueError):
+            pass
+        latest = q(
+            "SELECT runner_status, loop_status, effective_status, started_at "
+            "FROM runs WHERE loop_name=? ORDER BY started_at DESC LIMIT 1",
+            (name,),
+        )
+        age = None
+        if latest and latest[0][3]:
+            try:
+                started = datetime.fromisoformat(
+                    str(latest[0][3]).replace("Z", "+00:00")
+                )
+                age = max(0, int((now_real - started).total_seconds()))
+            except ValueError:
+                age = None
+        findings = q(
+            "SELECT severity, times_seen FROM findings "
+            "WHERE loop_name=? AND resolved_at IS NULL ORDER BY finding_id",
+            (name,),
+        )
+        hb = q(
+            "SELECT ok FROM heartbeats WHERE loop_name=? ORDER BY ts DESC LIMIT 1",
+            (name,),
+        )
+        fleet.append(
+            {
+                "real_name": name,
+                "type": conf.get("type", "agent"),
+                "engine": conf.get("engine", "codex"),
+                "schedule": conf.get("schedule", "manual"),
+                "enabled": conf.get("enabled", "true").lower() != "false",
+                "owner": conf.get("owner", ""),
+                "installed": (source / "launchd" / f"com.loops.{name}.plist").is_file(),
+                "panels": panels[:4],
+                "runner_status": latest[0][0] if latest else None,
+                "loop_status": latest[0][1] if latest else None,
+                "effective_status": latest[0][2] if latest else None,
+                "age_s": age,
+                "run_count": min(
+                    6,
+                    len(
+                        q("SELECT run_id FROM runs WHERE loop_name=? LIMIT 6", (name,))
+                    ),
+                ),
+                "findings": [(str(sev), int(seen or 1)) for sev, seen in findings],
+                "hb_ok": (hb[0][0] if hb else None),
+                "has_report": (source / "reports" / name / "latest.json").is_file(),
+            }
+        )
+    if conn is not None:
+        conn.close()
+    return fleet
 
 
 def main():
-    dest = Path(sys.argv[1]).resolve()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("dest")
+    ap.add_argument(
+        "--source",
+        default=None,
+        help="real loops root to mirror (default: harness repo root)",
+    )
+    args = ap.parse_args()
+    source = Path(args.source).resolve() if args.source else REPO
+    dest = Path(args.dest).resolve()
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
@@ -261,20 +223,14 @@ def main():
         dest / "bin",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
-    for sub in ("reports", "launchd", "state"):
+    for sub in ("reports", "launchd", "state", "loops.d"):
         (dest / sub).mkdir()
 
-    for name in LOOPS:
-        write_conf(dest, name)
-        installed = LOOPS[name][5]
-        if installed:
-            (dest / "launchd" / f"com.loops.{name}.plist").write_text("<plist/>\n")
-
-    for name, contract in CONTRACTS.items():
-        d = dest / "reports" / name
-        d.mkdir()
-        (d / "latest.json").write_text(json.dumps(contract))
-        (d / "latest.md").write_text(contract["report_markdown"])
+    fleet = read_fleet(source)
+    owner_map = {
+        o: OWNER_POOL[i % len(OWNER_POOL)]
+        for i, o in enumerate(sorted({f["owner"] for f in fleet if f["owner"]}))
+    }
 
     subprocess.run(
         [sys.executable, str(dest / "bin" / "db.py"), "init", "--root", str(dest)],
@@ -284,185 +240,180 @@ def main():
     conn = sqlite3.connect(dest / "state" / "loops.sqlite")
     cur = conn.cursor()
 
-    # tls-certs — six daily runs, ok, gentle cert-count trend
-    for i, total in enumerate([33, 33, 34, 34, 34, 34]):
-        started = ago(days=5 - i, hours=15, minutes=36 - i)
-        rid = f"2026080{4 + i}-0611-tls"
-        add_run(
-            cur,
-            rid,
-            "tls-certs",
-            started,
-            "ok",
-            "34 certs checked — nearest expiry in 41 days",
-            "codex",
-            1873,
-        )
-        metric(cur, rid, "tls-certs", started, "certs.total", total)
-        metric(cur, rid, "tls-certs", started, "certs.expiring_30d", 0)
+    for i, real in enumerate(fleet):
+        name = NAME_POOL[i] if i < len(NAME_POOL) else f"probe-{i + 1:02d}"
+        d = dest / "loops.d" / name
+        d.mkdir()
+        lines = [
+            f"name={name}",
+            f'description="{name.replace("-", " ")} — routine sweep"',
+            f"owner={owner_map.get(real['owner'], 'ops')}",
+            f"type={real['type']}",
+            f"engine={real['engine']}",
+            f"schedule={real['schedule']}",
+            "timeout_s=900",
+        ]
+        if not real["enabled"]:
+            lines.append("enabled=false")
+        (d / "loop.conf").write_text("\n".join(lines) + "\n")
+        if real["installed"]:
+            (dest / "launchd" / f"com.loops.{name}.plist").write_text("<plist/>\n")
 
-    # dead-links — four daily runs, warn, one pancaking finding
-    for i in range(4):
-        started = ago(days=3 - i, hours=14, minutes=27)
-        rid = f"2026080{6 + i}-0720-links"
-        add_run(
-            cur,
-            rid,
-            "dead-links",
-            started,
-            "warn",
-            "2 links rotting in docs",
-            "claude",
-            6421,
-            0.0788,
-        )
-        metric(cur, rid, "dead-links", started, "links.checked", 412)
-        metric(cur, rid, "dead-links", started, "links.broken", 2)
-    cur.execute(
-        "INSERT INTO findings (loop_name, finding_id, title, severity, "
-        "first_seen_run, first_seen_at, last_seen_run, last_seen_at, times_seen) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
-        (
-            "dead-links",
-            "docs-setup:404",
-            "setup guide links a moved install page (404)",
-            "warn",
-            "20260806-0720-links",
-            iso(ago(days=3, hours=14, minutes=27)),
-            "20260809-0720-links",
-            iso(ago(hours=14, minutes=27)),
-            4,
-        ),
-    )
-    cur.execute(
-        "INSERT INTO findings (loop_name, finding_id, title, severity, "
-        "first_seen_run, first_seen_at, last_seen_run, last_seen_at, times_seen) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
-        (
-            "dead-links",
-            "api-ref:404",
-            "api reference footnote target gone",
-            "info",
-            "20260809-0720-links",
-            iso(ago(hours=14, minutes=27)),
-            "20260809-0720-links",
-            iso(ago(hours=14, minutes=27)),
-            1,
-        ),
-    )
+        if real["panels"]:
+            panels = []
+            for j, ptype in enumerate(real["panels"]):
+                p = {
+                    "title": PANEL_TITLES[(i + j) % len(PANEL_TITLES)],
+                    "metric": f"{name}.m{j}",
+                    "type": ptype,
+                    "missing": "gap",
+                }
+                if ptype == "number":
+                    p["direction"] = "higher_is_worse"
+                    p["thresholds"] = {"warn": 1, "alert": 3}
+                if ptype == "trend":
+                    p["window_days"] = 30
+                panels.append(p)
+            (d / "dashboard.json").write_text(json.dumps({"panels": panels}))
 
-    # deps-drift — five weekly runs, ok, downward trend
-    for i, out in enumerate([9, 8, 8, 7, 7]):
-        started = ago(days=34 - 7 * i, hours=13, minutes=16)
-        rid = f"202607{6 + i:02d}-0830-deps"
-        add_run(
-            cur,
-            rid,
-            "deps-drift",
-            started,
-            "ok",
-            "7 packages behind — none security-flagged",
-            "codex",
-            11284,
-        )
-        metric(cur, rid, "deps-drift", started, "deps.outdated", out)
-        metric(cur, rid, "deps-drift", started, "deps.security", 0)
+        eff = real["effective_status"]
+        headline = HEADLINES.get(
+            real["loop_status"] or "", "swept — nothing tracked"
+        ).format(n=seeded(name, "n", 2, 38))
+        if real["runner_status"] is not None:
+            age = bucket_age(real["age_s"] if real["age_s"] is not None else 3600)
+            started = PINNED_NOW - timedelta(seconds=age)
+            cadence = cadence_seconds(real["schedule"])
+            failed = real["runner_status"] not in ("completed", "skipped-precheck")
+            for r in range(real["run_count"] or 1):
+                rid = f"mock-{name}-{r}"
+                run_started = started - timedelta(seconds=cadence * r)
+                cur.execute(
+                    "INSERT INTO runs (run_id, loop_name, started_at, finished_at, "
+                    "engine, trigger, runner_status, loop_status, effective_status, "
+                    "headline, tokens_total, cost_usd, error_detail) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        rid,
+                        name,
+                        iso(run_started),
+                        None
+                        if (failed and r == 0)
+                        else iso(
+                            run_started
+                            + timedelta(seconds=seeded(name, f"d{r}", 40, 200))
+                        ),
+                        real["engine"],
+                        "launchd",
+                        real["runner_status"] if r == 0 else "completed",
+                        real["loop_status"] if r == 0 else "ok",
+                        eff if r == 0 else "ok",
+                        headline
+                        if r == 0
+                        else HEADLINES["ok"].format(n=seeded(name, f"h{r}", 2, 38)),
+                        seeded(name, f"t{r}", 800, 14000),
+                        round(seeded(name, f"c{r}", 0, 900) / 10000.0, 4)
+                        if real["engine"] == "claude"
+                        else None,
+                        "engine exited 1 (mock diagnostics in run log)"
+                        if (failed and r == 0)
+                        else None,
+                    ),
+                )
+                for j, ptype in enumerate(real["panels"]):
+                    cur.execute(
+                        "INSERT INTO metrics (run_id, loop_name, ts, key, num) "
+                        "VALUES (?,?,?,?,?)",
+                        (
+                            rid,
+                            name,
+                            iso(run_started),
+                            f"{name}.m{j}",
+                            seeded(name, f"m{j}r{r}", 0, 41),
+                        ),
+                    )
 
-    # backup-verify — healthy watchdog: heartbeats, one quiet run row
-    add_run(
-        cur,
-        "20260809-1947-backup",
-        "backup-verify",
-        ago(hours=2),
-        "ok",
-        "rsync target verified — 213 GiB, snapshot 03:58",
-        "codex",
-    )
-    for i in range(6):
-        cur.execute(
-            "INSERT INTO heartbeats (loop_name, run_id, ts, ok, detail) "
-            "VALUES (?,?,?,?,?)",
-            (
-                "backup-verify",
-                f"hb-backup-{i}",
-                iso(ago(hours=2 + 4 * i)),
-                1,
-                "probe ok",
-            ),
-        )
+        mock_findings = []
+        for j, (sev, seen) in enumerate(real["findings"]):
+            fid = f"{name}:item-{j + 1}"
+            title = FINDING_TITLES[(i + j) % len(FINDING_TITLES)]
+            last = PINNED_NOW - timedelta(seconds=bucket_age(real["age_s"] or 3600))
+            cur.execute(
+                "INSERT INTO findings (loop_name, finding_id, title, severity, "
+                "first_seen_run, first_seen_at, last_seen_run, last_seen_at, "
+                "times_seen) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    name,
+                    fid,
+                    title,
+                    sev,
+                    f"mock-{name}-0",
+                    iso(last - timedelta(days=max(0, seen - 1))),
+                    f"mock-{name}-0",
+                    iso(last),
+                    seen,
+                ),
+            )
+            mock_findings.append(
+                {
+                    "finding_id": fid,
+                    "severity": sev,
+                    "title": title,
+                    "detail": "Synthetic mirror of a live condition of this severity; "
+                    "values on this public page are generated mock data.",
+                }
+            )
 
-    # smoke-probe — alerting watchdog: last two probes failed
-    add_run(
-        cur,
-        "20260809-2117-smoke",
-        "smoke-probe",
-        ago(minutes=30),
-        "alert",
-        "staging endpoint unreachable — 2 consecutive probes",
-        "codex",
-        2941,
-    )
-    for i, ok in enumerate([0, 0, 1, 1, 1]):
-        cur.execute(
-            "INSERT INTO heartbeats (loop_name, run_id, ts, ok, detail) "
-            "VALUES (?,?,?,?,?)",
-            (
-                "smoke-probe",
-                f"hb-smoke-{i}",
-                iso(ago(minutes=30 * (i + 1) - 13)),
-                ok,
-                "connection refused" if not ok else "probe ok",
-            ),
-        )
-    cur.execute(
-        "INSERT INTO findings (loop_name, finding_id, title, severity, "
-        "first_seen_run, first_seen_at, last_seen_run, last_seen_at, times_seen) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
-        (
-            "smoke-probe",
-            "target:unreachable",
-            "staging endpoint refused connection twice running",
-            "alert",
-            "20260809-2047-smoke",
-            iso(ago(hours=1)),
-            "20260809-2117-smoke",
-            iso(ago(minutes=30)),
-            2,
-        ),
-    )
+        if real["type"] == "watchdog":
+            ok = 1 if (real["hb_ok"] in (1, None)) else 0
+            for r in range(5):
+                cur.execute(
+                    "INSERT INTO heartbeats (loop_name, run_id, ts, ok, detail) "
+                    "VALUES (?,?,?,?,?)",
+                    (
+                        name,
+                        f"hb-{name}-{r}",
+                        iso(
+                            PINNED_NOW
+                            - timedelta(
+                                seconds=cadence_seconds(real["schedule"]) * (r + 1)
+                            )
+                        ),
+                        ok if r == 0 else 1,
+                        "probe ok" if (ok or r) else "probe failed",
+                    ),
+                )
 
-    # log-rotate — paused: old ok run, no plist, paused event
-    add_run(
-        cur,
-        "20260728-2351-logs",
-        "log-rotate",
-        ago(days=12, hours=2),
-        "ok",
-        "archives rotated — 18 pruned",
-        "codex",
-        1204,
-    )
+        if real["has_report"]:
+            rd = dest / "reports" / name
+            rd.mkdir()
+            contract = {
+                "status": real["loop_status"] or "ok",
+                "headline": headline,
+                "findings": mock_findings,
+                "report_markdown": f"# {name}\nRoutine sweep. {headline}. "
+                "All figures on this page are generated mock data.\n",
+            }
+            (rd / "latest.json").write_text(json.dumps(contract))
+            (rd / "latest.md").write_text(contract["report_markdown"])
 
-    events = [
-        ("tls-certs", "created", ago(days=42)),
-        ("tls-certs", "installed", ago(days=41)),
-        ("dead-links", "created", ago(days=38)),
-        ("dead-links", "installed", ago(days=38)),
-        ("deps-drift", "created", ago(days=36)),
-        ("deps-drift", "installed", ago(days=35)),
-        ("backup-verify", "created", ago(days=29)),
-        ("backup-verify", "installed", ago(days=29)),
-        ("smoke-probe", "created", ago(days=21)),
-        ("smoke-probe", "installed", ago(days=21)),
-        ("log-rotate", "created", ago(days=33)),
-        ("log-rotate", "installed", ago(days=33)),
-        ("log-rotate", "paused", ago(days=12)),
-    ]
-    for loop, event, ts in events:
+        created = PINNED_NOW - timedelta(days=20 + seeded(name, "born", 0, 30))
         cur.execute(
             "INSERT INTO loop_events (loop_name, event, actor, ts) VALUES (?,?,?,?)",
-            (loop, event, "gardener", iso(ts)),
+            (name, "created", "gardener", iso(created)),
         )
+        if real["installed"]:
+            cur.execute(
+                "INSERT INTO loop_events (loop_name, event, actor, ts) "
+                "VALUES (?,?,?,?)",
+                (name, "installed", "gardener", iso(created + timedelta(hours=7))),
+            )
+        if not real["enabled"]:
+            cur.execute(
+                "INSERT INTO loop_events (loop_name, event, actor, ts) "
+                "VALUES (?,?,?,?)",
+                (name, "paused", "gardener", iso(PINNED_NOW - timedelta(days=4))),
+            )
 
     conn.commit()
     conn.close()

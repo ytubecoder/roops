@@ -2,7 +2,14 @@
 
 Static three-page site, no build step. `brandkit/index.html` is the public brand kit
 (marks, color, type rules, vocabulary, voice); `index.html` is the product page;
-`ui.html` the interface concept. Live at https://ytubecoder.github.io/roops/ —
+`ui.html` the interface concept.
+
+**ui.html ownership change (2026-08-03):** the PUBLISHED `roops/ui.html` is now a
+generated shape-mirror of the live garden, maintained by the `kagami` loop (real
+`dashboard/generate.py` over synthesized mock data; refresh arrives as a PR on the
+Pages repo, merge = approval). The `site/ui.html` file here is the retired hand-made
+concept page, kept as an unpublished archive — never copy it to the Pages repo
+(`workflows/publish.txt` step 5 no longer does). Live at https://ytubecoder.github.io/roops/ —
 served from the public `ytubecoder/ytubecoder.github.io` repo (`roops/` folder). This
 `site/` directory is the source of truth; deploy = copy the pages there and push
 (`workflows/publish.txt`). Merged here from the standalone `ytubecoder/roops` repo

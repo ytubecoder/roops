@@ -2951,5 +2951,243 @@ class TestGardenKickerSort(unittest.TestCase):
         self.assertLess(html.index('id="loop-beta"'), html.index('id="loop-alpha"'))
 
 
+
+# ---------------------------------------------------------------------------
+# B-13 — per-loop run-now control (走) in the console-controls cell
+# (openspec/changes/b-13-dashboard-run-now-2026-08-02/specs/manual-run-trigger)
+# ---------------------------------------------------------------------------
+
+
+def _button(html, cls):
+    """The whole <button ...>…</button> element carrying `cls`, or None. The
+    controls carry no nested <button>, so the non-greedy close is exact."""
+    m = re.search(
+        rf'<button[^>]*class="[^"]*\b{re.escape(cls)}\b[^"]*"[^>]*>.*?</button>',
+        html,
+        re.DOTALL,
+    )
+    return m.group(0) if m else None
+
+
+def _con_cell(html, name):
+    """The full console-controls cell for one loop row, extracted by balancing
+    <span> tags — the cell nests .con-track/.con-knob, so slicing to the next
+    '</span>' would cut it short and make an "is it inside the cell?" assertion
+    lie."""
+    m = re.search(
+        rf'<span class="con-cell"[^>]*data-loop="{re.escape(name)}"[^>]*>', html
+    )
+    if not m:
+        raise AssertionError(f"no console-controls cell for {name}")
+    depth = 0
+    for tok in re.finditer(r"<span\b|</span>", html[m.start() :]):
+        depth += -1 if tok.group(0) == "</span>" else 1
+        if depth == 0:
+            return html[m.start() : m.start() + tok.end()]
+    raise AssertionError(f"unbalanced console-controls cell for {name}")
+
+
+def _controls_script(html):
+    """The page's controls/hydration <script> — the one that owns the
+    fetch('api/state') gate."""
+    for chunk in html.split("<script>")[1:]:
+        body = chunk.split("</script>", 1)[0]
+        if "fetch('api/state'" in body:
+            return body
+    raise AssertionError("no hydration script in the generated page")
+
+
+def _script_code(html):
+    """The controls script with line comments stripped.
+
+    A magic string parked in a comment is not wiring — the audit's
+    counter-page passed a bare `assertIn("api/run/status", script)` with the
+    string sitting in a TODO. The negative lookbehind spares `http://`-style
+    URLs; this script carries only relative paths today, and a `//` inside a
+    string literal would be the one thing this shortcut mis-reads."""
+    return re.sub(r"(?<!:)//[^\n]*", "", _controls_script(html))
+
+
+def _balanced_block(code, start):
+    """From `start`, the text through the close of the next `{...}` block, or
+    None if it cannot be balanced. Braces inside string literals would fool
+    this; the controls script has none."""
+    open_at = code.find("{", start)
+    if open_at == -1:
+        return None
+    depth = 0
+    for i in range(open_at, len(code)):
+        if code[i] == "{":
+            depth += 1
+        elif code[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return code[start : i + 1]
+    return None
+
+
+def _js_branch(code, anchor_re, window=900):
+    """The click-handler branch owning a control: from its `closest(...)`
+    anchor through the end of its block (or a bounded window if the block
+    cannot be balanced).
+
+    Bounding matters twice over. Dead code parked elsewhere in the file must
+    not satisfy an assertion about this branch — the audit's counter-page put
+    the run POST in a function nothing calls — and neither must a SIBLING
+    control's wiring, since the schedule panel has its own post/reload/
+    preventDefault a few lines down."""
+    m = re.search(anchor_re, code)
+    if not m:
+        raise AssertionError(f"no JS branch anchored at {anchor_re}")
+    branch = _balanced_block(code, m.start())
+    if branch is None or len(branch) < 80:
+        branch = code[m.start() : m.start() + window]
+    return branch
+
+
+class RunNowButtonTests(unittest.TestCase):
+    """B-13: the per-loop run-now button (走) inside each row's existing
+    console-controls cell. Static markup only — the live route is
+    bin/console.py's concern (tests/test_console.py). Nothing here is gated on
+    install state: greying it for a never-installed loop would recreate the
+    exact dead end B-13 exists to remove."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+
+    def run_branch(self, html):
+        return _js_branch(_script_code(html), r"closest\(\s*['\"]\.con-run['\"]\s*\)")
+
+    def render(self, *names, installed=()):
+        conn = self.fx.init_db()
+        for name in names:
+            self.fx.add_loop(name)
+            self.fx.add_run(
+                conn,
+                f"r-{name}",
+                name,
+                iso(NOW - timedelta(minutes=5)),
+                iso(NOW - timedelta(minutes=4)),
+                "completed",
+                "ok",
+                "ok",
+                "fine",
+            )
+        conn.close()
+        for name in installed:
+            self.fx.install(name)
+        return generate.generate(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+
+    def test_non_installed_loop_gets_a_run_button(self):
+        html = self.render("alpha")  # no plist: never installed
+        btn = _button(html, "con-run")
+        self.assertIsNotNone(btn, "no .con-run button in a non-installed loop's row")
+        self.assertIn("走", btn)
+        self.assertIn('aria-label="run alpha now"', btn)
+
+    def test_installed_loop_gets_the_same_run_button(self):
+        html = self.render("alpha", installed=("alpha",))
+        btn = _button(html, "con-run")
+        self.assertIsNotNone(btn, "no .con-run button in an installed loop's row")
+        self.assertIn("走", btn)
+        self.assertIn('aria-label="run alpha now"', btn)
+
+    def test_run_button_is_never_disabled_by_install_state(self):
+        html = self.render("alpha")  # not installed
+        btn = _button(html, "con-run")
+        self.assertIsNotNone(btn, "no .con-run button to check")
+        self.assertNotIn("disabled", btn)
+        # contrast: the rounds switch IS disabled in this very row, so the
+        # assertion above is a real difference and not a missing attribute
+        self.assertIn("disabled", _button(html, "con-sw"))
+
+    def test_every_loop_row_gets_its_own_run_button(self):
+        html = self.render("alpha", "beta", installed=("beta",))
+        self.assertEqual(len(re.findall(r'class="[^"]*\bcon-run\b', html)), 2)
+        self.assertIn('aria-label="run alpha now"', html)
+        self.assertIn('aria-label="run beta now"', html)
+
+    def test_run_button_lives_inside_the_hidden_console_cell(self):
+        # static-file inertness: the button inherits the cell's `hidden`, so a
+        # file:// page can never reveal or fire it — no new hydration gate.
+        html = self.render("alpha")
+        cell = _con_cell(html, "alpha")
+        self.assertIn("data-console-controls hidden", cell)
+        # the BUTTON, not the substring: "con-run" also matches a comment or a
+        # stray data attribute sitting in the cell
+        self.assertIsNotNone(
+            _button(cell, "con-run"), "no .con-run button inside the controls cell"
+        )
+
+    def test_hydration_fetches_run_status_in_the_api_state_branch(self):
+        # "on hydration the page SHALL fetch run status once and reflect any
+        # in-flight job" — inside the api/state success branch, as a real
+        # fetch. Comments are stripped before this runs.
+        branch = _js_branch(
+            _script_code(self.render("alpha")),
+            r"fetch\(\s*['\"]api/state['\"]\s*\)",
+            window=1000,
+        )
+        self.assertTrue(
+            re.search(r"fetch\(\s*['\"]api/run/status['\"]", branch, re.DOTALL),
+            "hydration never fetches api/run/status",
+        )
+
+    def test_run_click_prevents_the_accordion_from_toggling(self):
+        # design decision 5: the controls sit inside the row's <summary>, so an
+        # ungated click opens/closes the garden accordion under the user
+        branch = self.run_branch(self.render("alpha"))
+        self.assertIn("preventDefault()", branch)
+
+    def test_run_click_posts_the_run_route_through_the_normalized_post_helper(self):
+        # going through post() is what routes a 409 (or a dead console) into
+        # the existing {ok:false} + alert path instead of a silent reload.
+        # DOTALL + tolerant quoting/whitespace: the call is legitimately
+        # line-wrapped in a formatted implementation.
+        branch = self.run_branch(self.render("alpha"))
+        self.assertTrue(
+            re.search(
+                r"post\(\s*['\"]api/loops/['\"].{0,200}?['\"]/run['\"]",
+                branch,
+                re.DOTALL,
+            ),
+            "the run branch never POSTs api/loops/<name>/run through post()",
+        )
+
+    def test_run_click_polls_status_and_surfaces_errors(self):
+        branch = self.run_branch(self.render("alpha"))
+        self.assertIn("api/run/status", branch)  # polls the job it started
+        self.assertIn("alert(", branch)  # 409/4xx/5xx reaches the user
+
+    def test_run_click_reloads_only_behind_a_success_guard(self):
+        """Scenario "Busy console": a 409 must surface, never silently reload.
+        Structural, not semantic — no JS engine runs here — so this pins the
+        reload as (a) present, (b) after the POST it is supposed to follow, and
+        (c) downstream of a check on the response or the running flag."""
+        branch = self.run_branch(self.render("alpha"))
+        reload_at = branch.find("location.reload")
+        self.assertNotEqual(reload_at, -1, "the run branch never reloads the page")
+        post_at = branch.find("post(")
+        self.assertNotEqual(post_at, -1, "the run branch never POSTs")
+        self.assertLess(post_at, reload_at, "the reload precedes its own POST")
+        self.assertTrue(
+            re.search(r"\.ok\b|\.running\b", branch[:reload_at]),
+            "location.reload() sits ahead of any res.ok / running check — "
+            "a 409 would silently reload the page",
+        )
+
+    def test_run_control_markup_keeps_the_page_self_contained(self):
+        html = self.render("alpha", installed=("alpha",))
+        self.assertIsNotNone(_button(html, "con-run"), "no .con-run button to scan")
+        assert_self_contained(self, html, "dashboard with the run-now control")
+
+
 if __name__ == "__main__":
     unittest.main()

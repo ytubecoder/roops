@@ -2,6 +2,9 @@
 
 ## WIP
 
+### B-13: Dashboard run-now button — fire a loop run from the garden page (phase-1 manual trigger)
+Priority: medium | Status: in-progress
+
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)

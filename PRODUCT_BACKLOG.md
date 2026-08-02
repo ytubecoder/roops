@@ -6,9 +6,6 @@
 Priority: medium | Status: in-progress
 Spec: B:b-13-dashboard-run-now-2026-08-02
 
-### B-16: WP3 pagekit unification: kit.css on shared tokens + token drift test (docs/workpackages/2026-08-02-wp3-pagekit-unification.md)
-Priority: medium | Status: in-progress
-
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)
@@ -42,6 +39,9 @@ Priority: medium | Status: for-review
 Priority: high | Status: for-review
 
 ### B-15: WP2 garden dark mode: token dark values + theme toggle (docs/workpackages/2026-08-02-wp2-dark-mode.md)
+Priority: medium | Status: for-review
+
+### B-16: WP3 pagekit unification: kit.css on shared tokens + token drift test (docs/workpackages/2026-08-02-wp3-pagekit-unification.md)
 Priority: medium | Status: for-review
 
 ## Backlog

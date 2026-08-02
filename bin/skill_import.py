@@ -1553,7 +1553,7 @@ def _render_loop_conf(
     answers: dict,
     blocked: bool,
     acknowledge_blocked: bool,
-    owner: str = None,
+    owner: str | None = None,
 ) -> str:
     """loop.conf: name/description/type/engine from analysis+rubric,
     schedule from `q4_cadence`, tags from the optional top-level
@@ -1699,7 +1699,7 @@ def _render_dashboard_json(rubric: dict, answers: dict) -> str:
 
 
 def apply(
-    skill: dict, analysis: dict, answers: dict, dest_dir: str, owner: str = None
+    skill: dict, analysis: dict, answers: dict, dest_dir: str, owner: str | None = None
 ) -> list:
     """Scaffold a loop at `dest_dir` from a parsed `skill`, its `analysis`
     (`analyze(skill)`'s output), and a filled-in `answers.json` dict

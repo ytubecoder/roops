@@ -14,8 +14,10 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import typing
 import unittest
 from datetime import datetime, timedelta, timezone
+
 from dashboard import generate
 
 # Importable both under `unittest discover -s tests` (tests/ on sys.path) and as
@@ -2617,7 +2619,7 @@ class DarkModeTokensTests(unittest.TestCase):
     )
     FONT_TOKENS = frozenset({"--serif", "--mono"})
     # Light values for the 12 pre-existing role tokens (byte-exact; --nibi-faint is new).
-    LIGHT_ROLE_VALUES = {
+    LIGHT_ROLE_VALUES: typing.ClassVar[dict] = {
         "--sumi": "#1C1A17",
         "--sumi-deep": "#16130F",
         "--washi": "#F2EDE3",
@@ -2705,11 +2707,7 @@ class DarkModeTokensTests(unittest.TestCase):
         ):
             for line in block.splitlines():
                 stripped = line.strip()
-                if (
-                    not stripped
-                    or stripped.startswith("/*")
-                    or stripped.startswith("*")
-                ):
+                if not stripped or stripped.startswith(("/*", "*")):
                     continue
                 if stripped.startswith("color-scheme:"):
                     continue

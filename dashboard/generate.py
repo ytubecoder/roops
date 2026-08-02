@@ -2421,9 +2421,11 @@ def _render_page(
         f'<option value="{e(o)}">{e(o)}</option>' for o in owner_options
     )
     filter_parts = [
-        "<label>Filter by owner"
-        f'<select id="owner-filter" onchange="loopsApplyFilters()">{owner_opts}</select>'
-        "</label>"
+        (
+            "<label>Filter by owner"
+            f'<select id="owner-filter" onchange="loopsApplyFilters()">{owner_opts}</select>'
+            "</label>"
+        )
     ]
     tag_options = sorted({t for loop in loops for t in loop["tags"]})
     if tag_options:

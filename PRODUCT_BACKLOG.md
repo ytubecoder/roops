@@ -4,6 +4,7 @@
 
 ### B-13: Dashboard run-now button — fire a loop run from the garden page (phase-1 manual trigger)
 Priority: medium | Status: in-progress
+Spec: B:b-13-dashboard-run-now-2026-08-02
 
 ## For Review
 
@@ -50,7 +51,7 @@ Priority: high | Status: proposed
 ### B-01: Lane A pilot: record engine cost per run
 Priority: medium | Status: done
 Commit: 5e74eae
-Spec: A:b-01-lane-a-pilot-record-engine-cost-per-run Verified: exit=0 commit=5e74eae at=2026-07-23T02:33:16 cmd=tests/run-tests.sh passed: 158, failed: 0 == /Users/llm/projects/loops/tests/test_examples.sh == == tests/test_examples.sh: examples/hello-loop e2e (fake engine) == == tests/test_examples.sh: examples/hello-watchdog e2e (fake engine) == passed: 35, failed: 0 == /Users/llm/projects/loops/tests/test_runner.sh == == bin/run-loop.sh: completed ok/warn/alert == == bin/run-loop.sh: skipped-overlap == == bin/run-loop.sh: precheck (agent) == == bin/run-loop.sh: watchdog == == bin/run-loop.sh: engine-timeout / stale-green == == bin/run-loop.sh: contract-violation == == bin/run-loop.sh: transient retry / non-retried failures == == bin/run-loop.sh: harness-error == == bin/run-loop.sh: suppression / idempotence == == bin/run-loop.sh: retention pruning == == bin/run-loop.sh: enabled=false == == bin/run-loop.sh: --dry-run == == bin/run-loop.sh: prompt composition == passed: 115, failed: 0
+Spec: A:b-01-lane-a-pilot-record-engine-cost-per-run
 Verified: exit=0 commit=5e74eae at=2026-07-23T02:33:16 cmd=tests/run-tests.sh
     passed: 158, failed: 0
     == /Users/llm/projects/loops/tests/test_examples.sh ==

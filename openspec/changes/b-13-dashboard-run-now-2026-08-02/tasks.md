@@ -57,9 +57,9 @@
 
 ## 5. Verify + close out
 
-- [ ] 5.1 `bash tests/run-tests.sh` fully green (hermetic, no network).
-- [ ] 5.2 Live check: `loopctl serve`, fire a cheap loop (e.g. hello-loop) from the
+- [x] 5.1 `bash tests/run-tests.sh` fully green (hermetic, no network).
+- [x] 5.2 Live check: `loopctl serve`, fire a cheap loop (e.g. hello-loop) from the
       page, watch 202 → poll → reload; confirm `skipped-overlap` when firing a loop
       already running from CLI.
-- [ ] 5.3 Move B-13 to review: `python3 ~/.claude/ticket-takeaway/tickets-cli.py
+- [x] 5.3 Move B-13 to review: `python3 ~/.claude/ticket-takeaway/tickets-cli.py
       move loops B-13 review`; commit + push per house rules.

@@ -44,6 +44,9 @@ Priority: medium | Status: for-review
 ### B-16: WP3 pagekit unification: kit.css on shared tokens + token drift test (docs/workpackages/2026-08-02-wp3-pagekit-unification.md)
 Priority: medium | Status: for-review
 
+### B-17: Loop ownership: required-but-assumed owner= field, set-owner verb, garden owner chips + dynamic filtering
+Priority: medium | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1: reliable runs + manual run-everything trigger + clean schedules screen

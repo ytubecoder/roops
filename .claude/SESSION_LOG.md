@@ -1,5 +1,45 @@
 # Session Log
 
+## 2026-08-03 — B-17 loop ownership: owner= field, set-owner verb, garden owner chips + dynamic filtering (foreman solo, OpenSpec lifecycle)
+
+### Summary
+- Shipped B-17 end-to-end through OpenSpec (second change ever through it, after B-01): `owner=` as a
+  first-class required-but-assumed loop.conf key, `loopctl set-owner` (set-schedule shape minus launchd),
+  owner/owner_assumed in list/status JSON + list table + `--owner` filter, `new`/`import --owner` stamping,
+  validate notices, and the garden's 主 owner chip + always-on owner filter + click-to-copy edit affordance.
+  Fleet migrated (ads-* → maguyva-marketing, rest → loops). Suite 690 py + 344 sh green; Playwright-verified
+  filter/copy/accordion behavior. INTERFACES §5/§8/§10 amended in-commit.
+
+### Lessons Learned
+- **Accepted:** required-but-assumed semantics for a "required" field — parser accepts absence, every
+  surface resolves to a flagged default, tooling always stamps explicitly, validate emits non-fatal
+  notices. Satisfies "insist on an owner" without ever blocking; generalissimo explicitly wanted
+  "required but not a blocker."
+- **Accepted:** lockstep-mirror + drift-test for sharing logic with dashboard/generate.py. A root-based
+  lazy `resolve_owner` seam looked cleaner but would crash the hermetic dashboard tests, which generate
+  against roots with NO bin/loopconf.py on disk (one test asserts exactly that). The repo already blesses
+  canonical-copy-plus-drift-test (token blocks vs kit.css) — reused that pattern instead of fighting the
+  seam doctrine.
+- **Gotcha:** OpenSpec `new change` rejects names starting with a digit, so the CLAUDE.md-documented
+  `<date>-<ticket>-<slug>` pattern can't be created; real convention is `<ticket>-<slug>-<date>`
+  (b-13 precedent) and archive prefixes the date. CLAUDE.md routing bullet corrected.
+- **Gotcha:** a copy-button chip inside the garden `<summary>` fights the accordion toggle — the click
+  handler needs preventDefault+stopPropagation (same reason report links were moved out of summary in WP1).
+  Also `navigator.clipboard.writeText` resolves async: the 'copied' feedback class appears only after the
+  promise settles, so a synchronous post-click assert reads false (Playwright check needed a delay).
+- **Gotcha:** the B-11 test asserting `assertNotIn("data-copy=", html)` page-wide broke the moment a
+  second data-copy consumer (owner chip) legitimately appeared — rescoped to `class="hanko-btn"`.
+  Page-wide "attribute never appears" assertions are landmines for additive features.
+
+### Decisions
+- Owner is a label, not a path: no filesystem/registry verification (WSL portability), no loop_events row
+  for owner changes (loops.d/ is git-tracked — git history is the audit trail, matching set-schedule).
+- hello-loop/hello-watchdog/loop-sensei owned by `loops` (harness regression fixtures + fleet examiner);
+  generalissimo named kagi-ban → loops and ads-* → maguyva-marketing directly.
+- Static garden page keeps its never-mutates contract: the "edit inline" ask became click-to-copy of the
+  ready-made `loopctl set-owner` command (generalissimo delegated the mechanism: "engineering decision,
+  make it light/easy/appropriate").
+
 ## 2026-08-02 — Garden three-tier reorg: specs by foreman+Sonnet, implementation farmed to grok peons, all three WPs shipped same-day
 
 ### Summary

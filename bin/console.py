@@ -28,6 +28,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +37,7 @@ _LOOPCTL_BIN = os.path.join(_HERE, "loopctl")
 
 _ROUNDS_RE = re.compile(r"^/api/loops/([A-Za-z0-9_-]+)/rounds$")
 _SCHED_RE = re.compile(r"^/api/loops/([A-Za-z0-9_-]+)/schedule$")
+_RUN_RE = re.compile(r"^/api/loops/([A-Za-z0-9_-]+)/run$")
 # Report pages: the dashboard links each page-enabled loop as ../reports/<name>/latest.html
 # (see dashboard/generate.py), which resolves to /reports/<name>/<file> when the page is
 # served from this root. The character classes are the whole allowlist — no '/', no '%',
@@ -50,6 +53,18 @@ _REPORT_CTYPES = {
 _PAGES = {
     "/": "loops.html",
     "/loops.html": "loops.html",
+}
+_RUN_ERROR_TAIL_CHARS = 4096
+_RUN_SLOT = threading.Lock()
+_RUN_STATUS_LOCK = threading.Lock()
+_RUN_STATUS = {
+    "running": False,
+    "loop": None,
+    "started_at": None,
+    "finished_at": None,
+    "exit_code": None,
+    "ok": None,
+    "error": None,
 }
 
 
@@ -137,6 +152,15 @@ def _json(status, obj):
     return status, json.dumps(obj).encode(), "application/json"
 
 
+def _now_utc():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _run_status_snapshot():
+    with _RUN_STATUS_LOCK:
+        return dict(_RUN_STATUS)
+
+
 def _parse_json_object(body_bytes):
     """Parses body_bytes as a JSON object. Returns (obj, None) on success or
     (None, error_response) on failure. Malformed JSON (json.loads raising)
@@ -211,6 +235,89 @@ def _regen_dashboard(root):
         )
 
 
+def _stderr_tail(stderr):
+    return (stderr or "")[-_RUN_ERROR_TAIL_CHARS:]
+
+
+def _run_worker(root, name, started_at):
+    """Runs one manual loopctl invocation off the request path.
+
+    The slot release lives in `finally` with the terminal status publish so an
+    unexpected worker exception cannot leave the console claiming a phantom run
+    is still active."""
+    exit_code = None
+    ok = False
+    error = None
+    try:
+        try:
+            r = _loopctl(root, ["run", name])
+            exit_code = r.returncode
+            ok = exit_code == 0
+            error = None if ok else _stderr_tail(r.stderr)
+            try:
+                _regen_dashboard(root)
+            except Exception as exc:
+                sys.stderr.write(f"warning: dashboard regen failed: {exc}\n")
+        except Exception as exc:
+            ok = False
+            error = _stderr_tail(str(exc) or exc.__class__.__name__)
+    finally:
+        finished_at = _now_utc()
+        with _RUN_STATUS_LOCK:
+            _RUN_STATUS.update(
+                {
+                    "running": False,
+                    "loop": name,
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                    "exit_code": exit_code,
+                    "ok": ok,
+                    "error": error,
+                }
+            )
+            _RUN_SLOT.release()
+
+
+def _start_run(root, name):
+    with _RUN_STATUS_LOCK:
+        if not _RUN_SLOT.acquire(blocking=False):
+            return None, dict(_RUN_STATUS)
+        started_at = _now_utc()
+        _RUN_STATUS.update(
+            {
+                "running": True,
+                "loop": name,
+                "started_at": started_at,
+                "finished_at": None,
+                "exit_code": None,
+                "ok": None,
+                "error": None,
+            }
+        )
+        snapshot = dict(_RUN_STATUS)
+    try:
+        t = threading.Thread(
+            target=_run_worker, args=(root, name, started_at), daemon=True
+        )
+        t.start()
+    except Exception as exc:
+        with _RUN_STATUS_LOCK:
+            _RUN_STATUS.update(
+                {
+                    "running": False,
+                    "loop": name,
+                    "started_at": started_at,
+                    "finished_at": _now_utc(),
+                    "exit_code": None,
+                    "ok": False,
+                    "error": str(exc) or "failed to start worker thread",
+                }
+            )
+            _RUN_SLOT.release()
+        return None, None
+    return snapshot, None
+
+
 def handle_request(root, method, path, body_bytes):
     path = path.split("?", 1)[0]
 
@@ -241,6 +348,31 @@ def handle_request(root, method, path, body_bytes):
 
     if method == "GET" and path == "/api/state":
         return _json(200, _state(root))
+
+    if method == "GET" and path == "/api/run/status":
+        return _json(200, _run_status_snapshot())
+
+    m = _RUN_RE.match(path) if method == "POST" else None
+    if m:
+        name = m.group(1)
+        if name not in _loop_names(root):
+            return _json(404, {"error": f"unknown loop: {name}"})
+        _body_obj, err = _parse_json_object(body_bytes)
+        if err:
+            return err
+        snapshot, busy = _start_run(root, name)
+        if snapshot is None and busy is None:
+            return _json(500, {"error": "failed to start worker thread"})
+        if busy is not None:
+            return _json(
+                409,
+                {
+                    "error": f"run already in progress: {busy['loop']}",
+                    "loop": busy["loop"],
+                    "started_at": busy["started_at"],
+                },
+            )
+        return _json(202, {"ok": True, "state": snapshot})
 
     m = _ROUNDS_RE.match(path) if method == "POST" else None
     if m:

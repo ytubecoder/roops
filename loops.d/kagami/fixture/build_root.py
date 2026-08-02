@@ -79,12 +79,27 @@ def seeded(name, field, lo, hi):
     return lo + h % (hi - lo + 1)
 
 
-def bucket_age(seconds):
-    if seconds < 0:
-        return 0
-    if seconds < 172800:
-        return round(seconds / 3600.0) * 3600
-    return round(seconds / 86400.0) * 86400
+def mock_age(seconds, cadence):
+    """Classification-preserving mock age. The garden classifies a loop by which
+    side of 1.5x its cadence the age falls on (stale detection) — mirror THAT,
+    never the raw clock, or the page drifts every hour and the nightly PR churns.
+    Fresh -> a fixed comfortable age for the cadence; stale -> a quantized
+    multiple, capped so a long-stale loop stops moving the page."""
+    if seconds is None:
+        return cadence // 3
+    if seconds <= 1.5 * cadence:
+        return min(cadence // 3, 4 * 3600)
+    return min(max(2, int(seconds // cadence)), 4) * cadence
+
+
+def quantize_seen(times_seen):
+    """Pancake tiers, not raw counts — a finding's times_seen increments every
+    firing and would otherwise drift the page daily."""
+    if times_seen <= 1:
+        return 1
+    if times_seen <= 4:
+        return 3
+    return 6
 
 
 def cadence_seconds(schedule):
@@ -194,13 +209,27 @@ def read_fleet(source):
                         q("SELECT run_id FROM runs WHERE loop_name=? LIMIT 6", (name,))
                     ),
                 ),
-                "findings": [(str(sev), int(seen or 1)) for sev, seen in findings],
+                "findings": [
+                    (str(sev), quantize_seen(int(seen or 1))) for sev, seen in findings
+                ],
                 "hb_ok": (hb[0][0] if hb else None),
                 "has_report": (source / "reports" / name / "latest.json").is_file(),
             }
         )
     if conn is not None:
         conn.close()
+    for entry in fleet:
+        if entry["real_name"] == "kagami":
+            # Pin the mirror loop's own row to its post-merge truth (green, fresh,
+            # no findings) — mirroring its live drift status makes every merge
+            # breed an echo PR: merge -> kagami goes ok -> shape changed -> new PR.
+            entry.update(
+                runner_status="completed",
+                loop_status="ok",
+                effective_status="ok",
+                age_s=None,
+                findings=[],
+            )
     return fleet
 
 
@@ -280,10 +309,10 @@ def main():
         headline = HEADLINES.get(
             real["loop_status"] or "", "swept — nothing tracked"
         ).format(n=seeded(name, "n", 2, 38))
+        cadence = cadence_seconds(real["schedule"])
         if real["runner_status"] is not None:
-            age = bucket_age(real["age_s"] if real["age_s"] is not None else 3600)
+            age = mock_age(real["age_s"], cadence)
             started = PINNED_NOW - timedelta(seconds=age)
-            cadence = cadence_seconds(real["schedule"])
             failed = real["runner_status"] not in ("completed", "skipped-precheck")
             for r in range(real["run_count"] or 1):
                 rid = f"mock-{name}-{r}"
@@ -337,7 +366,7 @@ def main():
         for j, (sev, seen) in enumerate(real["findings"]):
             fid = f"{name}:item-{j + 1}"
             title = FINDING_TITLES[(i + j) % len(FINDING_TITLES)]
-            last = PINNED_NOW - timedelta(seconds=bucket_age(real["age_s"] or 3600))
+            last = PINNED_NOW - timedelta(seconds=mock_age(real["age_s"], cadence))
             cur.execute(
                 "INSERT INTO findings (loop_name, finding_id, title, severity, "
                 "first_seen_run, first_seen_at, last_seen_run, last_seen_at, "

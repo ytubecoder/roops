@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILDER = os.path.join(REPO, "loops.d", "kagami", "fixture", "build_root.py")
@@ -22,6 +23,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from html_selfcontained import external_subresources
 
 SOURCE_LOOPS = ("zz-secret-alpha", "zz-secret-beta")
+
+
+def _ts(**kw):
+    return (datetime.now(timezone.utc) - timedelta(**kw)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def build_source_root(base):
@@ -67,7 +72,7 @@ def build_source_root(base):
         (
             "r1",
             SOURCE_LOOPS[0],
-            "2026-08-01T06:11:00Z",
+            _ts(hours=6),  # daily cadence: comfortably fresh (boundary at 36h)
             "completed",
             "warn",
             "warn",
@@ -77,7 +82,7 @@ def build_source_root(base):
     conn.execute(
         "INSERT INTO runs (run_id, loop_name, started_at, runner_status) "
         "VALUES (?,?,?,?)",
-        ("r2", SOURCE_LOOPS[1], "2026-08-01T07:00:00Z", "engine-failed"),
+        ("r2", SOURCE_LOOPS[1], _ts(minutes=10), "engine-failed"),
     )
     conn.execute(
         "INSERT INTO findings (loop_name, finding_id, title, severity, "
@@ -146,6 +151,20 @@ class KagamiMirror(unittest.TestCase):
             os.path.join(cls.tmp.name, "a.html")
         )
         _, cls.html_b = build_and_render(os.path.join(cls.tmp.name, "b.html"))
+        # shift the source fleet's clock by 40 minutes (same freshness class,
+        # same times_seen tier) — the mirror must not move
+        conn = sqlite3.connect(os.path.join(cls.source, "state", "loops.sqlite"))
+        conn.execute(
+            "UPDATE runs SET started_at=? WHERE run_id='r1'",
+            (_ts(hours=6, minutes=40),),
+        )
+        conn.execute(
+            "UPDATE findings SET times_seen=4 "
+            "WHERE finding_id='secret-client:overspend'"
+        )
+        conn.commit()
+        conn.close()
+        _, cls.html_shifted = build_and_render(os.path.join(cls.tmp.name, "c.html"))
 
     @classmethod
     def tearDownClass(cls):
@@ -156,6 +175,11 @@ class KagamiMirror(unittest.TestCase):
 
     def test_mirror_is_byte_deterministic(self):
         self.assertEqual(self.html_a, self.html_b)
+
+    def test_mirror_stable_under_clock_and_seen_jitter(self):
+        """Classification-preserving mirror: raw age/times_seen movement inside
+        the same class must not drift the page (prevents nightly PR churn)."""
+        self.assertEqual(self.html_a, self.html_shifted)
 
     def test_row_count_mirrors_source_fleet(self):
         self.assertEqual(self.html_a.count('class="loop-row'), len(SOURCE_LOOPS))

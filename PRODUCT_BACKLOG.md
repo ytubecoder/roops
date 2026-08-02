@@ -6,8 +6,8 @@
 Priority: medium | Status: in-progress
 Spec: B:b-13-dashboard-run-now-2026-08-02
 
-### B-14: WP1 garden reorg: accordion rows, English glosses, retire reports.html (docs/workpackages/2026-08-02-wp1-garden-reorg.md)
-Priority: high | Status: in-progress
+### B-15: WP2 garden dark mode: token dark values + theme toggle (docs/workpackages/2026-08-02-wp2-dark-mode.md)
+Priority: medium | Status: in-progress
 
 ## For Review
 
@@ -38,13 +38,13 @@ Priority: medium | Status: for-review
 ### B-12: Skill import (loopctl import) + agent surface: tags, provenance, AXI CLI, loops skill
 Priority: medium | Status: for-review
 
+### B-14: WP1 garden reorg: accordion rows, English glosses, retire reports.html (docs/workpackages/2026-08-02-wp1-garden-reorg.md)
+Priority: high | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1: reliable runs + manual run-everything trigger + clean schedules screen
 Priority: high | Status: proposed
-
-### B-15: WP2 garden dark mode: token dark values + theme toggle (docs/workpackages/2026-08-02-wp2-dark-mode.md)
-Priority: medium | Status: proposed
 
 ### B-16: WP3 pagekit unification: kit.css on shared tokens + token drift test (docs/workpackages/2026-08-02-wp3-pagekit-unification.md)
 Priority: medium | Status: proposed

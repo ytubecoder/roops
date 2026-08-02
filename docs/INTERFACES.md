@@ -67,12 +67,11 @@ $LOOPS_ROOT/
   reports/<name>/latest.json       # atomically promoted copy of contract.json
   reports/<name>/YYYY-MM-DD-HHMM.html + latest.html   # promoted report pages (Amendment 2)
   dashboard/generate.py            # → dashboard/loops.html (§10)
-  dashboard/reports.html           # reports screen (Amendment 2, §10)
   launchd/com.loops.<name>.plist   # generated; gitignored
   docs/…
 ```
 
-`state/`, `reports/`, `launchd/*.plist`, `dashboard/loops.html`, `dashboard/reports.html` are gitignored — they are runtime
+`state/`, `reports/`, `launchd/*.plist`, `dashboard/loops.html` are gitignored — they are runtime
 artifacts. Every script must create the directories it needs (`mkdir -p`) rather than assuming.
 
 ## 2. `bin/lock.py` — lock helper
@@ -1000,8 +999,8 @@ Flattening rules are in §3. `dashboard.json` (per loop) declares how to render 
 
 ## 10. `dashboard/generate.py`
 
-`python3 dashboard/generate.py [--root R] [--out FILE] [--reports-out FILE]` → writes
-`dashboard/loops.html` and `dashboard/reports.html` (Amendment 2, below), each via
+`python3 dashboard/generate.py [--root R] [--out FILE]` → writes
+`dashboard/loops.html` via
 **tmp file + `os.rename`** (never a partially-written page, even under concurrent runs). Reads only
 sqlite + `reports/*/latest.*` + `loops.d/*/{loop.conf,dashboard.json}`. Self-contained single file:
 inline CSS/JS, no network requests, no external assets (it is opened as `file://`).
@@ -1113,16 +1112,30 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   renders the section, with a literal "no lifecycle events yet" line rather than omitting it.
   Both `load_loop_events` and the per-loop provenance lookup degrade to `[]`/`None` (not a
   crash) against a pre-Amendment-2 sqlite whose `loop_events` table doesn't exist yet.
-- **Report pages (Amendment 2):** the generator also writes `dashboard/reports.html`
-  (same invocation; each output tmp+rename — per-file atomic, the pair is not). Row
-  Report cells prefer `../reports/<name>/latest.html` (md link kept secondary); a page
-  whose envelope `meta.run_id` ≠ the loop's latest promoted run (newest row with
-  `runner_status='completed'` AND non-NULL `contract_path`) gets a `stale` badge. The
-  reports screen lists every loop that is page-enabled or has pages on disk: totals chips
-  + title + generated_at from the `latest.html` envelope (via `bin/page_envelope.py` —
-  display HTML is never scraped; only `latest.html` is ever parsed), dated history from
-  filenames only (capped 30), "no page yet" / "no meta" / historical markers per
-  `docs/REPORT_PAGES_PLAN.md` §5.2. The §10 read-set gains the `latest.html` envelope.
+- **Report pages (Amendment 2; amended 2026-08-02):** report links + dated history live in
+  each loop's accordion expansion body (report block). Links prefer
+  `../reports/<name>/latest.html` (md link kept secondary); a page whose envelope
+  `meta.run_id` ≠ the loop's latest promoted run (newest row with
+  `runner_status='completed'` AND non-NULL `contract_path`) gets a `stale` badge.
+  Dated history is taken from filenames only (newest first, capped 30 with a `+N older`
+  note). Envelope meta is read via `bin/page_envelope.py` (display HTML is never scraped;
+  only `latest.html` is ever parsed). The standalone `dashboard/reports.html` screen was
+  **retired 2026-08-02** — the garden is the sole index; orphaned report dirs (on disk with
+  no `loops.d/` entry) remain directly servable by URL but are not listed. The §10 read-set
+  gains the `latest.html` envelope.
+- **Garden accordion + English glosses (Amendment 2026-08-02):** each garden row is a native
+  `<details class="loop-row" name="garden" id="loop-<name>">` accordion — the shared
+  `name="garden"` gives one-open-at-a-time natively. The `<summary>` is the glance row
+  (stamp, name, schedule/description, tokonoma, run-meta text, rounds switch); the expansion
+  body is the former per-loop section (findings, recent runs, panels) plus the report block
+  and a permalink glyph (`#loop-<name>`). ~10 lines of inline deep-link JS open the matching
+  row on `DOMContentLoaded` and `hashchange` when `location.hash` is `#loop-<name>` — stays
+  hermetic (no fetch, no external assets). Meaning-bearing kanji carry a tiny muted English
+  gloss (`<span class="en">…</span>`): stamps 済/注/警/未 → ok/warn/alert/no data; switch
+  巡/休/手 → on/paused|off/manual; run-meta 巡 → run; findings 巡 ×N → seen; hanko 認/休/済 →
+  ack/snooze/dismiss (and disposition marks ack/snoozed/dismissed). 承 is unglossed (the
+  natural English word is banned page-wide — ack ≠ approval). Tooltips stay; kicker/note
+  kanji already adjacent to English stay unglossed.
 - Style **(amended 2026-07-30, B-04/B-07)**: the roops garden design system — washi/sumi
   palette, vermillion accent, mincho serif + mono numerals, status rendered as hanko stamps
   (済 ok · 注 warn · 警 alert · 未 no data) over the unchanged §4.3 precedence, per-loop
@@ -1189,7 +1202,7 @@ never this module. No daemon mode, no LaunchAgent in v1.
 
 | endpoint | effect |
 |---|---|
-| `GET /` `/loops.html` `/reports.html` | serve generated pages (loops.html regenerated if missing) |
+| `GET /` `/loops.html` | serve generated pages (loops.html regenerated if missing). `/reports.html` retired 2026-08-02 → 404 |
 | `GET /reports/<loop>/<file>` | serve one file from `<root>/reports/` — the dashboard's own `../reports/<name>/latest.html` links. Path regex allows `[A-Za-z0-9_-]` / `[A-Za-z0-9_.-]` only (no `/`, no `%`), plus an `os.path.realpath` containment check under `<root>/reports`. No directory listing; non-file → 404. Content-Type: `.html`→`text/html`, `.json`→`application/json`, `.md`→`text/plain`, else `application/octet-stream`. **Always answered with `Content-Security-Policy: sandbox allow-scripts`** — see below. |
 | `GET /api/state` | `{loops:[{name, schedule, enabled, plist_present, loaded}]}` |
 | `POST /api/loops/<name>/rounds {on}` | resume/pause (sets `enabled=` + bootstrap/bootout). `on` must be a real JSON boolean, else 400. 409 if no plist — install/uninstall stay CLI-only (supervised verification gate, §8.1). |

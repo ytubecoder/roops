@@ -408,7 +408,6 @@ class TestReportSandboxHeader(unittest.TestCase):
         for path in (
             "/",
             "/loops.html",
-            "/reports.html",
             "/api/state",
             "/api/loops/alpha/rounds",
             "/api/loops/alpha/schedule",
@@ -419,6 +418,40 @@ class TestReportSandboxHeader(unittest.TestCase):
         self.assertEqual(
             self._csp("/reports/kagi-ban/latest.html?v=2"), "sandbox allow-scripts"
         )
+
+
+class TestReportsHtmlRetired(ConsoleTestCase):
+    """WP1: /reports.html is retired; per-loop report files stay served."""
+
+    def write_report(self, loop, filename, body):
+        d = os.path.join(self.root, "reports", loop)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, filename), "w") as f:
+            f.write(body)
+
+    def test_reports_html_is_404(self):
+        status, _, _ = call(self.fixture, "GET", "/reports.html")
+        self.assertEqual(status, 404)
+
+    def test_per_loop_report_still_served(self):
+        self.write_report("kagi-ban", "latest.html", "<h1>report</h1>")
+        status, payload, ctype = call(
+            self.fixture, "GET", "/reports/kagi-ban/latest.html"
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", ctype)
+        self.assertIn(b"<h1>report</h1>", payload)
+
+    def test_dashboard_routes_still_200(self):
+        # ensure loops.html exists so serve can return it
+        dash = os.path.join(self.root, "dashboard")
+        os.makedirs(dash, exist_ok=True)
+        with open(os.path.join(dash, "loops.html"), "w") as f:
+            f.write("<html><body>garden</body></html>")
+        for path in ("/", "/loops.html"):
+            status, payload, _ = call(self.fixture, "GET", path)
+            self.assertEqual(status, 200, path)
+            self.assertIn(b"garden", payload)
 
 
 class TestParseContentLength(unittest.TestCase):

@@ -488,26 +488,6 @@ def _latest_promoted_run(conn, loop_name):
 _DATED_PAGE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{4}\.html$")
 
 
-def _discover_report_page_names(root):
-    reports_dir = os.path.join(root, "reports")
-    try:
-        entries = sorted(os.listdir(reports_dir))
-    except OSError:
-        return []
-    names = []
-    for entry in entries:
-        report_dir = os.path.join(reports_dir, entry)
-        if not os.path.isdir(report_dir):
-            continue
-        try:
-            files = os.listdir(report_dir)
-        except OSError:
-            continue
-        if "latest.html" in files or any(_DATED_PAGE_RE.match(name) for name in files):
-            names.append(entry)
-    return names
-
-
 def _page_state(root, name, conn, envelope_mod):
     """Returns {enabled, href, meta, stale, dated:[names], historical}."""
     report_dir = os.path.join(root, "reports", name)
@@ -760,13 +740,19 @@ main { padding: 0 0 8px; }
 
 /* ---------- the garden (global view) ---------- */
 .garden { border: 1px solid var(--hair2); border-radius: 3px; background: rgba(255,255,255,.25); overflow-x: auto; }
+/* Each garden row is a <details>; the summary is the grid (grid children must be direct
+   children of the grid container). Shared name="garden" → one-open-at-a-time natively. */
 .loop-row {
-  display: grid; grid-template-columns: 44px 1.1fr 1.5fr 190px 64px; gap: 16px;
-  align-items: center; padding: 12px 18px; min-width: 960px;
   border-bottom: 1px solid var(--hair);
 }
 .loop-row:last-child { border-bottom: none; }
-.loop-row:hover { background: rgba(28,26,23,.035); }
+.loop-row > summary {
+  display: grid; grid-template-columns: 44px 1.1fr 1.5fr 190px 64px; gap: 16px;
+  align-items: center; padding: 12px 18px; min-width: 960px;
+  list-style: none; cursor: pointer;
+}
+.loop-row > summary::-webkit-details-marker { display: none; }
+.loop-row > summary:hover { background: rgba(28,26,23,.035); }
 .stamp-cell { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .stamp {
   width: 28px; height: 28px; border-radius: 3px; font-size: 14px; line-height: 1;
@@ -777,9 +763,12 @@ main { padding: 0 0 8px; }
 .stamp.amber { border: 1.5px solid var(--ochre); color: var(--ochre); }
 .stamp.red { background: var(--shu); color: var(--washi); }
 .stamp.grey { border: 1.5px solid var(--nibi); color: var(--nibi); }
+/* English gloss beside meaning-bearing kanji (WP1 2026-08-02) — tiny muted mono */
+.en {
+  font-family: var(--mono); font-size: 8.5px; font-weight: 400; color: var(--nibi);
+  letter-spacing: .04em; margin-left: 3px; text-transform: none; white-space: nowrap;
+}
 .loop-name { font-family: var(--mono); font-size: 12.5px; font-weight: 400; color: var(--sumi); }
-.loop-name a { color: inherit; text-decoration: none; }
-.loop-name a:hover { text-decoration: underline; }
 .loop-name small {
   display: block; font-size: 10px; color: var(--nibi); letter-spacing: .06em; margin-top: 2px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -872,32 +861,27 @@ html.console-active .sw { display: none; }
 }
 @keyframes pulse-badge { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
 
-/* ---------- report pages screen ---------- */
-.reports-list { display: grid; gap: 0; border-top: 1px solid var(--hair); }
-.report-entry {
-  padding: clamp(18px, 2.6vw, 30px) clamp(20px, 4vw, 44px);
-  border-bottom: 1px solid var(--hair);
+/* ---------- report block (accordion body; replaces retired reports screen) ---------- */
+.report-block {
+  margin: 0 0 14px; padding: 10px 0 12px; border-bottom: 1px solid var(--hair);
+  font-family: var(--mono); font-size: 11px;
 }
-.report-entry h2 {
-  font-size: 15px; line-height: 1.6; display: flex; flex-wrap: wrap;
-  gap: 4px 8px; align-items: baseline;
+.report-block .report-links { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; }
+.report-block .report-links a { font-size: 12px; letter-spacing: .04em; }
+.report-block .history {
+  margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px 12px;
+  font-size: 10.5px; line-height: 1.8; color: var(--nibi);
 }
-.report-entry h2 a { font-family: var(--mono); font-size: 13px; text-decoration-thickness: 1px; }
-.report-entry .chips {
-  margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px 18px;
-  font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
-  color: var(--nibi); text-transform: uppercase;
+.report-block .history:empty { display: none; }
+.report-block .history a { overflow-wrap: anywhere; }
+.permalink {
+  float: right; font-family: var(--mono); font-size: 12px; color: var(--nibi);
+  text-decoration: none; letter-spacing: .04em; margin: 2px 0 0 10px;
 }
-.report-entry .chips:empty { display: none; }
-.report-entry .history {
-  margin-top: 9px; display: flex; flex-wrap: wrap; gap: 4px 12px;
-  font-family: var(--mono); font-size: 10.5px; line-height: 1.8;
-}
-.report-entry .history:empty { display: none; }
-.report-entry .history a { overflow-wrap: anywhere; }
+.permalink:hover { color: var(--ai); text-decoration: underline; }
 
-/* ---------- per-loop sections ---------- */
-section.loop { padding: clamp(22px, 3vw, 38px) clamp(20px, 4vw, 44px); border-top: 1px solid var(--hair); }
+/* ---------- per-loop sections (inside accordion body) ---------- */
+section.loop { padding: 14px 18px 18px; border-top: 1px solid var(--hair); }
 section.loop h2 { font-size: 15px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 section.loop h2 .lname { font-family: var(--mono); font-size: 13.5px; }
 section.loop h2 .muted { font-size: 12px; font-weight: 400; flex-basis: 100%; max-width: 88ch; line-height: 1.55; }
@@ -1123,16 +1107,16 @@ footer {
    strings) renders con-cell at ~166px, and console-active hides the static .sw switch,
    leaving headroom under 214px desktop / 160px mobile (the mobile block's tighter
    .con-sched max-width keeps the chip itself from ever exceeding the mobile budget). */
-html.console-active .loop-row { grid-template-columns: 44px 1.1fr 1.5fr 190px minmax(64px, 214px); }
+html.console-active .loop-row > summary { grid-template-columns: 44px 1.1fr 1.5fr 190px minmax(64px, 214px); }
 
 @media (max-width: 767px) {
   .head-stats { margin-left: 0; width: 100%; }
-  .loop-row { grid-template-columns: 44px minmax(0, 1fr) 64px; gap: 10px 12px; min-width: 0; padding: 14px; }
-  .loop-row > .stamp-cell { grid-column: 1; grid-row: 1; }
-  .loop-row > .loop-name { grid-column: 2; grid-row: 1; }
-  .loop-row > .sw-cell { grid-column: 3; grid-row: 1; }
-  .loop-row > .toko { grid-column: 1 / -1; grid-row: 2; }
-  .loop-row > .run-meta { grid-column: 1 / -1; grid-row: 3; align-items: flex-start; text-align: left; }
+  .loop-row > summary { grid-template-columns: 44px minmax(0, 1fr) 64px; gap: 10px 12px; min-width: 0; padding: 14px; }
+  .loop-row > summary > .stamp-cell { grid-column: 1; grid-row: 1; }
+  .loop-row > summary > .loop-name { grid-column: 2; grid-row: 1; }
+  .loop-row > summary > .sw-cell { grid-column: 3; grid-row: 1; }
+  .loop-row > summary > .toko { grid-column: 1 / -1; grid-row: 2; }
+  .loop-row > summary > .run-meta { grid-column: 1 / -1; grid-row: 3; align-items: flex-start; text-align: left; }
   .loop-name { overflow-wrap: anywhere; }
   .garden { overflow-x: visible; }
   /* tighter cap than desktop's 130px, so a long schedule spec ellipsizes instead of
@@ -1140,7 +1124,7 @@ html.console-active .loop-row { grid-template-columns: 44px 1.1fr 1.5fr 190px mi
      stylesheet (by convention -- see the note above .con-cell) so it reliably wins
      over the unconditional .con-sched rule at equal specificity. */
   .con-sched { max-width: 84px; }
-  html.console-active .loop-row { grid-template-columns: 44px minmax(0, 1fr) minmax(64px, 160px); }
+  html.console-active .loop-row > summary { grid-template-columns: 44px minmax(0, 1fr) minmax(64px, 160px); }
 }
 /* tags + provenance + fleet recent-events strip (Amendment 2 — 2026-07-30) */
 .tags { margin: 4px 0; display: flex; flex-wrap: wrap; gap: 4px 6px; }
@@ -1179,6 +1163,17 @@ function loopsFilterByTag(tag) {
     el.style.display = tags.indexOf(tag) > -1 ? '' : 'none';
   });
 }
+function loopsOpenHash() {
+  var h = location.hash;
+  if (!h || h.indexOf('#loop-') !== 0) return;
+  var el = document.getElementById(h.slice(1));
+  if (el && el.tagName === 'DETAILS') {
+    el.open = true;
+    el.scrollIntoView();
+  }
+}
+document.addEventListener('DOMContentLoaded', loopsOpenHash);
+window.addEventListener('hashchange', loopsOpenHash);
 """
 
 
@@ -1275,13 +1270,22 @@ def _light_html(color, marker=None, extra_badges=()):
 # Status stamps (hanko) — the garden's rendering of the same §4.3 precedence result that
 # _light_html renders as a dot. Purely presentational: color in, kanji out.
 _STAMP_KANJI = {"green": "済", "amber": "注", "red": "警", "grey": "未"}
+# English glosses beside meaning-bearing kanji (WP1 2026-08-02, pinned wording).
+_STAMP_GLOSS = {"green": "ok", "amber": "warn", "red": "alert", "grey": "no data"}
+_DISP_GLOSS = {"ack": "ack", "snooze": "snoozed", "dismiss": "dismissed"}
+
+
+def _en(word):
+    """Tiny muted English gloss immediately after a meaning-bearing kanji."""
+    return f'<span class="en">{e(word)}</span>'
 
 
 def _stamp_html(color, marker=None, extra_badges=()):
     kanji = _STAMP_KANJI.get(color, "未")
+    gloss = _STAMP_GLOSS.get(color, "no data")
     out = (
         f'<span class="stamp-cell"><span class="stamp {color}" title="{e(color)}">'
-        f"{kanji}</span>"
+        f"{kanji}</span>{_en(gloss)}"
     )
     if marker == "harness-problem":
         out += '<span class="badge harness">harness</span>'
@@ -1504,13 +1508,15 @@ _DISP_KANJI = {"ack": "認", "snooze": "休", "dismiss": "済"}
 def _render_hanko_btns(loop_name, fid, root_flag, action):
     """The hanko rank for one unsuppressed open finding. Enabled stamps carry their full
     loopctl command in data-copy (the page script copies it to the clipboard); the command
-    text also sits in the title so it is readable without JS. 承 is always disabled."""
+    text also sits in the title so it is readable without JS. 承 is always disabled and
+    unglossed (the natural English word is banned page-wide — ack ≠ approval)."""
 
-    def btn(kanji, verb, cmd_text):
+    def btn(kanji, gloss, verb, cmd_text):
         return (
             f'<button class="hanko-btn" type="button" data-copy="{e(cmd_text)}" '
             f'title="{e(verb + " — copies: " + cmd_text)}" '
-            f'aria-label="{e("copy " + verb + " command for " + fid)}">{kanji}</button>'
+            f'aria-label="{e("copy " + verb + " command for " + fid)}">'
+            f"{kanji}{_en(gloss)}</button>"
         )
 
     def cmd_for(verb):
@@ -1518,18 +1524,21 @@ def _render_hanko_btns(loop_name, fid, root_flag, action):
 
     # NB: the word "appro*" is banned page-wide (test_finding_paste_block pins it, per
     # the §10 handoff doctrine) — 承's title says what it will be without saying it.
+    # 承 gets no English gloss (WP1 settled decision 9).
     parts = [
         (
             '<button class="hanko-btn" type="button" disabled '
             'title="承 — becomes an order · not wired: that verb does not exist yet '
             '(ack is not it); to act now, use the hand-to-an-agent block">承</button>'
         ),
-        btn("認", "acknowledge", cmd_for("ack")),
-        btn("休", "snooze", cmd_for("snooze") + " --until YYYY-MM-DD"),
-        btn("済", "settle (dismiss)", cmd_for("dismiss") + ' --note "…"'),
+        btn("認", "ack", "acknowledge", cmd_for("ack")),
+        btn("休", "snooze", "snooze", cmd_for("snooze") + " --until YYYY-MM-DD"),
+        btn("済", "dismiss", "settle (dismiss)", cmd_for("dismiss") + ' --note "…"'),
     ]
     if action == "ack":
-        parts.append('<span class="stamp-mark" title="acknowledged">認</span>')
+        parts.append(
+            f'<span class="stamp-mark" title="acknowledged">認{_en("ack")}</span>'
+        )
     return f'<span class="arr-btns">{"".join(parts)}</span>'
 
 
@@ -1582,15 +1591,19 @@ def _render_findings(conn, loop_name, latest_json, now, root):
             cmd = f'<code class="cmd">loopctl reopen {e(loop_name)} {e(fid)}{e(root_flag)}</code>'
             kanji = _DISP_KANJI.get(action)
             if kanji:
+                gloss = _DISP_GLOSS.get(action, action)
                 btns_html = (
                     f'<span class="arr-btns"><span class="stamp-mark" '
-                    f'title="{e(dtext or action)}">{kanji}</span></span>'
+                    f'title="{e(dtext or action)}">{kanji}{_en(gloss)}</span></span>'
                 )
         detail_html = f"<div>{e(detail)}</div>" if detail else ""
         # pancaked — the same finding across N rounds is one stack, one decision
         pchip = ""
         if (f.get("times_seen") or 0) >= 2:
-            pchip = f'<span class="pchip"><i>巡</i> ×{int(f["times_seen"])}</span>'
+            pchip = (
+                f'<span class="pchip"><i>巡</i>{_en("seen")} '
+                f"×{int(f['times_seen'])}</span>"
+            )
         out.append(
             f'<div class="{cls}" data-sev="{e(severity)}">'
             f'<div class="f-main">'
@@ -1660,7 +1673,48 @@ def _render_console_controls(loop):
     )
 
 
-def _render_loop_row(loop, now):
+def _render_report_block(loop):
+    """Report links + dated history for the accordion body (replaces retired reports screen).
+    Reuses loop['page'] state from _page_state — does not re-scan the filesystem."""
+    page = loop.get("page") or {}
+    href = page.get("href")
+    report_href = loop.get("report_href")
+    if not href and not report_href:
+        return ""
+    name = loop["name"]
+    links = []
+    if href:
+        badge = (
+            ' <span class="badge page-stale">stale</span>' if page.get("stale") else ""
+        )
+        links.append(f'<a href="{e(href)}">page</a>{badge}')
+    if report_href:
+        links.append(f'<a href="{e(report_href)}">latest.md</a>')
+    dated = page.get("dated") or []
+    shown = dated[:30]
+    more = (
+        f' <span class="muted">+{len(dated) - 30} older</span>'
+        if len(dated) > 30
+        else ""
+    )
+    history = ""
+    if shown or more:
+        history = (
+            '<div class="history">'
+            + " ".join(
+                f'<a href="../reports/{e(name)}/{e(d)}">{e(d)}</a>' for d in shown
+            )
+            + more
+            + "</div>"
+        )
+    return (
+        f'<div class="report-block"><div class="report-links">'
+        f'{" · ".join(links)}</div>{history}</div>'
+    )
+
+
+def _render_loop_summary(loop, now):
+    """The <summary> content for one garden accordion row (glance tier)."""
     badges = []
     if loop["stale"]:
         badges.append("stale")
@@ -1673,12 +1727,15 @@ def _render_loop_row(loop, now):
     stamp = _stamp_html(loop["light_color"], loop["light_marker"], badges)
 
     latest = loop["latest_run"]
+    # 巡 gloss is "run" → "last 巡 run …" / "next 巡 run …"
     if latest:
         started = latest["started_at"] or ""
         abs_short = started[5:16].replace("T", " ") if len(started) >= 16 else started
-        last_run = f"last 巡 {e(format_relative(started, now))} · {e(abs_short)}"
+        last_run = (
+            f"last 巡{_en('run')} {e(format_relative(started, now))} · {e(abs_short)}"
+        )
     else:
-        last_run = "last 巡 never"
+        last_run = f"last 巡{_en('run')} never"
 
     spend_tok, spend_cost = loop["spend_7d"]
     spend_text = f"7d {fmt_num(spend_tok)} tok"
@@ -1691,10 +1748,13 @@ def _render_loop_row(loop, now):
     _switch = (
         '<span class="sw {cls}" role="img" aria-label="{aria}" title="{title}">'
         '<span class="sw-track"><span class="sw-knob"></span></span>'
-        '<span class="sw-lab">{kanji}</span></span>'
+        '<span class="sw-lab">{kanji}</span>{gloss}</span>'
     )
     if loop["schedule"] == "manual":
-        sw = '<span class="sw manual" title="manual — run via loopctl">手</span>'
+        sw = (
+            f'<span class="sw manual" title="manual — run via loopctl">'
+            f"手{_en('manual')}</span>"
+        )
         next_html = '<span class="rm-next off">manual</span>'
     elif loop["installed"] and loop["enabled"]:
         sw = _switch.format(
@@ -1702,14 +1762,19 @@ def _render_loop_row(loop, now):
             aria="rounds on",
             title="schedule loaded (launchd)",
             kanji="巡",
+            gloss=_en("on"),
         )
-        next_html = f'<span class="rm-next">next 巡 {e(loop["next_run_text"])}</span>'
+        next_html = (
+            f'<span class="rm-next">next 巡{_en("run")} '
+            f'{e(loop["next_run_text"])}</span>'
+        )
     elif loop["installed"]:
         sw = _switch.format(
             cls="off paused",
             aria="rounds paused",
             title="rounds paused — resume from console or loopctl resume",
             kanji="休",
+            gloss=_en("paused"),
         )
         next_html = '<span class="rm-next off">paused</span>'
     else:
@@ -1718,39 +1783,40 @@ def _render_loop_row(loop, now):
             aria="rounds off",
             title="no schedule loaded — supervised runs only",
             kanji="休",
+            gloss=_en("off"),
         )
         next_html = '<span class="rm-next off">no schedule loaded</span>'
 
-    page = loop.get("page") or {}
-    links = []
-    if page.get("href"):
-        badge = (
-            ' <span class="badge page-stale">stale</span>' if page.get("stale") else ""
-        )
-        links.append(f'<a href="{e(page["href"])}">page</a>{badge}')
-    if loop["report_href"]:
-        label = "md" if page.get("href") else "latest"
-        links.append(f'<a href="{e(loop["report_href"])}">{label}</a>')
-    report_link = " · ".join(links)
-
+    # Report links live in the expansion body (links inside <summary> fight the toggle).
     toko = "".join(loop["toko_lines"]) or _toko_line(
         "未", "", '<span class="muted">never run</span>'
     )
     controls = _render_console_controls(loop)
     tags_html = _render_tag_chips(loop["tags"])
-    data_tags = _data_tags_attr(loop["tags"])
     return (
-        f'<div class="loop-row"{data_tags}>'
         f"{stamp}"
-        f'<div class="loop-name"><a href="#loop-{e(loop["name"])}">{e(loop["name"])}</a>'
+        f'<div class="loop-name">{e(loop["name"])}'
         f"{tags_html}"
         f"<small>{e(loop['schedule'])} · {e(loop['description'])}</small></div>"
         f'<div class="toko"><div class="toko-scroll">{toko}</div>'
         '<span class="toko-tag">latest</span></div>'
         f'<div class="run-meta"><span class="rm-when">{last_run}</span>'
-        f'<span class="rm-cost">{e(spend_text)}</span>{next_html}{report_link}</div>'
+        f'<span class="rm-cost">{e(spend_text)}</span>{next_html}</div>'
         f'<div class="sw-cell">{sw}{controls}</div>'
-        "</div>"
+    )
+
+
+def _render_loop_row(loop, conn, now):
+    """One garden accordion: <details name="garden"> with summary glance + section body."""
+    data_tags = _data_tags_attr(loop["tags"])
+    name = loop["name"]
+    summary = _render_loop_summary(loop, now)
+    body = _render_loop_section(loop, conn, now)
+    return (
+        f'<details class="loop-row" name="garden" id="loop-{e(name)}"{data_tags}>'
+        f"<summary>{summary}</summary>"
+        f"{body}"
+        f"</details>"
     )
 
 
@@ -1848,11 +1914,18 @@ def _render_loop_section(loop, conn, now):
             hb_html = '<div class="hb muted">Heartbeat: no probes recorded</div>'
 
     tags_html = _render_tag_chips(loop["tags"])
-    data_tags = _data_tags_attr(loop["tags"])
     provenance_html = _render_provenance(loop.get("provenance"))
+    report_block_html = _render_report_block(loop)
+    permalink = (
+        f'<a class="permalink" href="#loop-{e(loop["name"])}" '
+        f'title="link to this loop">#</a>'
+    )
 
+    # id="loop-<name>" lives on the outer <details>; section is the expansion body only.
     return (
-        f'<section class="loop" id="loop-{e(loop["name"])}"{data_tags}>'
+        f'<section class="loop">'
+        f"{permalink}"
+        f"{report_block_html}"
         f'<h2>{stamp}<span class="lname">{e(loop["name"])}</span> '
         f'<span class="muted">{e(loop["description"])}</span></h2>'
         f"{tags_html}"
@@ -2036,24 +2109,14 @@ def _resolve_dashboard_loops(
     schedule_parse,
     now,
     envelope_mod,
-    include_report_only=False,
 ):
     names = _discover_loops(root)
-    loops = [
+    return [
         _resolve_loop(
             root, name, conn, loopconf_parse, schedule_parse, now, envelope_mod
         )
         for name in names
     ]
-    if not include_report_only:
-        return loops
-    loop_by_name = {loop["name"]: loop for loop in loops}
-    for name in _discover_report_page_names(root):
-        if name not in loop_by_name:
-            loop_by_name[name] = _resolve_loop(
-                root, name, conn, loopconf_parse, schedule_parse, now, envelope_mod
-            )
-    return [loop_by_name[name] for name in sorted(loop_by_name)]
 
 
 def generate(
@@ -2062,16 +2125,12 @@ def generate(
     loopconf_parse=None,
     schedule_parse=None,
     now=None,
-    reports_out_file=None,
     return_html=False,
 ):
-    """Generates dashboard/loops.html and dashboard/reports.html via atomic renames."""
+    """Generates dashboard/loops.html via atomic rename."""
     root = root or os.environ.get("LOOPS_ROOT") or os.getcwd()
     root = os.path.abspath(root)
     out_file = out_file or os.path.join(root, "dashboard", "loops.html")
-    reports_out_file = reports_out_file or os.path.join(
-        root, "dashboard", "reports.html"
-    )
     now = now or datetime.now(timezone.utc)
 
     _loopconf_parse = loopconf_parse or _default_loopconf_parse(root)
@@ -2080,23 +2139,14 @@ def generate(
 
     conn = _open_db(root)
     try:
-        # Resolve once (§10 perf: this path runs after every loop firing). include_report_only
-        # returns the superset -- loop.d entries plus report-only names -- so filtering it down
-        # to the loop.d names gives the exact same `loops` list _resolve_dashboard_loops(root,
-        # ..., include_report_only=False) would have produced, without a second sqlite/fs pass
-        # per loop. _discover_loops() returns names already sorted alphabetically, matching the
-        # sort order report_loops is built in, so the filter preserves ordering byte-for-byte.
-        report_loops = _resolve_dashboard_loops(
+        loops = _resolve_dashboard_loops(
             root,
             conn,
             _loopconf_parse,
             _schedule_parse,
             now,
             envelope_mod,
-            include_report_only=True,
         )
-        discovered_names = set(_discover_loops(root))
-        loops = [loop for loop in report_loops if loop["name"] in discovered_names]
 
         counts = {"green": 0, "amber": 0, "red": 0, "grey": 0}
         for loop in loops:
@@ -2119,66 +2169,20 @@ def generate(
             conn,
             events,
         )
-        try:
-            reports_html = _render_reports_page(report_loops, now)
-        except Exception:  # noqa: BLE001 — §10: a broken reports view must not take down loops.html
-            reports_html = _reports_document(
-                '<div class="empty">Reports view failed to render.</div>', now
-            )
     finally:
         if conn is not None:
             conn.close()
 
     _atomic_write(out_file, html)
-    _atomic_write(reports_out_file, reports_html)
     return html if return_html else out_file
-
-
-def generate_reports(
-    root=None,
-    reports_out_file=None,
-    loopconf_parse=None,
-    schedule_parse=None,
-    now=None,
-    return_html=False,
-):
-    """Generates dashboard/reports.html. Thin wrapper used by tests."""
-    root = root or os.environ.get("LOOPS_ROOT") or os.getcwd()
-    root = os.path.abspath(root)
-    reports_out_file = reports_out_file or os.path.join(
-        root, "dashboard", "reports.html"
-    )
-    now = now or datetime.now(timezone.utc)
-
-    _loopconf_parse = loopconf_parse or _default_loopconf_parse(root)
-    _schedule_parse = schedule_parse or _default_schedule_parse(root)
-    envelope_mod = _default_page_envelope(root)
-
-    conn = _open_db(root)
-    try:
-        loops = _resolve_dashboard_loops(
-            root,
-            conn,
-            _loopconf_parse,
-            _schedule_parse,
-            now,
-            envelope_mod,
-            include_report_only=True,
-        )
-        html = _render_reports_page(loops, now)
-    finally:
-        if conn is not None:
-            conn.close()
-
-    _atomic_write(reports_out_file, html)
-    return html if return_html else reports_out_file
 
 
 def _render_page(
     loops, counts, needs_attention_count, spend_today, spend_7d_fleet, now, conn, events
 ):
     top_chips = "".join(
-        f'<span class="chip"><span class="jp">{_STAMP_KANJI[c]}</span> <b>{n}</b></span>'
+        f'<span class="chip"><span class="jp">{_STAMP_KANJI[c]}</span>'
+        f"{_en(_STAMP_GLOSS[c])} <b>{n}</b></span>"
         for c, n in counts.items()
         if n and c in _STAMP_KANJI
     )
@@ -2204,7 +2208,6 @@ def _render_page(
         f'<span class="chip">spend today <b>{e(spend_today_html)}</b></span>'
         f'<span class="chip">spend 7d <b>{e(spend_7d_html)}</b></span>'
         f'<span class="chip muted">regenerated {e(now.strftime("%Y-%m-%dT%H:%M:%SZ"))}</span>'
-        '<span class="chip"><a href="reports.html">reports</a></span>'
         "</div></div>"
     )
 
@@ -2229,7 +2232,8 @@ def _render_page(
             "</label></div>"
         )
 
-    global_rows = "".join(_render_loop_row(loop, now) for loop in loops)
+    # Accordion rows include each loop's section body; no separate sections stack below.
+    global_rows = "".join(_render_loop_row(loop, conn, now) for loop in loops)
     garden = (
         '<div class="zone"><div class="kicker"><b>庭</b> the garden — all loops'
         '<span class="note">床の間 = each loop hangs its own output · '
@@ -2237,115 +2241,8 @@ def _render_page(
         f'<div class="garden">{global_rows}</div></div>'
     )
 
-    sections = "".join(_render_loop_section(loop, conn, now) for loop in loops)
-
-    body = f"{events_html}<main>{filter_html}{garden}{sections}</main>"
+    body = f"{events_html}<main>{filter_html}{garden}</main>"
     return _wrap_html(top, body)
-
-
-def _safe_format_relative(ts, now):
-    try:
-        return format_relative(ts, now)
-    except (AttributeError, TypeError, ValueError):
-        return "unknown"
-
-
-def _render_reports_page(loops, now):
-    entries = []
-    for loop in loops:
-        page = loop.get("page") or {}
-        if not (page.get("enabled") or page.get("href") or page.get("dated")):
-            continue
-        name = loop["name"]
-        meta = page.get("meta")
-        historical = (
-            ' <span class="badge historical">historical</span>'
-            if page.get("historical")
-            else ""
-        )
-        if page.get("href") and meta:
-            totals = meta.get("totals")
-            if not isinstance(totals, dict):
-                totals = {}
-            chips = "".join(
-                f'<span class="chip">{e(str(k))} <b>{e(str(v))}</b></span>'
-                for k, v in totals.items()
-            )
-            stale = (
-                ' <span class="badge page-stale">stale</span>'
-                if page.get("stale")
-                else ""
-            )
-            generated_at = meta.get("generated_at") or ""
-            page_class = meta.get("page_class") or ""
-            head = (
-                f'<a href="{e(page["href"])}">{e(meta.get("title") or name)}</a>'
-                f"{stale}{historical} "
-                f'<span class="muted">{e(page_class)} · '
-                f"{e(_safe_format_relative(generated_at, now))}"
-                f" ({e(generated_at)})</span>"
-            )
-        elif page.get("href"):
-            head = (
-                f'<a href="{e(page["href"])}">{e(name)}</a> '
-                f'<span class="badge no-meta">no meta</span>{historical}'
-            )
-            chips = ""
-        elif page.get("dated") and page.get("historical"):
-            head = f'{e(name)} <span class="badge historical">historical</span>'
-            chips = ""
-        else:
-            head = (
-                f'{e(name)} <span class="badge no-page">'
-                "no page yet — last render failed or has not run</span>"
-            )
-            chips = ""
-        dated = page.get("dated") or []
-        shown = dated[:30]
-        more = (
-            f' <span class="muted">+{len(dated) - 30} older</span>'
-            if len(dated) > 30
-            else ""
-        )
-        history = (
-            " ".join(f'<a href="../reports/{e(name)}/{e(d)}">{e(d)}</a>' for d in shown)
-            + more
-        )
-        entries.append(
-            f'<section class="report-entry"><h2>{head}</h2>'
-            f'<div class="chips">{chips}</div>'
-            f'<div class="history">{history}</div></section>'
-        )
-    body = "".join(entries) or '<div class="empty">No page-enabled loops yet.</div>'
-    return _reports_document(body, now)
-
-
-def _reports_document(body, now):
-    regenerated = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    top = (
-        '<div class="topstrip"><span class="seal-mini">頁</span>'
-        "<h1>reports<small>the garden · 庭</small></h1>"
-        '<div class="head-stats">'
-        f'<span class="chip muted">regenerated {e(regenerated)}</span>'
-        '<span class="chip"><a href="loops.html">loops</a></span>'
-        "</div></div>"
-    )
-    intro = (
-        '<div class="zone"><div class="kicker"><b>頁</b> report pages'
-        '<span class="note">latest envelopes · dated history from filenames</span>'
-        "</div></div>"
-    )
-    return (
-        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        "<title>reports — 庭 the garden</title>"
-        f"<style>{CSS}</style></head><body>"
-        f'<div class="sheet">{top}<main>{intro}'
-        f'<div class="reports-list">{body}</div></main>'
-        "<footer>loops harness — static sheet · report/propose-only · "
-        "page metadata is read only from envelopes</footer></div>"
-        "</body></html>"
-    )
 
 
 # Shared schedule-picker panel + hydration script (Task 4). Static (no interpolation) --
@@ -2418,6 +2315,9 @@ _CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
   document.addEventListener('click', function(ev){
     var sw = ev.target.closest('.con-sw');
     if (sw && !sw.disabled){
+      // preventDefault: these controls sit inside <summary>; without it the click
+      // would also toggle the garden accordion open/closed.
+      ev.preventDefault();
       var cell = sw.closest('[data-console-controls]');
       var on = sw.getAttribute('aria-checked') !== 'true';
       sw.disabled = true;
@@ -2429,6 +2329,7 @@ _CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
     var ed = ev.target.closest('[data-sched-edit]');
     var panel = document.querySelector('[data-sched-panel]');
     if (ed){
+      ev.preventDefault();
       var cell2 = ed.closest('[data-console-controls]');
       panel.dataset.loop = cell2.getAttribute('data-loop');
       panel.dataset.cur = cell2.getAttribute('data-schedule');
@@ -2530,13 +2431,8 @@ def main(argv=None):
         default=None,
         help="output HTML path (default: <root>/dashboard/loops.html)",
     )
-    parser.add_argument(
-        "--reports-out",
-        default=None,
-        help="reports HTML path (default: <root>/dashboard/reports.html)",
-    )
     args = parser.parse_args(argv)
-    out = generate(root=args.root, out_file=args.out, reports_out_file=args.reports_out)
+    out = generate(root=args.root, out_file=args.out)
     print(out)
     return 0
 

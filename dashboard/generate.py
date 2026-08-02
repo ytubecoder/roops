@@ -668,17 +668,98 @@ def _read_json(path):
 
 CSS = """
 /* garden dashboard — roops design system (B-04/B-07). Tokens are the roops set; no network
-   assets (Section 10): local mincho only, no webfonts, no textures, no urls of any scheme. */
+   assets (Section 10): local mincho only, no webfonts, no textures, no urls of any scheme.
+   Dark palette + toggle (WP2 2026-08-02): OS prefers-color-scheme default; explicit
+   data-theme on <html> overrides both ways; localStorage key loops-theme. */
 :root {
   color-scheme: light;
-  --sumi: #1C1A17; --sumi-deep: #16130F;
-  --washi: #F2EDE3; --washi-shade: #E9E2D3;
-  --shu: #C73E2B; --shu-deep: #A93321;
-  --ai: #2E4A5B; --nibi: #8C8578; --koke: #6B7A5C; --ochre: #A87A2A;
-  --hair: rgba(28,26,23,.14); --hair2: rgba(28,26,23,.22);
+  --sumi: #1C1A17;
+  --sumi-deep: #16130F;
+  --washi: #F2EDE3;
+  --washi-shade: #E9E2D3;
+  --shu: #C73E2B;
+  --shu-deep: #A93321;
+  --ai: #2E4A5B;
+  --nibi: #8C8578;
+  --nibi-faint: #ABA495;
+  --koke: #6B7A5C;
+  --ochre: #A87A2A;
+  --hair: rgba(28,26,23,.14);
+  --hair2: rgba(28,26,23,.22);
+  --sumi-rgb: 28,26,23;
+  --shu-rgb: 199,62,43;
+  --ai-rgb: 46,74,91;
+  --nibi-rgb: 140,133,120;
   --serif: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
 }
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --sumi: #E7E9EC;
+    --sumi-deep: #F4F5F7;
+    --washi: #0E0F12;
+    --washi-shade: #14161A;
+    --shu: #D84F63;
+    --shu-deep: #B84354;
+    --ai: #279A83;
+    --nibi: #9AA1AB;
+    --nibi-faint: #5D6570;
+    --koke: #8FA97A;
+    --ochre: #B48C1A;
+    --hair: #22252B;
+    --hair2: #2C3037;
+    --sumi-rgb: 231,233,236;
+    --shu-rgb: 216,79,99;
+    --ai-rgb: 39,154,131;
+    --nibi-rgb: 154,161,171;
+  }
+  /* --sumi-deep is near-white (ink tier); body backdrop keeps a near-black frame so the
+     paper-on-desk relationship does not invert in dark mode. */
+  body { background: #08090B; }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --sumi: #E7E9EC;
+  --sumi-deep: #F4F5F7;
+  --washi: #0E0F12;
+  --washi-shade: #14161A;
+  --shu: #D84F63;
+  --shu-deep: #B84354;
+  --ai: #279A83;
+  --nibi: #9AA1AB;
+  --nibi-faint: #5D6570;
+  --koke: #8FA97A;
+  --ochre: #B48C1A;
+  --hair: #22252B;
+  --hair2: #2C3037;
+  --sumi-rgb: 231,233,236;
+  --shu-rgb: 216,79,99;
+  --ai-rgb: 39,154,131;
+  --nibi-rgb: 154,161,171;
+}
+:root[data-theme="dark"] body { background: #08090B; }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --sumi: #1C1A17;
+  --sumi-deep: #16130F;
+  --washi: #F2EDE3;
+  --washi-shade: #E9E2D3;
+  --shu: #C73E2B;
+  --shu-deep: #A93321;
+  --ai: #2E4A5B;
+  --nibi: #8C8578;
+  --nibi-faint: #ABA495;
+  --koke: #6B7A5C;
+  --ochre: #A87A2A;
+  --hair: rgba(28,26,23,.14);
+  --hair2: rgba(28,26,23,.22);
+  --sumi-rgb: 28,26,23;
+  --shu-rgb: 199,62,43;
+  --ai-rgb: 46,74,91;
+  --nibi-rgb: 140,133,120;
+}
+:root[data-theme="light"] body { background: var(--sumi-deep); }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
   background: var(--sumi-deep); color: var(--sumi);
@@ -718,6 +799,13 @@ h1, h2, h3 { font-weight: 500; letter-spacing: .01em; }
   align-items: baseline; font-family: var(--mono); font-size: 11px;
   letter-spacing: .14em; color: var(--nibi); text-transform: uppercase;
 }
+#theme-toggle {
+  font-family: var(--mono); font-size: 13px; line-height: 1; letter-spacing: 0;
+  color: var(--nibi); background: transparent; text-transform: none;
+  border: 1px solid var(--hair2); border-radius: 3px;
+  padding: 4px 8px; cursor: pointer; align-self: center;
+}
+#theme-toggle:hover { color: var(--sumi); border-color: var(--nibi); }
 .chip { white-space: nowrap; }
 .chip b { font-weight: 400; color: var(--sumi); }
 .chip .jp { font-family: var(--serif); letter-spacing: 0; }
@@ -752,7 +840,7 @@ main { padding: 0 0 8px; }
   list-style: none; cursor: pointer;
 }
 .loop-row > summary::-webkit-details-marker { display: none; }
-.loop-row > summary:hover { background: rgba(28,26,23,.035); }
+.loop-row > summary:hover { background: rgba(var(--sumi-rgb),.035); }
 .stamp-cell { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .stamp {
   width: 28px; height: 28px; border-radius: 3px; font-size: 14px; line-height: 1;
@@ -782,10 +870,10 @@ main { padding: 0 0 8px; }
 }
 .toko-scroll {
   height: 100%; overflow-y: auto; overflow-x: hidden; padding: 8px 10px;
-  scrollbar-width: thin; scrollbar-color: rgba(140,133,120,.3) transparent;
+  scrollbar-width: thin; scrollbar-color: rgba(var(--nibi-rgb),.3) transparent;
 }
 .toko-scroll::-webkit-scrollbar { width: 4px; }
-.toko-scroll::-webkit-scrollbar-thumb { background: rgba(140,133,120,.28); border-radius: 2px; }
+.toko-scroll::-webkit-scrollbar-thumb { background: rgba(var(--nibi-rgb),.28); border-radius: 2px; }
 .toko-tag {
   position: absolute; top: 3px; right: 5px; z-index: 1; pointer-events: none;
   font-family: var(--mono); font-size: 8.5px; letter-spacing: .2em; text-transform: uppercase;
@@ -942,7 +1030,7 @@ table.list-panel th { color: var(--nibi); font-weight: 400; text-transform: uppe
 .finding > div { font-size: 13px; }
 .finding .cmd {
   display: block; margin-top: 6px; font-family: var(--mono); font-size: 10px;
-  color: var(--ai); background: rgba(28,26,23,.05); border: 1px solid var(--hair);
+  color: var(--ai); background: rgba(var(--sumi-rgb),.05); border: 1px solid var(--hair);
   padding: 3px 8px; border-radius: 2px; width: fit-content; max-width: 100%; overflow-wrap: anywhere;
 }
 /* hanko button rank (B-11) — the section-04 mock's per-finding stamps, wired to the only
@@ -958,7 +1046,7 @@ table.list-panel th { color: var(--nibi); font-weight: 400; text-transform: uppe
               color .3s cubic-bezier(0.16, 1, 0.3, 1),
               transform .15s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.hanko-btn:hover { background: rgba(199,62,43,.08); }
+.hanko-btn:hover { background: rgba(var(--shu-rgb),.08); }
 .hanko-btn:active { transform: rotate(-2deg) scale(.94); background: var(--shu); color: var(--washi); }
 .hanko-btn:disabled { opacity: .25; cursor: default; }
 .stamp-mark {
@@ -995,7 +1083,7 @@ section.loop > h3 {
 .fail-detail { color: var(--shu); font-size: 10.5px; }
 
 /* failure handoff — the one washi-red block */
-details.handoff { margin: 14px 0; border: 1px solid var(--shu); border-radius: 3px; background: rgba(199,62,43,.05); }
+details.handoff { margin: 14px 0; border: 1px solid var(--shu); border-radius: 3px; background: rgba(var(--shu-rgb),.05); }
 details.handoff summary {
   cursor: pointer; color: var(--shu); font-family: var(--mono); font-size: 11px;
   letter-spacing: .1em; padding: 9px 13px;
@@ -1131,7 +1219,7 @@ html.console-active .loop-row > summary { grid-template-columns: 44px 1.1fr 1.5f
 .tag {
   display: inline-flex; align-items: center; font-family: var(--mono); font-size: 9px;
   letter-spacing: .1em; text-transform: uppercase; padding: 2px 7px; border-radius: 2px;
-  border: 1px solid var(--hair2); color: var(--ai); background: rgba(46,74,91,.06);
+  border: 1px solid var(--hair2); color: var(--ai); background: rgba(var(--ai-rgb),.06);
 }
 .provenance { font-family: var(--mono); font-size: 10px; margin: 2px 0 4px; letter-spacing: .04em; }
 #recent-events {
@@ -1174,6 +1262,16 @@ function loopsOpenHash() {
 }
 document.addEventListener('DOMContentLoaded', loopsOpenHash);
 window.addEventListener('hashchange', loopsOpenHash);
+function loopsToggleTheme() {
+  var root = document.documentElement;
+  var current = root.getAttribute('data-theme');
+  if (!current) {
+    current = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+  var next = current === 'dark' ? 'light' : 'dark';
+  root.setAttribute('data-theme', next);
+  try { localStorage.setItem('loops-theme', next); } catch (e) {}
+}
 """
 
 
@@ -2208,6 +2306,8 @@ def _render_page(
         f'<span class="chip">spend today <b>{e(spend_today_html)}</b></span>'
         f'<span class="chip">spend 7d <b>{e(spend_7d_html)}</b></span>'
         f'<span class="chip muted">regenerated {e(now.strftime("%Y-%m-%dT%H:%M:%SZ"))}</span>'
+        '<button type="button" id="theme-toggle" onclick="loopsToggleTheme()" '
+        'title="toggle light/dark" aria-label="toggle color theme">◐</button>'
         "</div></div>"
     )
 
@@ -2380,10 +2480,18 @@ _CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
 
 
 def _wrap_html(top, body):
+    # No-flash theme stamp: runs before <style> so data-theme is set before first paint.
+    # localStorage key / attribute / values are pinned for WP3 report-page reuse.
+    theme_stamp = (
+        "<script>(function(){try{var t=localStorage.getItem('loops-theme');"
+        "if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t);}"
+        "}catch(e){}})();</script>"
+    )
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         "<title>roops — 庭 the garden</title>"
+        f"{theme_stamp}"
         f"<style>{CSS}</style></head><body>"
         f'<div class="sheet">{top}{body}'
         "<footer>loops harness — static sheet · report/propose-only · "

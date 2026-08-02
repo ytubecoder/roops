@@ -6,6 +6,9 @@
 Priority: medium | Status: in-progress
 Spec: B:b-13-dashboard-run-now-2026-08-02
 
+### B-14: WP1 garden reorg: accordion rows, English glosses, retire reports.html (docs/workpackages/2026-08-02-wp1-garden-reorg.md)
+Priority: high | Status: in-progress
+
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)
@@ -38,9 +41,6 @@ Priority: medium | Status: for-review
 ## Backlog
 
 ### B-03: Ads loops phase 1: reliable runs + manual run-everything trigger + clean schedules screen
-Priority: high | Status: proposed
-
-### B-14: WP1 garden reorg: accordion rows, English glosses, retire reports.html (docs/workpackages/2026-08-02-wp1-garden-reorg.md)
 Priority: high | Status: proposed
 
 ### B-15: WP2 garden dark mode: token dark values + theme toggle (docs/workpackages/2026-08-02-wp2-dark-mode.md)

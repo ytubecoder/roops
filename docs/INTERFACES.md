@@ -1038,11 +1038,22 @@ be added to the render path.
   (relative + absolute), schedule + best-effort next run, 7-day token spend, link to latest report.
 - **Owner (B-17 — 2026-08-03):** each row shows an owner chip (主 + resolved owner) in the summary
   tier; assumed owners render dimmed/dashed with a title hint. Every `.loop-row` carries
-  `data-owner="<resolved>"` (always emitted, like `data-tags`). The filter bar always renders an
-  owner `<select>` (the tag select stays conditional on tags existing); one client-side function
-  applies owner ∧ tag. Clicking the chip copies `loopctl set-owner <loop> <owner>` to the
-  clipboard (inline JS, clipboard-only) — the page's owner-edit affordance; the page itself still
-  mutates nothing and fetches nothing.
+  `data-owner="<resolved>"` (always emitted, like `data-tags`). The owner `<select>` always
+  renders (the tag select stays conditional on tags existing); one client-side function applies
+  owner ∧ tag. Clicking the chip copies `loopctl set-owner <loop> <owner>` to the clipboard
+  (inline JS, clipboard-only) — the page's owner-edit affordance; the page itself still mutates
+  nothing and fetches nothing. (B-19 moved the controls into the garden kicker — next bullet.)
+- **Garden kicker controls + recency order (B-19 — 2026-08-03):** the garden kicker's right side
+  hosts the filter/sort selects (`<span class="filters">`) — the old glossary note (床の間/休
+  glosses) is REMOVED from the kicker; the glyphs keep their `title` glosses. New
+  `<select id="sort-order">` with `recent` (default) and `name`. **Default garden order is
+  recency, server-rendered**: rows sort by `data-latest-event` — the loop's newest `loop_events`
+  ts of ANY type (so a just-created loop tops the garden; same missing-table degradation as
+  provenance), event-less loops last in name order. The attribute is always emitted (`""` = no
+  events). The select's client-side re-sort reorders the same rows with a FLIP transform
+  animation (inline JS, no fetches; `prefers-reduced-motion` disables it). The recent-events
+  strip is visually compacted (tight paddings, no per-row hairlines) — still the same 15-row
+  `load_loop_events` content contract.
 - **Top strip:** fleet counts by status, `needs_attention` count, spend today / 7d, last regen time.
 - **Stale detection:** a loop overdue by > 1.5 × its `expected_interval_s` (§5.1) is flagged
   `stale` and counts toward `needs_attention`. `manual` loops are exempt.

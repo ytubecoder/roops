@@ -1836,7 +1836,7 @@ class TagsProvenanceEventsTests(unittest.TestCase):
         self.assertNotIn('class="tag"', html)
         self.assertIn(
             '<details class="loop-row" name="garden" id="loop-untagged" '
-            'data-tags="" data-owner="loops">',
+            'data-tags="" data-owner="loops" data-latest-event="">',
             html,
         )
 
@@ -1852,12 +1852,12 @@ class TagsProvenanceEventsTests(unittest.TestCase):
         html = self._generate(root)
         self.assertIn(
             '<details class="loop-row" name="garden" id="loop-tagged" '
-            'data-tags="project:x" data-owner="loops">',
+            'data-tags="project:x" data-owner="loops" data-latest-event="">',
             html,
         )
         self.assertIn(
             '<details class="loop-row" name="garden" id="loop-untagged" '
-            'data-tags="" data-owner="loops">',
+            'data-tags="" data-owner="loops" data-latest-event="">',
             html,
         )
         # the JS must match tags exactly against the split list, not treat a missing
@@ -2875,6 +2875,80 @@ class TestOwnerGarden(unittest.TestCase):
         self.assertNotIn('id="tag-filter"', html)
         self.assertIn("loopsApplyFilters", html)
         self.assertNotIn("loopsFilterByTag", html)
+
+
+class TestGardenKickerSort(unittest.TestCase):
+    """B-19: filter/sort controls live in the kicker (glossary note removed);
+    default garden order is recency by newest lifecycle event, server-rendered;
+    the sort select re-sorts client-side with a FLIP animation."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+        self.conn = self.fx.init_db()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _generate(self):
+        return generate.generate(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+
+    def test_kicker_note_gone_filters_live_in_kicker(self):
+        self.fx.add_loop("alpha")
+        html = self._generate()
+        self.assertNotIn("床の間 =", html)
+        self.assertNotIn("filter-bar", html)
+        kicker_at = html.index('<div class="kicker">')
+        filters_at = html.index('<span class="filters">')
+        garden_at = html.index('<div class="garden">')
+        self.assertTrue(kicker_at < filters_at < garden_at)
+        # the selects sit inside the filters span, before the garden
+        self.assertTrue(filters_at < html.index('id="owner-filter"') < garden_at)
+        self.assertTrue(filters_at < html.index('id="sort-order"') < garden_at)
+
+    def test_sort_select_defaults_to_recent_and_flip_js_present(self):
+        self.fx.add_loop("alpha")
+        html = self._generate()
+        self.assertIn('<option value="recent" selected>recent</option>', html)
+        self.assertIn('<option value="name">name</option>', html)
+        self.assertIn("loopsApplySort", html)
+        self.assertIn("data-latest-event", html)
+        self.assertIn("requestAnimationFrame", html)
+
+    def test_default_order_is_recency_newest_event_first(self):
+        # zeta has the newest event; alpha's is older; mid has none.
+        # Name order would be alpha, mid, zeta — recency must yield
+        # zeta, alpha, mid (event-less loops last, in name order).
+        for name in ("alpha", "mid", "zeta"):
+            self.fx.add_loop(name)
+        self.fx.add_event(self.conn, "alpha", "created", "t", ts="2026-07-01T00:00:00Z")
+        self.fx.add_event(self.conn, "zeta", "created", "t", ts="2026-08-02T00:00:00Z")
+        html = self._generate()
+        order = [
+            html.index('id="loop-zeta"'),
+            html.index('id="loop-alpha"'),
+            html.index('id="loop-mid"'),
+        ]
+        self.assertEqual(order, sorted(order))
+        self.assertIn('data-latest-event="2026-08-02T00:00:00Z"', html)
+        self.assertIn('data-latest-event=""', html)
+
+    def test_recency_uses_newest_event_of_any_type(self):
+        # a later `paused` outranks an older `created` — recency is the
+        # newest lifecycle event, not the founding one.
+        for name in ("alpha", "beta"):
+            self.fx.add_loop(name)
+        self.fx.add_event(self.conn, "alpha", "created", "t", ts="2026-08-01T00:00:00Z")
+        self.fx.add_event(self.conn, "beta", "created", "t", ts="2026-07-01T00:00:00Z")
+        self.fx.add_event(self.conn, "beta", "paused", "t", ts="2026-08-02T00:00:00Z")
+        html = self._generate()
+        self.assertLess(html.index('id="loop-beta"'), html.index('id="loop-alpha"'))
 
 
 if __name__ == "__main__":

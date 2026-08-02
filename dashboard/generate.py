@@ -669,6 +669,23 @@ def _loop_provenance(conn, loop_name):
     return dict(row) if row else None
 
 
+def _latest_event_ts(conn, loop_name):
+    """B-19: the loop's newest lifecycle event ts (ANY event type — a
+    just-created loop's `created` row IS its newest event, which is what
+    floats it to the top of the garden's default recency order). Same
+    missing-table degradation as _loop_provenance."""
+    if conn is None:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT ts FROM loop_events WHERE loop_name=? ORDER BY ts DESC, id DESC LIMIT 1",
+            (loop_name,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return row["ts"] if row else None
+
+
 def _read_json(path):
     if not os.path.isfile(path):
         return None
@@ -841,7 +858,19 @@ main { padding: 0 0 8px; }
   display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px;
 }
 .kicker b { color: var(--shu); font-weight: 400; font-size: 13px; letter-spacing: 0; font-family: var(--serif); }
-.kicker .note { margin-left: auto; letter-spacing: .14em; font-size: 10px; }
+/* B-19: the kicker's right side hosts the filter/sort controls (the old
+   glossary note is gone — the glosses live on the glyphs' own titles). */
+.kicker .filters {
+  margin-left: auto; display: flex; gap: 14px; align-items: baseline;
+  text-transform: none; letter-spacing: .04em; font-size: 10.5px;
+}
+.kicker .filters select {
+  font-family: var(--mono); font-size: 10.5px; background: var(--washi); color: var(--sumi);
+  border: 1px solid var(--hair2); border-radius: 3px; padding: 1px 6px; margin-left: 5px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .loop-row { transition: none !important; }
+}
 
 /* ---------- the garden (global view) ---------- */
 .garden { border: 1px solid var(--hair2); border-radius: 3px; background: rgba(255,255,255,.25); overflow-x: auto; }
@@ -1239,26 +1268,22 @@ html.console-active .loop-row > summary { grid-template-columns: 44px 1.1fr 1.5f
   border: 1px solid var(--hair2); color: var(--ai); background: rgba(var(--ai-rgb),.06);
 }
 .provenance { font-family: var(--mono); font-size: 10px; margin: 2px 0 4px; letter-spacing: .04em; }
+/* B-19: compact — the strip was pushing the garden below the fold. Tighter
+   paddings, no per-row hairlines; the header rule alone separates rows enough. */
 #recent-events {
-  padding: 14px clamp(20px, 4vw, 44px); border-bottom: 1px solid var(--hair2);
+  padding: 7px clamp(20px, 4vw, 44px) 6px; border-bottom: 1px solid var(--hair2);
   background: rgba(255,255,255,.15);
 }
 #recent-events h3 {
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .28em;
-  text-transform: uppercase; color: var(--nibi); font-weight: 400; margin-bottom: 10px;
+  text-transform: uppercase; color: var(--nibi); font-weight: 400; margin-bottom: 3px;
 }
-.events-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 10.5px; }
+.events-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 10.5px; line-height: 1.35; }
 .events-table th {
   text-align: left; color: var(--nibi); font-weight: 400; text-transform: uppercase;
-  font-size: 9px; letter-spacing: .16em; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair2);
+  font-size: 9px; letter-spacing: .16em; padding: 1px 10px 2px 0; border-bottom: 1px solid var(--hair2);
 }
-.events-table td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--hair); }
-.filter-bar { margin-bottom: 14px; font-family: var(--mono); font-size: 11px; color: var(--nibi); letter-spacing: .04em; }
-.filter-bar select {
-  font-family: var(--mono); font-size: 11px; background: var(--washi); color: var(--sumi);
-  border: 1px solid var(--hair2); border-radius: 3px; padding: 3px 8px; margin-left: 8px;
-}
-.filter-bar label + label { margin-left: 16px; }
+.events-table td { padding: 1px 10px 1px 0; }
 /* owner chip (B-17) — 主 = the loop's owning project/process. A button (it
    copies the set-owner command) styled apart from .tag; assumed owners dim. */
 .owner-chip {
@@ -1283,6 +1308,42 @@ function loopsApplyFilters() {
     var okTag = !tag || tags.indexOf(tag) > -1;
     var okOwner = !owner || el.getAttribute('data-owner') === owner;
     el.style.display = (okTag && okOwner) ? '' : 'none';
+  });
+}
+function loopsApplySort() {
+  /* B-19 recency sort. Recency = the loop's newest lifecycle EVENT
+     (data-latest-event, ISO ts) — a just-created loop tops the garden.
+     The server already renders rows in recent order (the default), so this
+     only runs on user changes; movement is FLIP-animated. */
+  var sel = document.getElementById('sort-order');
+  var mode = sel ? sel.value : 'recent';
+  var garden = document.querySelector('.garden');
+  if (!garden) return;
+  var rows = Array.prototype.slice.call(garden.querySelectorAll('details.loop-row'));
+  var before = {};
+  rows.forEach(function (el) { before[el.id] = el.getBoundingClientRect().top; });
+  var byName = function (a, b) { return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0); };
+  var sorted = rows.slice().sort(function (a, b) {
+    if (mode === 'name') return byName(a, b);
+    var ta = a.getAttribute('data-latest-event') || '';
+    var tb = b.getAttribute('data-latest-event') || '';
+    if (ta !== tb) {
+      if (!ta) return 1;
+      if (!tb) return -1;
+      return ta < tb ? 1 : -1;
+    }
+    return byName(a, b);
+  });
+  sorted.forEach(function (el) { garden.appendChild(el); });
+  rows.forEach(function (el) {
+    var dy = before[el.id] - el.getBoundingClientRect().top;
+    if (!dy) return;
+    el.style.transition = 'none';
+    el.style.transform = 'translateY(' + dy + 'px)';
+    requestAnimationFrame(function () {
+      el.style.transition = 'transform .45s ease';
+      el.style.transform = '';
+    });
   });
 }
 function loopsCopyOwnerCmd(ev, el) {
@@ -1997,11 +2058,14 @@ def _render_loop_row(loop, conn, now):
     """One garden accordion: <details name="garden"> with summary glance + section body."""
     data_tags = _data_tags_attr(loop["tags"])
     data_owner = _data_owner_attr(loop)
+    # B-19: always emitted like data-tags/data-owner ("" = no events yet) —
+    # the client-side recency sort reads it off every row.
+    data_latest = f' data-latest-event="{e(loop["latest_event_ts"] or "")}"'
     name = loop["name"]
     summary = _render_loop_summary(loop, now)
     body = _render_loop_section(loop, conn, now)
     return (
-        f'<details class="loop-row" name="garden" id="loop-{e(name)}"{data_tags}{data_owner}>'
+        f'<details class="loop-row" name="garden" id="loop-{e(name)}"{data_tags}{data_owner}{data_latest}>'
         f"<summary>{summary}</summary>"
         f"{body}"
         f"</details>"
@@ -2160,6 +2224,7 @@ def _resolve_loop(
     tags = conf.get("tags") or []
     owner, owner_assumed = resolve_owner(conf)
     provenance = _loop_provenance(conn, name)
+    latest_event_ts = _latest_event_ts(conn, name)
 
     timeout_s = conf.get("timeout_s", 900)
     schedule_spec = conf.get("schedule", "manual")
@@ -2277,6 +2342,7 @@ def _resolve_loop(
         "owner": owner,
         "owner_assumed": owner_assumed,
         "provenance": provenance,
+        "latest_event_ts": latest_event_ts,
         "died": died,
         "overdue": overdue,
         "running": running,
@@ -2302,12 +2368,19 @@ def _resolve_dashboard_loops(
     envelope_mod,
 ):
     names = _discover_loops(root)
-    return [
+    loops = [
         _resolve_loop(
             root, name, conn, loopconf_parse, schedule_parse, now, envelope_mod
         )
         for name in names
     ]
+    # B-19: default garden order is RECENCY — newest lifecycle event first
+    # (a just-created loop tops the garden), event-less loops last in name
+    # order. Server-side so the static page is correct before any JS runs;
+    # the sort-order select re-sorts client-side (FLIP) from the same
+    # data-latest-event attribute.
+    loops.sort(key=lambda loop: loop["latest_event_ts"] or "", reverse=True)
+    return loops
 
 
 def generate(
@@ -2413,16 +2486,17 @@ def _render_page(
         )
         return _wrap_html(top, body)
 
-    # B-17: the owner select always renders (every loop resolves an owner);
-    # the tag select keeps its only-when-tags-exist rule. One combined
-    # client-side function applies owner ∧ tag.
+    # B-17/B-19: the filter/sort controls live in the kicker (the old glossary
+    # note is gone). Owner select always renders (every loop resolves an
+    # owner); tag select keeps its only-when-tags-exist rule; sort defaults to
+    # recent — matching the server-rendered row order.
     owner_options = sorted({loop["owner"] for loop in loops})
     owner_opts = '<option value="">all owners</option>' + "".join(
         f'<option value="{e(o)}">{e(o)}</option>' for o in owner_options
     )
     filter_parts = [
         (
-            "<label>Filter by owner"
+            "<label>owner"
             f'<select id="owner-filter" onchange="loopsApplyFilters()">{owner_opts}</select>'
             "</label>"
         )
@@ -2433,22 +2507,28 @@ def _render_page(
             f'<option value="{e(t)}">{e(t)}</option>' for t in tag_options
         )
         filter_parts.append(
-            "<label>Filter by tag"
+            "<label>tag"
             f'<select id="tag-filter" onchange="loopsApplyFilters()">{opts}</select>'
             "</label>"
         )
-    filter_html = f'<div class="filter-bar">{"".join(filter_parts)}</div>'
+    filter_parts.append(
+        "<label>sort"
+        '<select id="sort-order" onchange="loopsApplySort()">'
+        '<option value="recent" selected>recent</option>'
+        '<option value="name">name</option>'
+        "</select></label>"
+    )
+    filters_html = f'<span class="filters">{"".join(filter_parts)}</span>'
 
     # Accordion rows include each loop's section body; no separate sections stack below.
     global_rows = "".join(_render_loop_row(loop, conn, now) for loop in loops)
     garden = (
         '<div class="zone"><div class="kicker"><b>庭</b> the garden — all loops'
-        '<span class="note">床の間 = each loop hangs its own output · '
-        "休 = paused or no schedule loaded</span></div>"
+        f"{filters_html}</div>"
         f'<div class="garden">{global_rows}</div></div>'
     )
 
-    body = f"{events_html}<main>{filter_html}{garden}</main>"
+    body = f"{events_html}<main>{garden}</main>"
     return _wrap_html(top, body)
 
 

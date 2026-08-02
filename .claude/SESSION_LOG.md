@@ -1,5 +1,42 @@
 # Session Log
 
+## 2026-08-03 — B-13 run-now button shipped end-to-end via the first test-gated peon dispatch
+
+### Summary
+- Shipped B-13: 走 run-now button on every garden loop row + `POST /api/loops/<name>/run` /
+  `GET /api/run/status` console routes (background worker, console-wide job slot, INTERFACES §13.3).
+  Live-verified: API fire 202 → 20s hello-loop run → terminal snapshot; busy-409 with `loop`+`started_at`
+  fields; Playwright click → aria-busy + console-wide disable → auto-reload with fresh last-巡. 732 py
+  tests + all shell fixtures green on main.
+- First live run of the test-gated dispatch pipeline (codex-in-claude): opus-authored 32-test red suite →
+  adversarial critic (built counter-implementations) → foreman red-proof commit on `b13-tests` → two
+  parallel codex peons (`--allow` scoped, `--verify` recorded) → `peon check` gates → zero pokes → merge.
+  Foreman never read the implementations line-by-line; ~60-line diff skims only.
+
+### Lessons Learned
+- **Accepted:** critic-verifies-by-construction — the critic built a deliberately broken impl (passed
+  21/21) and a compliant one (failed 3), turning "are the tests gameable?" into an executable question.
+  Three real blockers surfaced, incl. a CSRF hole (run route not pinned to POST; §13.1's Content-Type
+  gate binds only POST, so a GET-matched route is cross-origin-fireable).
+- **Accepted:** contract numbers the tests need must live in design.md, not be invented by tests — the
+  4096-char stderr-tail bound and the nested 202 shape were ruled in design.md after the critic flagged
+  them as test-inventions/self-contradictions.
+- **Gotcha:** backgrounded `peon dispatch` wrappers were killed by the harness (~2min), taking the codex
+  children with them — recovery: scrap commit-less peons, re-dispatch detached (`nohup` + `.done` marker
+  + Monitor). Lesson folded into the peon-poke SKILL (codex-in-claude `4d1ad8c`).
+- **Gotcha:** both-append-at-tail merge conflict (B-19 tests landed on main at the same
+  `tests/test_dashboard.py` tail as B-13's) — resolved by composing ours-full + B-13 block via python;
+  macOS sed refused `${/^$/d}` mid-pipeline and silently truncated the first attempt.
+
+### Decisions
+- Scope (generalissimo): run-now button FIRST (phase-1 bar); dashboard install/uninstall and the ads
+  launchd-auth fix explicitly deferred. The switch staying greyed for non-installed loops is by design.
+- Run route accepts paused/manual-schedule/non-installed loops — refusing them recreates the dead end
+  B-13 exists to fix; pinned by tests after the critic caught the gap.
+- Kanji 走 is final (design.md Open Questions cleared); a swap is a deliberate test+markup change.
+- Open threads unchanged: ads half-of-runs-die reliability bug; claude-under-launchd auth (blocks any
+  ads scheduling).
+
 ## 2026-08-03 — B-19 garden layout: filters into kicker, compact events strip, recency-default sort (same session as B-17)
 
 ### Summary

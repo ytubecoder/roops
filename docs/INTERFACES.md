@@ -1136,13 +1136,24 @@ inline CSS/JS, no network requests, no external assets (it is opened as `file://
   ack/snooze/dismiss (and disposition marks ack/snoozed/dismissed). 承 is unglossed (the
   natural English word is banned page-wide — ack ≠ approval). Tooltips stay; kicker/note
   kanji already adjacent to English stay unglossed.
-- Style **(amended 2026-07-30, B-04/B-07)**: the roops garden design system — washi/sumi
-  palette, vermillion accent, mincho serif + mono numerals, status rendered as hanko stamps
-  (済 ok · 注 warn · 警 alert · 未 no data) over the unchanged §4.3 precedence, per-loop
-  tokonoma output alcove in the global row. Visual only: every §10 semantic above is
-  untouched. Local system fonts only, no webfonts, no textures via external or data URLs —
-  the no-network rule binds the stylesheet too. Function first, dense over airy: it is a
-  status board read at a glance, not a marketing page.
+- Style **(amended 2026-07-30, B-04/B-07; Amendment 2026-08-02, WP2)**: the roops garden
+  design system — washi/sumi palette, vermillion accent, mincho serif + mono numerals,
+  status rendered as hanko stamps (済 ok · 注 warn · 警 alert · 未 no data) over the
+  unchanged §4.3 precedence, per-loop tokonoma output alcove in the global row. Visual
+  only: every §10 semantic above is untouched. Local system fonts only, no webfonts, no
+  textures via external or data URLs — the no-network rule binds the stylesheet too.
+  Function first, dense over airy: it is a status board read at a glance, not a marketing
+  page. **Dark mode (WP2):** the same named role tokens carry a second value set —
+  `@media (prefers-color-scheme: dark)` redefines them as the OS-driven default;
+  explicit `:root[data-theme="dark"]` / `:root[data-theme="light"]` overrides win in
+  both directions (toggle beats OS preference via attribute specificity alone). A
+  topstrip `<button id="theme-toggle">` persists the choice under localStorage key
+  **`loops-theme`** (values `"dark"` / `"light"`; attribute **`data-theme`** on
+  `<html>`; absence means follow OS — never a third stored value). A synchronous inline
+  script in `<head>` ahead of `<style>` stamps `data-theme` before first paint (no flash).
+  Toggle and persistence JS are pure client-side — `localStorage` and `matchMedia` only,
+  zero new network surface; the §10 hermetic rule binds this addition exactly as it binds
+  everything else. WP3 reuses the same key/attribute/values on report pages verbatim.
 
 ## 11. Testing conventions
 

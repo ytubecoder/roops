@@ -9,6 +9,7 @@ callables are injected via generate()'s function-level seam.
 import glob
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -2580,6 +2581,190 @@ class TestEnglishGlosses(unittest.TestCase):
         self.assertIn('<span class="en">run</span>', html)
         # banned word still never appears (ack ≠ approval doctrine)
         self.assertNotIn("approve", html.lower())
+
+
+class DarkModeTokensTests(unittest.TestCase):
+    """WP2: four token blocks (light :root, OS dark media, [data-theme] dark/light)."""
+
+    # 13 role tokens + 4 companion -rgb triplets (fonts excluded — base :root only).
+    ROLE_AND_RGB = frozenset(
+        {
+            "--sumi",
+            "--sumi-deep",
+            "--washi",
+            "--washi-shade",
+            "--shu",
+            "--shu-deep",
+            "--ai",
+            "--nibi",
+            "--nibi-faint",
+            "--koke",
+            "--ochre",
+            "--hair",
+            "--hair2",
+            "--sumi-rgb",
+            "--shu-rgb",
+            "--ai-rgb",
+            "--nibi-rgb",
+        }
+    )
+    FONT_TOKENS = frozenset({"--serif", "--mono"})
+    # Light values for the 12 pre-existing role tokens (byte-exact; --nibi-faint is new).
+    LIGHT_ROLE_VALUES = {
+        "--sumi": "#1C1A17",
+        "--sumi-deep": "#16130F",
+        "--washi": "#F2EDE3",
+        "--washi-shade": "#E9E2D3",
+        "--shu": "#C73E2B",
+        "--shu-deep": "#A93321",
+        "--ai": "#2E4A5B",
+        "--nibi": "#8C8578",
+        "--koke": "#6B7A5C",
+        "--ochre": "#A87A2A",
+        "--hair": "rgba(28,26,23,.14)",
+        "--hair2": "rgba(28,26,23,.22)",
+    }
+
+    def _token_pairs(self, block_css):
+        """Extract --name: value pairs; one-declaration-per-line parseability gate."""
+        return re.findall(r"(--[\w-]+):\s*([^;]+);", block_css)
+
+    def _four_blocks(self):
+        css = generate.CSS
+        # Base :root … } ends at first bare `}` after the opening (fonts live only here).
+        m_root = re.search(r":root\s*\{([^}]+)\}", css)
+        self.assertIsNotNone(m_root, "base :root block missing")
+        m_media = re.search(
+            r"@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]+)\}",
+            css,
+        )
+        self.assertIsNotNone(m_media, "@media (prefers-color-scheme: dark) :root missing")
+        m_dark = re.search(r':root\[data-theme="dark"\]\s*\{([^}]+)\}', css)
+        self.assertIsNotNone(m_dark, ':root[data-theme="dark"] block missing')
+        m_light = re.search(r':root\[data-theme="light"\]\s*\{([^}]+)\}', css)
+        self.assertIsNotNone(m_light, ':root[data-theme="light"] block missing')
+        return m_root.group(1), m_media.group(1), m_dark.group(1), m_light.group(1)
+
+    def test_media_and_data_theme_blocks_present_with_color_scheme(self):
+        root, media, dark, light = self._four_blocks()
+        self.assertIn("color-scheme: light", root)
+        self.assertIn("color-scheme: dark", media)
+        self.assertIn("color-scheme: dark", dark)
+        self.assertIn("color-scheme: light", light)
+        self.assertIn("@media (prefers-color-scheme: dark)", generate.CSS)
+        self.assertIn(':root[data-theme="dark"]', generate.CSS)
+        self.assertIn(':root[data-theme="light"]', generate.CSS)
+
+    def test_light_role_token_values_byte_exact(self):
+        root, _, _, _ = self._four_blocks()
+        pairs = dict(self._token_pairs(root))
+        for name, expected in self.LIGHT_ROLE_VALUES.items():
+            self.assertIn(name, pairs, f"{name} missing from light :root")
+            self.assertEqual(
+                pairs[name].strip(),
+                expected,
+                f"light {name} must stay byte-identical",
+            )
+        self.assertEqual(pairs.get("--nibi-faint", "").strip(), "#ABA495")
+
+    def test_token_name_set_parity_across_four_blocks(self):
+        """Forerunner of WP3 test_token_drift: same token names in all four blocks
+        after excluding mode-independent font tokens (--serif/--mono base-only)."""
+        root, media, dark, light = self._four_blocks()
+        sets = []
+        for block in (root, media, dark, light):
+            names = {n for n, _ in self._token_pairs(block)} - self.FONT_TOKENS
+            sets.append(names)
+        base, media_set, dark_set, light_set = sets
+        self.assertEqual(base, media_set)
+        self.assertEqual(base, dark_set)
+        self.assertEqual(base, light_set)
+        self.assertEqual(base, self.ROLE_AND_RGB)
+        # fonts only in base :root
+        root_all = {n for n, _ in self._token_pairs(root)}
+        self.assertTrue(self.FONT_TOKENS <= root_all)
+        for block in (media, dark, light):
+            names = {n for n, _ in self._token_pairs(block)}
+            self.assertFalse(names & self.FONT_TOKENS)
+
+    def test_one_declaration_per_line_parseability(self):
+        """Every --token: value; sits alone on its line (WP3 dumb-regex contract)."""
+        for label, block in zip(
+            ("root", "media", "data-dark", "data-light"),
+            self._four_blocks(),
+            strict=True,
+        ):
+            for line in block.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("/*") or stripped.startswith("*"):
+                    continue
+                if stripped.startswith("color-scheme:"):
+                    continue
+                decls = re.findall(r"--[\w-]+:\s*[^;]+;", stripped)
+                if not decls and "color-scheme" not in stripped:
+                    continue
+                self.assertLessEqual(
+                    len(decls),
+                    1,
+                    f"{label}: line has multiple token decls (must be one per line): {stripped!r}",
+                )
+
+
+class ThemeToggleTests(unittest.TestCase):
+    """WP2: topstrip toggle, loopsToggleTheme, no-flash head stamp, loops-theme key."""
+
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+
+    def _html(self):
+        self.fx.init_db()
+        self.fx.add_loop("alpha")
+        return generate.generate(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+
+    def test_theme_toggle_button_in_topstrip(self):
+        html = self._html()
+        self.assertIn('<button type="button" id="theme-toggle"', html)
+        # button is inside head-stats / topstrip, not floating elsewhere
+        top_i = html.index('class="topstrip"')
+        btn_i = html.index('id="theme-toggle"')
+        self.assertGreater(btn_i, top_i)
+        # after head-stats opens
+        self.assertIn("head-stats", html[top_i:btn_i])
+
+    def test_loops_toggle_theme_function_present(self):
+        html = self._html()
+        self.assertIn("function loopsToggleTheme()", html)
+        self.assertIn("localStorage.setItem('loops-theme'", html)
+
+    def test_head_stamp_precedes_style(self):
+        html = self._html()
+        # first data-theme reference is the head stamp's setAttribute / getItem path
+        self.assertIn("localStorage.getItem('loops-theme')", html)
+        stamp_i = html.index("localStorage.getItem('loops-theme')")
+        style_i = html.index("<style>")
+        self.assertLess(
+            stamp_i,
+            style_i,
+            "head-stamp script must run before <style> (no flash)",
+        )
+        # and the getItem call is inside a <script> ahead of style
+        script_before = html.rfind("<script>", 0, style_i)
+        self.assertGreaterEqual(script_before, 0)
+        self.assertLess(script_before, stamp_i)
+
+    def test_pinned_loops_theme_key_in_stamp_and_toggle(self):
+        html = self._html()
+        # exactly the pinned key string in both sites
+        self.assertGreaterEqual(html.count("'loops-theme'"), 2)
+        self.assertIn("localStorage.getItem('loops-theme')", html)
+        self.assertIn("localStorage.setItem('loops-theme'", html)
 
 
 if __name__ == "__main__":

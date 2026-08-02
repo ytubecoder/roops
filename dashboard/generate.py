@@ -1129,7 +1129,7 @@ footer {
   text-transform: uppercase; line-height: 2;
 }
 
-/* ---------- console controls (Task 4) — rounds switch + schedule picker ----------
+/* ---------- console controls (Task 4) — rounds switch + schedule picker + run-now ----------
    Hidden by default (see data-console-controls in dashboard/generate.py); unhidden only
    by the page's own hydration script once fetch('api/state') succeeds. Tokens reused
    verbatim from :root above -- no new hex/rgba literals introduced by this block.
@@ -1167,6 +1167,16 @@ footer {
   transition: left .8s cubic-bezier(0.16,1,0.3,1), background .8s cubic-bezier(0.16,1,0.3,1);
 }
 .con-sw[aria-checked="false"] .con-knob { left: 2px; background: var(--nibi); }
+.con-run {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 24px; height: 24px; padding: 0; font-family: var(--serif); font-size: 13px;
+  line-height: 1; background: var(--washi); border: 1px solid var(--hair2);
+  border-radius: 3px; color: var(--sumi); cursor: pointer;
+}
+.con-run:not([disabled]):hover { border-color: var(--shu); color: var(--shu); }
+.con-run:focus-visible { outline: 1px solid var(--shu); outline-offset: 3px; }
+.con-run[disabled] { opacity: .45; cursor: default; }
+.con-run.is-running { opacity: 1; border-color: var(--koke); color: var(--koke); border-style: dashed; }
 .con-sched {
   font-family: var(--mono); font-size: 11px; background: none; cursor: pointer;
   border: 1px solid var(--hair2); border-radius: 3px; padding: 3px 8px; color: inherit;
@@ -1832,7 +1842,7 @@ def _render_recent_runs(runs, now):
 
 
 def _render_console_controls(loop):
-    """Hidden-by-default control cell (rounds toggle + schedule-edit button) for one loop
+    """Hidden-by-default control cell (rounds toggle + schedule-edit + run-now) for one loop
     row. Pure inert markup: the page's own hydration script (see _wrap_html) is what
     removes `hidden` — and only once `fetch('api/state')` succeeds, i.e. only when the
     page is served by `loopctl serve` (Task 3's bin/console.py). Opened as a plain file,
@@ -1855,6 +1865,7 @@ def _render_console_controls(loop):
         f'<button class="con-sched" type="button" data-sched-edit '
         f'aria-label="edit schedule for {e(name)}">'
         f"{e(loop['schedule'] or 'manual')}</button>"
+        f'<button class="con-run" type="button" aria-label="run {e(name)} now">走</button>'
         "</span>"
     )
 
@@ -2505,9 +2516,21 @@ _CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
       navigator.clipboard.writeText(cmd).then(function(){ note('copied'); }, fallback);
     } else { fallback(); }
   });
+  function reflectRunStatus(st){
+    var running = !!(st && st.running);
+    document.querySelectorAll('.con-run').forEach(function(b){
+      var cell = b.closest('[data-console-controls]');
+      var mine = !!(running && cell && cell.getAttribute('data-loop') === st.loop);
+      b.disabled = running;
+      b.classList.toggle('is-running', mine);
+      if (mine) b.setAttribute('aria-busy', 'true'); else b.removeAttribute('aria-busy');
+    });
+  }
   fetch('api/state').then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(){
     document.querySelectorAll('[data-console-controls]').forEach(function(c){ c.hidden=false; });
     document.documentElement.classList.add('console-active');
+    fetch('api/run/status').then(function(r){ if(!r.ok) throw 0; return r.json(); })
+      .then(reflectRunStatus).catch(function(){});
   }).catch(function(){ /* static file mode -- controls stay hidden */ });
   // The .catch normalizes ANY transport-level failure (console stopped mid-session, a
   // response that isn't JSON) into the same {ok:false, j:{error}} shape a 4xx/5xx takes,
@@ -2520,6 +2543,36 @@ _CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
       .catch(function(err){ return {ok:false, j:{error:'console unreachable: ' + err}}; });
   }
   document.addEventListener('click', function(ev){
+    var run = ev.target.closest('.con-run');
+    if (run){
+      ev.preventDefault();
+      if (run.disabled) return;
+      var rcell = run.closest('[data-console-controls]');
+      var rname = rcell.getAttribute('data-loop');
+      var runPoll = 0;
+      run.disabled = true;
+      post('api/loops/' + rname + '/run', {}).then(function(res){
+        if (!res.ok) { run.disabled=false; alert(res.j.error); return; }
+        reflectRunStatus(res.j.state || {running:true, loop:rname});
+        scheduleRunPoll();
+      });
+      function scheduleRunPoll(){
+        clearTimeout(runPoll);
+        runPoll = setTimeout(pollRunStatus, 3000);
+      }
+      function pollRunStatus(){
+        fetch('api/run/status').then(function(r){ if(!r.ok) throw 0; return r.json(); })
+          .then(function(st){
+            reflectRunStatus(st);
+            if (st.running) scheduleRunPoll(); else location.reload();
+          })
+          .catch(function(err){
+            reflectRunStatus({running:false});
+            alert('console unreachable: ' + err);
+          });
+      }
+      return;
+    }
     var sw = ev.target.closest('.con-sw');
     if (sw && !sw.disabled){
       // preventDefault: these controls sit inside <summary>; without it the click

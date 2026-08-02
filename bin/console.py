@@ -50,7 +50,6 @@ _REPORT_CTYPES = {
 _PAGES = {
     "/": "loops.html",
     "/loops.html": "loops.html",
-    "/reports.html": "reports.html",
 }
 
 

@@ -1,5 +1,46 @@
 # Session Log
 
+## 2026-08-02 — Garden three-tier reorg: specs by foreman+Sonnet, implementation farmed to grok peons, all three WPs shipped same-day
+
+### Summary
+- Wrote the umbrella design doc + three self-tested WP briefs (WP1 by foreman, WP2/WP3 by parallel Sonnet
+  sub-agents), then implemented all three via serial grok peon dispatches: garden-only accordion dashboard
+  with English kanji glosses and `reports.html` retired (B-14), dark mode + `loops-theme` toggle (B-15),
+  `pagekit/kit.css` rebuilt on shared tokens with `tests/test_token_drift.py` (B-16). All merged, pushed,
+  live-verified with Playwright in both modes; suite grew 633 → 661 python tests, all green.
+- Umbrella spec `docs/superpowers/specs/2026-08-02-garden-three-tier-design.md` now carries the as-built
+  section; B-14..B-16 in For Review.
+
+### Lessons Learned
+- **Accepted:** "self-tested work unit" WP briefs (spec requires the peon to add tests, run the full suite,
+  and paste outputs into PEON_REPORT.md) — foreman review became report + targeted diff reading backed by
+  independently re-run evidence, and all three peons shipped essentially poke-free.
+- **Accepted:** explicit no-escape rule in grok briefs ("if git commit fails, leave the tree + report; the
+  foreman commits") — `peon dispatch` exits 1 with "contract violation: no commits" but that's the healthy
+  path; foreman commits in the worktree, then `peon merge` works normally. Beats the escape-improvising
+  behavior from 2026-07-30. [Saved to auto-memory]
+- **Gotcha:** peon script builds merge-commit messages by truncating the task text and can cut a multi-byte
+  char (invalid UTF-8) — `git commit --amend` the merge message before pushing.
+- **Gotcha:** grok peon env sets `CLICOLOR_FORCE=1`, which pollutes `ls` captures in
+  `tests/test_runner_pages.sh` (2 phantom fails in two of three peon runs) — always re-run the suite in a
+  clean env before believing a peon-reported failure. Candidate hardening: strip color env in the
+  test helper.
+- **Gotcha:** spec-time parity-test bug caught in review — font tokens live only in the base `:root`, so
+  "identical token set across all four blocks" fails unless fonts are excluded; the rule became part of the
+  token contract.
+
+### Decisions
+- Token contract grew during spec review, not implementation: `--nibi-faint` added as a 13th role token
+  (kagi-ban has two muted tiers; collapsing onto one `--nibi` would flatten report-page hierarchy), plus
+  four `-rgb` companion triplets from WP2's rgba-literal sweep. Drift test covers the full set.
+- `--sumi-deep` ships near-white in dark (ink-tier direction) with a scoped `body { background:#08090B }`
+  override so the paper-on-desk frame doesn't invert — token semantics preserved for future ink use.
+- `/reports.html` live behavior: Caddy `try_files` falls back to the dashboard (no Caddy edit); the console
+  404s it. Orphaned report dirs (only `hello-denied`) lose indexing — parked, acceptable.
+- Sonnet sub-agents wrote WP2/WP3 specs from an umbrella brief; foreman reconciliation pass was where the
+  real spec bugs were caught (missing `--nibi-faint`, font-token parity, companion-token propagation) —
+  budget for that pass, don't skip it.
+
 ## 2026-07-31 — Skill import + agent surface: 18-task feature, shipped and merged through the roops rebrand
 
 ### Summary

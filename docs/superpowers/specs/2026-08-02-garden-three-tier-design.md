@@ -1,7 +1,8 @@
 # Garden three-tier reorg — umbrella design (2026-08-02)
 
-Status: **settled**. Every decision in this document was made interactively with the
-generalissimo on 2026-08-02 — **do not relitigate any of them** during implementation.
+Status: **shipped 2026-08-02, live** (all three WPs merged same day — see §8). Every
+decision in this document was made interactively with the generalissimo on 2026-08-02 —
+**do not relitigate any of them**.
 Implementation is split into three work packages under `docs/workpackages/`, executed
 strictly in sequence by farmed-out peon agents. Each WP MD is a self-contained warmstart;
 this document is the shared context they all point back to.
@@ -143,3 +144,29 @@ merging.
 Ticket Takeaway tracks each WP (loops project, one ticket per WP, referencing its MD
 path): **B-14** (WP1), **B-15** (WP2), **B-16** (WP3) — backlog → wip at dispatch →
 review at merge.
+
+## 8. Shipped (as built) — 2026-08-02
+
+All three WPs implemented by grok peons the same day the specs landed, foreman-reviewed
+and merged serially: WP1 `2ef7434` (merge `fd7f256`), WP2 `4035c8d` (merge `3233e9d`),
+WP3 `95614cd` (merge `b31b53d`). Full suite green on final main: 661 python + 367 shell
+tests, EXIT=0. Live-verified: accordion + deep links + glosses, dark toggle with reload
+persistence, report page on shared tokens, theme carryover garden↔report page.
+
+Deltas vs. spec (all within sanctioned latitude):
+
+- `--sumi-deep` ships near-white in dark per the contract, but `body`'s backdrop gets a
+  scoped `#08090B` override in the dark blocks (WP2's documented escape hatch) so the
+  paper-on-desk frame doesn't invert; `:root[data-theme="light"] body` restores it.
+- Report-block md link is always labeled `latest.md` (was context-dependent `md`/`latest`
+  in the old row).
+- `render_page.py` severity color refs renamed `--high`/`--med` → `--shu`/`--ochre`
+  (forced by the kit rename; findings logic untouched).
+- The garden's dark body-frame override is deliberately NOT in kit.css — report pages
+  use `var(--washi)` as the page surface itself (no sheet-on-desk chrome).
+- `/reports.html` on the live host resolves to the dashboard via machine-local Caddy's
+  existing `try_files` fallback (spec allowed 404 or fallback); the console itself 404s.
+
+Token contract additions resolved during spec review (§4/§5 above already reflect them):
+`--nibi-faint` (13th role token), the four `-rgb` companions, and the font-tokens-in-
+base-`:root`-only rule.

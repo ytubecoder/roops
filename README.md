@@ -125,7 +125,7 @@ That last row matters most in practice. "Stop nagging me about this" is enforced
 
 ## What Lands on the Dashboard
 
-`dashboard/loops.html` is a single static self-contained file (inline CSS/JS, no network, opened as `file://`), rewritten via tmp-file + rename after every run. Since 2026-07-30 it renders in the roops garden style — hanko status stamps (済 ok · 注 warn · 警 alert · 未 no data) over the same precedence rules, a per-loop tokonoma alcove on each fleet row, and a 巡/休/手 column showing whether a schedule is actually loaded. A second static screen, `dashboard/reports.html`, lists every page-enabled loop's report pages with totals chips; fleet rows cross-link to it. A loop feeds the garden through four channels:
+`dashboard/loops.html` is a single static self-contained file (inline CSS/JS, no network, opened as `file://`), rewritten via tmp-file + rename after every run. It renders in the roops garden style — hanko status stamps (済 ok · 注 warn · 警 alert · 未 no data) over the same precedence rules, a per-loop tokonoma alcove on each fleet row, and a 巡/休/手 column showing whether a schedule is actually loaded, each meaning-bearing kanji carrying a tiny English gloss. Since 2026-08-02 the garden is the whole dashboard (three-tier reorg): each fleet row is a native `<details>` accordion — the row is the glance tier, expanding it reveals that loop's findings, recent runs, and report links inline (one row open at a time; `#loop-<name>` deep-links open the right row), and the loop's own report page is the long-form tier. Light and dark modes ship as a standard: OS preference by default, a topstrip toggle persisted to `localStorage`, with report pages following the same choice. A loop feeds the garden through four channels:
 
 | Channel | Contract field | Rendered as |
 |---|---|---|
@@ -140,10 +140,10 @@ One gotcha worth internalizing before you write a loop that wants to show red: *
 
 ## Report Pages
 
-Some loops capture more structured world state than a fleet row and a markdown report can carry — inventories, per-item remediation, grouped scan results. Those loops can publish a **report page**: one self-contained HTML file per run, rendered by a deterministic `render.sh` you write (no model calls, no network, no randomness), listed on `dashboard/reports.html`. Added 2026-07-30 as INTERFACES Amendment 2.
+Some loops capture more structured world state than a fleet row and a markdown report can carry — inventories, per-item remediation, grouped scan results. Those loops can publish a **report page**: one self-contained HTML file per run, rendered by a deterministic `render.sh` you write (no model calls, no network, no randomness), linked with dated history from the loop's accordion row on the dashboard. Added 2026-07-30 as INTERFACES Amendment 2; styled since 2026-08-02 by `pagekit/kit.css` on the garden's shared light/dark tokens (`tests/test_token_drift.py` keeps the two palettes identical).
 
 - **An executable `loops.d/<name>/render.sh` is what page-enables a loop.** Adding one is deliberate, under the same trust rule as the precheck: your code, run unsandboxed. `loopctl validate` fails a render.sh that exists but isn't executable.
-- The renderer runs **after** contract promotion, and a broken renderer never fails the run — the reports screen shows the last good page with a `stale` badge until a render succeeds again. Debug via `state/runs/<id>/page-render.log`.
+- The renderer runs **after** contract promotion, and a broken renderer never fails the run — the dashboard keeps linking the last good page with a `stale` badge until a render succeeds again. Debug via `state/runs/<id>/page-render.log`.
 - Publication is gated by `bin/page_envelope.py check`: valid single-envelope page, ≤ 8 MiB, no external-fetch markup, and **redaction-clean** — if `bin/redact.py` would change the page, it does not publish. Paths and names are fine; secret values never are.
 - Two page classes: `snapshot` (a full audit document — dismissing a finding silences the nag channel, not the document) and `findings` (anything presented *as* findings must come from the suppression-filtered `latest.json`, never raw `contract.json`).
 - Loops keep bounded private state (baselines, one previous snapshot) in `$LOOP_DATA_DIR`; updates are committed only when the run promotes, so a failed run never consumes state.
@@ -200,15 +200,14 @@ bin/skill_import.py      # static skill parser + analyzer + apply() behind `loop
 engines/                 # codex · claude · fake
 loops.d/<name>/          # loop.conf · precheck.sh · prompt.md · dashboard.json · SPEC.md
                          #   + render.sh (executable = page-enabled)
-pagekit/                 # kit.css (renderers read + inline it) · envelope snippet · reference page
+pagekit/                 # kit.css + toggle.js (renderers read + inline both) · envelope snippet · reference page
 examples/                # hello-loop (daily agent) · hello-watchdog (15m interval)
 state/loops.sqlite       # runs · heartbeats · metrics · findings · dispositions (WAL)
 reports/<name>/          # per-run markdown + atomically-promoted latest.* (suppression-filtered)
-dashboard/loops.html     # static: fleet view + per-loop panels + findings
-dashboard/reports.html   # static: report pages per loop, totals chips
+dashboard/loops.html     # static: the garden — accordion rows with per-loop detail + report links inline
 skills/loops/            # distributable Agent Skill — the front door agents install
 site/                    # roops brand · explainer + UI-concept pages · design system
-tests/run-tests.sh       # 1000 hermetic tests — no network, no real engines
+tests/run-tests.sh       # 1028 hermetic tests — no network, no real engines
 ```
 
 ## Docs

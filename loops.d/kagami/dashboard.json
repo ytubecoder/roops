@@ -1,0 +1,5 @@
+{"panels": [
+  {"title": "Checks failed", "metric": "mirror.tests_failed", "type": "number", "unit": "checks", "direction": "higher_is_worse", "thresholds": {"warn": 1, "alert": 2}, "missing": "gap"},
+  {"title": "Drift", "metric": "mirror.drift", "type": "number", "direction": "higher_is_worse", "thresholds": {"warn": 1}, "missing": "gap"},
+  {"title": "Mock garden bytes", "metric": "mirror.artifact_bytes", "type": "trend", "window_days": 60, "missing": "gap"}
+]}

@@ -1024,11 +1024,15 @@ Flattening rules are in §3. `dashboard.json` (per loop) declares how to render 
 
 ## 10. `dashboard/generate.py`
 
-`python3 dashboard/generate.py [--root R] [--out FILE]` → writes
+`python3 dashboard/generate.py [--root R] [--out FILE] [--now ISO8601]` → writes
 `dashboard/loops.html` via
 **tmp file + `os.rename`** (never a partially-written page, even under concurrent runs). Reads only
 sqlite + `reports/*/latest.*` + `loops.d/*/{loop.conf,dashboard.json}`. Self-contained single file:
 inline CSS/JS, no network requests, no external assets (it is opened as `file://`).
+**(Amendment 2026-08-03, B-18):** `--now` pins the rendering clock (the pre-existing `now=`
+parameter of `generate()`, exposed on the CLI). With a fixed root and pinned `--now` the output is
+byte-deterministic — kagami's drift detection depends on this; naked `datetime.now` calls must not
+be added to the render path.
 
 - **Global view:** one row per loop — precedence-resolved status light (§4.3), headline, last run
   (relative + absolute), schedule + best-effort next run, 7-day token spend, link to latest report.

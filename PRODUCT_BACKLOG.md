@@ -6,6 +6,9 @@
 Priority: medium | Status: in-progress
 Spec: B:b-13-dashboard-run-now-2026-08-02
 
+### B-18: kagami loop — public mock-garden mirror (generate.py --now, fixture builder, auto-PR to Pages repo, snapshot report page)
+Priority: medium | Status: in-progress
+
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)

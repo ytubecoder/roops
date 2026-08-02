@@ -2646,8 +2646,19 @@ def main(argv=None):
         default=None,
         help="output HTML path (default: <root>/dashboard/loops.html)",
     )
+    parser.add_argument(
+        "--now",
+        default=None,
+        help="pin the rendering clock (ISO8601, e.g. 2026-08-09T21:47:00Z) "
+        "for byte-deterministic output over a fixed root",
+    )
     args = parser.parse_args(argv)
-    out = generate(root=args.root, out_file=args.out)
+    now = None
+    if args.now:
+        now = datetime.fromisoformat(args.now.replace("Z", "+00:00"))
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+    out = generate(root=args.root, out_file=args.out, now=now)
     print(out)
     return 0
 

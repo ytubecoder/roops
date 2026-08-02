@@ -50,6 +50,9 @@ Priority: medium | Status: for-review
 ### B-18: kagami loop — public mock-garden mirror (generate.py --now, fixture builder, auto-PR to Pages repo, snapshot report page)
 Priority: medium | Status: for-review
 
+### B-19: Garden: filters into kicker (note removed), compact events strip, recency sort (new loops to top)
+Priority: medium | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1: reliable runs + manual run-everything trigger + clean schedules screen

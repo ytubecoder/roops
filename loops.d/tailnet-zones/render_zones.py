@@ -19,7 +19,6 @@ import json
 import os
 import pathlib
 import re
-import sys
 from string import Template
 
 _PAGEKIT_DIR = pathlib.Path(

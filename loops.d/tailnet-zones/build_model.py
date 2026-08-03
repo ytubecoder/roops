@@ -161,7 +161,7 @@ def main():
     policy = load_policy(args.policy)
     snapshot = load_policy(args.snapshot)
     meta = json.loads(pathlib.Path(args.meta).read_text())
-    today = datetime.date.today()
+    today = datetime.datetime.now(tz=datetime.timezone.utc).astimezone().date()
 
     model = Model(meta, policy.get("hosts", {}) or {})
     flows, defaults, pins, unclassified = [], [], [], []
@@ -261,9 +261,11 @@ def main():
                 "WARN",
                 "source:snapshot-fallback",
                 "page generated from the repo snapshot, not the live policy",
-                "no read credential at ~/.config/tailscale-policy-read.token — "
-                "console-side policy edits are invisible until the snapshot is "
-                "refreshed (see tailnet-setup WARMSTART for the credential decision)",
+                (
+                    "no read credential at ~/.config/tailscale-policy-read.token — "
+                    "console-side policy edits are invisible until the snapshot is "
+                    "refreshed (see tailnet-setup WARMSTART for the credential decision)"
+                ),
             )
         )
     if snapshot_stale:
@@ -272,8 +274,10 @@ def main():
                 "WARN",
                 "records:snapshot-stale",
                 "live policy differs from the tailnet-setup repo snapshot",
-                f"live sha {policy_sha} vs snapshot sha {snapshot_sha} — refresh "
-                "docs/policy-live.hujson per workflows/policy-change.txt step 6",
+                (
+                    f"live sha {policy_sha} vs snapshot sha {snapshot_sha} — refresh "
+                    "docs/policy-live.hujson per workflows/policy-change.txt step 6"
+                ),
             )
         )
     for actor in sorted(set(model.unmapped)):
@@ -282,8 +286,10 @@ def main():
                 "WARN",
                 f"policy:unmapped-actor:{actor}",
                 f"policy references {actor} with no display mapping",
-                "add it to ip_names/ip_hues or actor_labels in "
-                "tailnet-setup/site/zones-meta.json — it renders raw until then",
+                (
+                    "add it to ip_names/ip_hues or actor_labels in "
+                    "tailnet-setup/site/zones-meta.json — it renders raw until then"
+                ),
             )
         )
     for key in unannotated_pins:
@@ -292,8 +298,10 @@ def main():
                 "WARN",
                 f"policy:unannotated-pin:{key}",
                 f"pin {key} has no annotation",
-                "document why it exists in pin_annotations in zones-meta.json "
-                "(repo rule: every pin carries its why)",
+                (
+                    "document why it exists in pin_annotations in zones-meta.json "
+                    "(repo rule: every pin carries its why)"
+                ),
             )
         )
     for gid in unclassified_ids:
@@ -302,8 +310,10 @@ def main():
                 "WARN",
                 f"policy:unclassified-grant:{gid}",
                 f"grant {gid} fits no renderer category",
-                "it renders in the fallback section; extend build_model.py "
-                "classification if this shape is now expected",
+                (
+                    "it renders in the fallback section; extend build_model.py "
+                    "classification if this shape is now expected"
+                ),
             )
         )
 

@@ -52,6 +52,9 @@ Priority: medium | Status: for-review
 ### B-20: kagami: parity gate — public mirror must exercise the real garden's full feature surface
 Priority: high | Status: for-review
 
+### B-21: tailnet-zones loop: generated zone diagram page (owner network-system)
+Priority: medium | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1: reliable runs + manual run-everything trigger + clean schedules screen

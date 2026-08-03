@@ -49,10 +49,6 @@ Priority: medium | Status: for-review
 ### B-19: Garden: filters into kicker (note removed), compact events strip, recency sort (new loops to top)
 Priority: medium | Status: for-review
 
-### B-13: Dashboard run-now button — fire a loop run from the garden page (phase-1 manual trigger)
-Priority: medium | Status: for-review
-Spec: B:b-13-dashboard-run-now-2026-08-02
-
 ## Backlog
 
 ### B-03: Ads loops phase 1: reliable runs + manual run-everything trigger + clean schedules screen
@@ -118,6 +114,32 @@ Verified: exit=0 commit=5e74eae at=2026-07-23T02:35:21 cmd=tests/run-tests.sh
     == bin/run-loop.sh: --dry-run ==
     == bin/run-loop.sh: prompt composition ==
     passed: 115, failed: 0
+
+### B-13: Dashboard run-now button — fire a loop run from the garden page (phase-1 manual trigger)
+Priority: medium | Status: done
+Commit: e2d563e
+Spec: B:b-13-dashboard-run-now-2026-08-02
+Verified: exit=0 commit=e2d563e at=2026-08-03T12:22:51 cmd=tests/run-tests.sh
+    == bin/run-loop.sh: skipped-overlap ==
+    == bin/run-loop.sh: precheck (agent) ==
+    == bin/run-loop.sh: watchdog ==
+    == bin/run-loop.sh: engine-timeout / stale-green ==
+    == bin/run-loop.sh: contract-violation ==
+    == bin/run-loop.sh: transient retry / non-retried failures ==
+    == bin/run-loop.sh: harness-error ==
+    == bin/run-loop.sh: suppression / idempotence ==
+    == bin/run-loop.sh: retention pruning ==
+    == bin/run-loop.sh: enabled=false ==
+    == bin/run-loop.sh: schedule=manual (IMPORTANT #2b) ==
+    == bin/run-loop.sh: --dry-run ==
+    == bin/run-loop.sh: prompt composition ==
+    == bin/run-loop.sh: start-of-run non-blocking dashboard regen ==
+    passed: 135, failed: 0
+    == /Users/llm/projects/loops/tests/test_runner_pages.sh ==
+    test_runner_pages: passed=23 failed=0
+    == /Users/llm/projects/loops/tests/test_skill_import_e2e.sh ==
+    == tests/test_skill_import_e2e.sh: import -> two runs -> finding_id stability ==
+    passed: 16, failed: 0
 
 ## Won't Do
 

@@ -26,7 +26,11 @@ counts, statuses, types, schedules, bucketed ages, finding severities, panel typ
 strings and values NEVER cross — names map to a generic pool, text is templated,
 numbers are md5-seeded) → run `dashboard/generate.py --root <mirror> --now <pinned>`
 → rewrite the fixture filesystem path to a mock path → run the publish gates
-(self-contained scan, real-name/path leak grep, token drift) → fetch the live page
+(self-contained scan, real-name/path leak grep, token drift, and parity: render the
+real garden locally and require every feature token it exhibits — CSS classes + tag
+names, minus transient running/overdue/grey — to also render on the mirror, so the public
+mockup can never silently stop showcasing the current interface; only token NAMES
+surface, the real render stays in `$OUT_DIR`) → fetch the live page
 (cache-busted) and byte-compare → on drift with all gates green, shallow-clone the
 Pages repo, commit to the fixed branch `roops/mock-garden-refresh`, push, open or
 update the single PR → print the `key: value` matrix + the exact metrics JSON, and
@@ -77,7 +81,7 @@ A finding is a deviation of the published mirror from the regenerated truth, or 
 failure of the machinery that maintains it. Subject is the fixed literal
 `mock-garden`; condition is one of an enumerated stable set:
 `mock-garden:drift` · `mock-garden:gate:<check-name>` (`regenerate`,
-`self-contained`, `name-leak`, `token-drift`) · `mock-garden:pr-failed` ·
+`self-contained`, `name-leak`, `token-drift`, `parity`) · `mock-garden:pr-failed` ·
 `mock-garden:live-unreachable`. No volatile data (PR numbers, URLs, hashes, byte
 counts) ever appears in an id — details carry those.
 

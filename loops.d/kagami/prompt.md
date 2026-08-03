@@ -15,7 +15,7 @@ second-guess any value precheck reports; copy its numbers verbatim.
 Precheck emits `key: value` lines:
 
 - `check <name>: pass|fail[ — reason]` — the deterministic test matrix. Names:
-  `regenerate`, `self-contained`, `name-leak`, `token-drift`.
+  `regenerate`, `self-contained`, `name-leak`, `token-drift`, `parity`.
 - `live: <http-code>|unreachable` — fetch of the published page (a 404 on the very
   first run is expected: the artifact does not exist publicly yet, and counts as drift,
   not as unreachable).
@@ -26,7 +26,7 @@ Precheck emits `key: value` lines:
 ## Status mapping (deterministic — follow it exactly)
 
 - Every check pass, `drift: no` → `status=ok`, `findings=[]`, headline like
-  "mirror faithful — 4/4 checks pass, live matches". Zero findings is what renders
+  "mirror faithful — 5/5 checks pass, live matches". Zero findings is what renders
   green; do not emit informational findings in this state.
 - `drift: yes` with a PR opened/updated/open → `status=warn` and emit the
   `mock-garden:drift` finding (severity `warn`). Detail: what the PR refreshes, its
@@ -78,7 +78,9 @@ artifact). Condition is one of the enumerated stable conditions:
 - `mock-garden:drift` — regenerated artifact differs from live; resolves when the
   refresh PR is merged and the live page matches again.
 - `mock-garden:gate:<check-name>` — the named publish gate failed
-  (`gate:name-leak`, `gate:self-contained`, `gate:token-drift`, `gate:regenerate`).
+  (`gate:name-leak`, `gate:self-contained`, `gate:token-drift`, `gate:regenerate`,
+  `gate:parity` — the mirror no longer exhibits a feature the real garden renders;
+  the fix is extending `fixture/build_root.py`, never weakening the gate).
 - `mock-garden:pr-failed` — precheck could not open/update the PR.
 - `mock-garden:live-unreachable` — the live page could not be fetched.
 

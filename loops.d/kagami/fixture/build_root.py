@@ -23,6 +23,8 @@ gate remains the backstop behind this file.
 import argparse
 import hashlib
 import json
+import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -32,6 +34,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 PINNED_NOW = datetime(2026, 8, 9, 21, 47, 0, tzinfo=timezone.utc)
+
+# Same pattern generate.py's _page_state uses for dated report pages.
+DATED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{4}\.html$")
 
 NAME_POOL = [
     "tls-certs",
@@ -80,16 +85,14 @@ def seeded(name, field, lo, hi):
 
 
 def mock_age(seconds, cadence):
-    """Classification-preserving mock age. The garden classifies a loop by which
-    side of 1.5x its cadence the age falls on (stale detection) — mirror THAT,
-    never the raw clock, or the page drifts every hour and the nightly PR churns.
-    Fresh -> a fixed comfortable age for the cadence; stale -> a quantized
-    multiple, capped so a long-stale loop stops moving the page."""
-    if seconds is None:
-        return cadence // 3
-    if seconds <= 1.5 * cadence:
+    """Binary classification-preserving mock age. The garden classifies age as
+    fresh vs stale (is_stale: overdue > 1.5x cadence) — mirror exactly that
+    classification and nothing finer. The earlier quantized-multiple scheme
+    moved a stale loop one bucket per real day (2x -> 3x -> 4x cadence), which
+    drifted the page nightly and churned the refresh PR."""
+    if seconds is None or seconds <= 1.5 * cadence:
         return min(cadence // 3, 4 * 3600)
-    return min(max(2, int(seconds // cadence)), 4) * cadence
+    return 2 * cadence
 
 
 def quantize_seen(times_seen):
@@ -161,34 +164,70 @@ def read_fleet(source):
     for name in names:
         conf = parse_conf(loops_d / name / "loop.conf")
         panels = []
+        panel_keys = set()
         try:
             dj = json.loads((loops_d / name / "dashboard.json").read_text())
             panels = [str(p.get("type", "number")) for p in dj.get("panels", [])]
+            panel_keys = {str(p.get("metric", "")) for p in dj.get("panels", [])}
         except (OSError, ValueError):
             pass
-        latest = q(
-            "SELECT runner_status, loop_status, effective_status, started_at "
-            "FROM runs WHERE loop_name=? ORDER BY started_at DESC LIMIT 1",
+        recent = q(
+            "SELECT run_id, runner_status, loop_status, effective_status, "
+            "started_at, finished_at FROM runs WHERE loop_name=? "
+            "ORDER BY started_at DESC LIMIT 6",
             (name,),
         )
         age = None
-        if latest and latest[0][3]:
+        if recent and recent[0][4]:
             try:
                 started = datetime.fromisoformat(
-                    str(latest[0][3]).replace("Z", "+00:00")
+                    str(recent[0][4]).replace("Z", "+00:00")
                 )
                 age = max(0, int((now_real - started).total_seconds()))
             except ValueError:
                 age = None
-        findings = q(
-            "SELECT severity, times_seen FROM findings "
+        # Disposition CLASSIFICATION per finding (latest wins) — the enum crosses,
+        # never the note/ids. Lapsed snoozes render unsuppressed; keep them distinct.
+        dispo = {}
+        for fid, action, until in q(
+            "SELECT finding_id, action, snooze_until FROM dispositions "
+            "WHERE loop_name=? ORDER BY created_at",
+            (name,),
+        ):
+            dispo[str(fid)] = (str(action or ""), str(until or ""))
+        findings = []
+        for fid, sev, seen in q(
+            "SELECT finding_id, severity, times_seen FROM findings "
             "WHERE loop_name=? AND resolved_at IS NULL ORDER BY finding_id",
             (name,),
-        )
+        ):
+            action, until = dispo.get(str(fid), ("", ""))
+            act = None
+            if action == "snooze":
+                act = "snooze" if until > iso(now_real) else "snooze-lapsed"
+            elif action in ("ack", "dismiss"):
+                act = action
+            findings.append((str(sev), quantize_seen(int(seen or 1)), act))
+        # Count (never name) the latest run's metric keys with no panel — they
+        # render as the raw-fallback drawer, part of the visible feature surface.
+        extra_metrics = 0
+        if recent:
+            keys = q(
+                "SELECT DISTINCT key FROM metrics WHERE run_id=?",
+                (str(recent[0][0]),),
+            )
+            extra_metrics = min(3, sum(1 for (k,) in keys if str(k) not in panel_keys))
         hb = q(
             "SELECT ok FROM heartbeats WHERE loop_name=? ORDER BY ts DESC LIMIT 1",
             (name,),
         )
+        report_dir = source / "reports" / name
+        render_sh = loops_d / name / "render.sh"
+        dated_count = 0
+        if report_dir.is_dir():
+            dated_count = min(
+                3, sum(1 for p in report_dir.iterdir() if DATED_RE.match(p.name))
+            )
         fleet.append(
             {
                 "real_name": name,
@@ -199,21 +238,22 @@ def read_fleet(source):
                 "owner": conf.get("owner", ""),
                 "installed": (source / "launchd" / f"com.loops.{name}.plist").is_file(),
                 "panels": panels[:4],
-                "runner_status": latest[0][0] if latest else None,
-                "loop_status": latest[0][1] if latest else None,
-                "effective_status": latest[0][2] if latest else None,
+                "runner_status": recent[0][1] if recent else None,
+                "loop_status": recent[0][2] if recent else None,
+                "effective_status": recent[0][3] if recent else None,
                 "age_s": age,
-                "run_count": min(
-                    6,
-                    len(
-                        q("SELECT run_id FROM runs WHERE loop_name=? LIMIT 6", (name,))
-                    ),
-                ),
-                "findings": [
-                    (str(sev), quantize_seen(int(seen or 1))) for sev, seen in findings
+                # Per-run harness/status enums (newest first): these drive the
+                # harness badge, fail-detail rows, and died classification.
+                "runs": [
+                    (str(r[1] or ""), str(r[3] or ""), r[5] is None) for r in recent
                 ],
+                "findings": findings,
+                "extra_metrics": extra_metrics,
                 "hb_ok": (hb[0][0] if hb else None),
-                "has_report": (source / "reports" / name / "latest.json").is_file(),
+                "has_report": (report_dir / "latest.json").is_file(),
+                "page_enabled": render_sh.is_file() and os.access(render_sh, os.X_OK),
+                "has_latest_html": (report_dir / "latest.html").is_file(),
+                "dated_count": dated_count,
             }
         )
     if conn is not None:
@@ -229,6 +269,7 @@ def read_fleet(source):
                 effective_status="ok",
                 age_s=None,
                 findings=[],
+                runs=[("completed", "ok", False)] * max(1, len(entry["runs"])),
             )
     return fleet
 
@@ -310,13 +351,25 @@ def main():
             real["loop_status"] or "", "swept — nothing tracked"
         ).format(n=seeded(name, "n", 2, 38))
         cadence = cadence_seconds(real["schedule"])
-        if real["runner_status"] is not None:
+        if real["runs"]:
             age = mock_age(real["age_s"], cadence)
             started = PINNED_NOW - timedelta(seconds=age)
-            failed = real["runner_status"] not in ("completed", "skipped-precheck")
-            for r in range(real["run_count"] or 1):
+            for r, (rstat, eff_r, unfinished) in enumerate(real["runs"]):
                 rid = f"mock-{name}-{r}"
                 run_started = started - timedelta(seconds=cadence * r)
+                failed = rstat not in (
+                    "completed",
+                    "skipped-precheck",
+                    "skipped-overlap",
+                )
+                if r == 0:
+                    head = headline
+                elif rstat.startswith("skipped"):
+                    head = None
+                else:
+                    head = HEADLINES.get(eff_r or "", HEADLINES["ok"]).format(
+                        n=seeded(name, f"h{r}", 2, 38)
+                    )
                 cur.execute(
                     "INSERT INTO runs (run_id, loop_name, started_at, finished_at, "
                     "engine, trigger, runner_status, loop_status, effective_status, "
@@ -327,25 +380,23 @@ def main():
                         name,
                         iso(run_started),
                         None
-                        if (failed and r == 0)
+                        if unfinished
                         else iso(
                             run_started
                             + timedelta(seconds=seeded(name, f"d{r}", 40, 200))
                         ),
                         real["engine"],
                         "launchd",
-                        real["runner_status"] if r == 0 else "completed",
-                        real["loop_status"] if r == 0 else "ok",
-                        eff if r == 0 else "ok",
-                        headline
-                        if r == 0
-                        else HEADLINES["ok"].format(n=seeded(name, f"h{r}", 2, 38)),
+                        rstat or "completed",
+                        real["loop_status"] if r == 0 else (eff_r or None),
+                        eff if r == 0 else (eff_r or None),
+                        head,
                         seeded(name, f"t{r}", 800, 14000),
                         round(seeded(name, f"c{r}", 0, 900) / 10000.0, 4)
                         if real["engine"] == "claude"
                         else None,
                         "engine exited 1 (mock diagnostics in run log)"
-                        if (failed and r == 0)
+                        if failed
                         else None,
                     ),
                 )
@@ -361,9 +412,23 @@ def main():
                             seeded(name, f"m{j}r{r}", 0, 41),
                         ),
                     )
+            # Panel-less metric keys on the latest run — renders the raw-fallback
+            # "Other metrics" drawer the real garden shows.
+            for k in range(real["extra_metrics"]):
+                cur.execute(
+                    "INSERT INTO metrics (run_id, loop_name, ts, key, num) "
+                    "VALUES (?,?,?,?,?)",
+                    (
+                        f"mock-{name}-0",
+                        name,
+                        iso(started),
+                        f"{name}.x{k}",
+                        seeded(name, f"x{k}", 0, 97),
+                    ),
+                )
 
         mock_findings = []
-        for j, (sev, seen) in enumerate(real["findings"]):
+        for j, (sev, seen, act) in enumerate(real["findings"]):
             fid = f"{name}:item-{j + 1}"
             title = FINDING_TITLES[(i + j) % len(FINDING_TITLES)]
             last = PINNED_NOW - timedelta(seconds=mock_age(real["age_s"], cadence))
@@ -383,15 +448,37 @@ def main():
                     seen,
                 ),
             )
-            mock_findings.append(
-                {
-                    "finding_id": fid,
-                    "severity": sev,
-                    "title": title,
-                    "detail": "Synthetic mirror of a live condition of this severity; "
-                    "values on this public page are generated mock data.",
-                }
-            )
+            if act:
+                until_val = None
+                if act == "snooze":
+                    until_val = iso(PINNED_NOW + timedelta(days=3))
+                elif act == "snooze-lapsed":
+                    until_val = iso(PINNED_NOW - timedelta(days=1))
+                cur.execute(
+                    "INSERT INTO dispositions (loop_name, finding_id, action, "
+                    "note, snooze_until, created_at) VALUES (?,?,?,?,?,?)",
+                    (
+                        name,
+                        fid,
+                        "snooze" if act.startswith("snooze") else act,
+                        "reviewed — routine, no action needed",
+                        until_val,
+                        iso(PINNED_NOW - timedelta(days=2)),
+                    ),
+                )
+            # latest.json is the runner's suppression-FILTERED contract — keep the
+            # mock consistent: dismissed/actively-snoozed findings stay DB-only.
+            if act not in ("dismiss", "snooze"):
+                mock_findings.append(
+                    {
+                        "finding_id": fid,
+                        "severity": sev,
+                        "title": title,
+                        "detail": "Synthetic mirror of a live condition of this "
+                        "severity; values on this public page are generated mock "
+                        "data.",
+                    }
+                )
 
         if real["type"] == "watchdog":
             ok = 1 if (real["hb_ok"] in (1, None)) else 0
@@ -413,9 +500,26 @@ def main():
                     ),
                 )
 
+        rd = dest / "reports" / name
+        if real["has_report"] or real["has_latest_html"] or real["dated_count"]:
+            rd.mkdir(exist_ok=True)
+        if real["page_enabled"]:
+            # An executable render.sh is what marks a loop page-enabled to the
+            # garden ("page" link); the stub is never run by the mirror.
+            rs = d / "render.sh"
+            rs.write_text("#!/bin/sh\nexit 0\n")
+            rs.chmod(0o755)
+        page_stub = (
+            '<!doctype html><meta charset="utf-8">'
+            f"<title>{name} — mock report</title>"
+            "<p>Generated mock report page. All figures here are mock data.</p>\n"
+        )
+        if real["has_latest_html"]:
+            (rd / "latest.html").write_text(page_stub)
+        for k in range(real["dated_count"]):
+            stamp = (PINNED_NOW - timedelta(days=k + 1)).strftime("%Y-%m-%d-%H%M")
+            (rd / f"{stamp}.html").write_text(page_stub)
         if real["has_report"]:
-            rd = dest / "reports" / name
-            rd.mkdir()
             contract = {
                 "status": real["loop_status"] or "ok",
                 "headline": headline,

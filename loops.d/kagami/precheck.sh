@@ -107,6 +107,29 @@ PY
     add_check token-drift pass
   else add_check token-drift fail "tests/test_token_drift.py failing"; fi
 
+  # --- check: parity (every feature the real garden renders appears on the mirror) ---
+  # The real render stays in $OUT_DIR (local, gitignored) — only token NAMES surface.
+  REAL_ART="$OUT_DIR/real-garden.html"
+  if python3 "$LOOPS_ROOT/dashboard/generate.py" --root "$LOOPS_ROOT" \
+       --out "$REAL_ART" >/dev/null 2>&1; then
+    if MISS=$(python3 - "$LOOPS_ROOT" "$REAL_ART" "$ART" <<'PY'
+import sys
+root, real, art = sys.argv[1:4]
+sys.path.insert(0, f"{root}/loops.d/kagami/fixture")
+from parity import missing_from_mirror
+miss = missing_from_mirror(
+    open(real, encoding="utf-8").read(), open(art, encoding="utf-8").read()
+)
+if miss:
+    print(", ".join(miss[:6]))
+    sys.exit(1)
+PY
+    ); then add_check parity pass
+    else add_check parity fail "real-garden feature absent from mirror: ${MISS:-?}"; fi
+  else
+    add_check parity fail "real garden render failed"
+  fi
+
   # --- live fetch + byte compare ---
   CODE=$(curl -s --max-time 60 -o "$OUT_DIR/live.html" -w '%{http_code}' \
     "$LIVE_URL?v=$(date +%s)" || echo 000)

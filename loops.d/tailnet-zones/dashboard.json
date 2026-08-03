@@ -1,0 +1,44 @@
+{
+  "panels": [
+    {
+      "title": "Live source",
+      "metric": "sync.live",
+      "type": "number",
+      "unit": "0=snapshot",
+      "direction": "neutral",
+      "missing": "hold"
+    },
+    {
+      "title": "Pinned exceptions",
+      "metric": "policy.pins",
+      "type": "number",
+      "unit": "pins",
+      "direction": "neutral",
+      "missing": "hold"
+    },
+    {
+      "title": "Enforced invariants",
+      "metric": "policy.tests",
+      "type": "number",
+      "unit": "tests",
+      "direction": "lower_is_worse",
+      "missing": "hold"
+    },
+    {
+      "title": "Mapping gaps",
+      "metric": "sync.unmapped_actors",
+      "type": "number",
+      "unit": "actors",
+      "direction": "higher_is_worse",
+      "thresholds": {"warn": 1, "alert": 3},
+      "missing": "gap"
+    },
+    {
+      "title": "Grants",
+      "metric": "policy.grants",
+      "type": "trend",
+      "window_days": 30,
+      "missing": "hold"
+    }
+  ]
+}

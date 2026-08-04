@@ -131,7 +131,8 @@ retry_transient=1 (default). timeout_s=300 — interpretation only.
 
 12. Page output
 Yes — page class `snapshot`: the page IS the product (the zone diagram the
-6443 route serves). render.sh → render_zones.py renders
+loops host serves at /reports/tailnet-zones/latest.html; the dedicated
+llm:6443 route was retired 2026-08-04). render.sh → render_zones.py renders
 `$OUT_DIR/zones-model.json` on pagekit (kit.css + toggle.js inlined, envelope
 id `report-data`, totals: grants/pins/tests/devices/source_live). Sections:
 header with policy-source provenance + stat strip; zone cards in posture

@@ -2,6 +2,9 @@
 
 ## WIP
 
+### B-22: Garden console live at tailnet URL: allow-host gate, Caddy proxy + static fallback, 6h preset
+Priority: medium | Status: in-progress
+
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)

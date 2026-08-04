@@ -1174,7 +1174,7 @@ def cmd_dashboard(args):
 def cmd_serve(args):
     import console
 
-    return console.serve(args.root, args.port)
+    return console.serve(args.root, args.port, allow_hosts=tuple(args.allow_host or ()))
 
 
 def cmd_findings(args):
@@ -1577,6 +1577,14 @@ def build_parser():
     # not, so without that check the flag would be silently swallowed.
     serve_p = sub.add_parser("serve", parents=[common_sub_nofrom])
     serve_p.add_argument("--port", type=int, default=8929)
+    serve_p.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="HOST",
+        help="extra exact-match Host header accepted by the §13.1 origin gate "
+        "(repeatable; for a trusted local reverse proxy that forwards the real Host)",
+    )
 
     findings_p = sub.add_parser("findings", parents=[common_sub])
     findings_p.add_argument("loop")

@@ -544,6 +544,78 @@ class TestCheckOrigin(unittest.TestCase):
         ok, _ = console.check_origin("127.0.0.1:9999", "application/json", "POST", 8929)
         self.assertFalse(ok)
 
+    # --- §13.1 amendment (B-22): --allow-host extends the exact-match set ---
+
+    def test_allow_host_accepts_configured_host_get(self):
+        ok, _ = console.check_origin(
+            "loops.example.ts.net",
+            "",
+            "GET",
+            8929,
+            allow_hosts=("loops.example.ts.net",),
+        )
+        self.assertTrue(ok)
+
+    def test_allow_host_accepts_configured_host_post(self):
+        ok, _ = console.check_origin(
+            "loops.example.ts.net",
+            "application/json",
+            "POST",
+            8929,
+            allow_hosts=("loops.example.ts.net",),
+        )
+        self.assertTrue(ok)
+
+    def test_allow_host_is_exact_match_not_suffix(self):
+        # A rebound/attacker hostname must still fail even with an allowlist set.
+        ok, reason = console.check_origin(
+            "evil.example",
+            "application/json",
+            "POST",
+            8929,
+            allow_hosts=("loops.example.ts.net",),
+        )
+        self.assertFalse(ok)
+        self.assertIn("Host", reason)
+
+    def test_allow_host_subdomain_of_allowed_rejected(self):
+        ok, _ = console.check_origin(
+            "x.loops.example.ts.net",
+            "application/json",
+            "POST",
+            8929,
+            allow_hosts=("loops.example.ts.net",),
+        )
+        self.assertFalse(ok)
+
+    def test_allow_host_keeps_loopback_entries(self):
+        ok, _ = console.check_origin(
+            "127.0.0.1:8929",
+            "application/json",
+            "POST",
+            8929,
+            allow_hosts=("loops.example.ts.net",),
+        )
+        self.assertTrue(ok)
+
+    def test_allow_host_post_still_needs_json_content_type(self):
+        # The allowlist widens ONLY the Host set — the forms-CSRF gate is untouched.
+        ok, reason = console.check_origin(
+            "loops.example.ts.net",
+            "application/x-www-form-urlencoded",
+            "POST",
+            8929,
+            allow_hosts=("loops.example.ts.net",),
+        )
+        self.assertFalse(ok)
+        self.assertIn("Content-Type", reason)
+
+    def test_default_allow_hosts_empty_behavior_unchanged(self):
+        ok, _ = console.check_origin(
+            "loops.example.ts.net", "application/json", "POST", 8929
+        )
+        self.assertFalse(ok)
+
 
 # ---------------------------------------------------------------------------
 # B-13 — manual run trigger: POST /api/loops/<name>/run + GET /api/run/status

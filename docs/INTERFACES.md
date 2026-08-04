@@ -727,7 +727,7 @@ loopctl pause <name> / resume <name>                                 # sets enab
 loopctl set-schedule <name> <spec>                                   # §5.1-validate; rewrite conf; re-render+reload plist iff installed; NEVER kickstart; best-effort dashboard regen
 loopctl set-owner <name> <owner>                                     # B-17: owner-grammar-validate BEFORE any write; rewrite conf key; best-effort dashboard regen; no launchd work (owner isn't in the plist), no loop_events row
 loopctl dashboard                                                    # regenerate + print path
-loopctl serve [--port PORT]                                          # local console (§13), default port 8929
+loopctl serve [--port PORT] [--allow-host HOST ...]                  # local console (§13), default port 8929; --allow-host extends the §13.1 Host allowlist (trusted proxy)
 loopctl findings <loop>                                              # open findings: id, severity, age, times_seen, disposition
 loopctl ack <loop> <finding_id> [--note …]                           # Amendment 1 disposition verbs —
 loopctl dismiss <loop> <finding_id> --note …                         #   note REQUIRED (audit trail)
@@ -1260,10 +1260,12 @@ expect_loop=None) -> list[str]` (empty = pass) and `read_meta(path) -> dict | No
 ## 13. Console (`loopctl serve`)
 
 Local control surface for the dashboard. `bin/console.py`, started by `loopctl serve
-[--port PORT]` (default 8929), binds 127.0.0.1 ONLY. Trusted unsandboxed harness code:
-MAY shell out (`launchctl print` for live load state; `bin/loopctl` subprocesses for all
-mutations — one code path for CLI and console). §10's hermeticity binds dashboard/generate.py,
-never this module. No daemon mode, no LaunchAgent in v1.
+[--port PORT] [--allow-host HOST ...]` (default 8929), binds 127.0.0.1 ONLY. Trusted
+unsandboxed harness code: MAY shell out (`launchctl print` for live load state; `bin/loopctl`
+subprocesses for all mutations — one code path for CLI and console). §10's hermeticity binds
+dashboard/generate.py, never this module. No daemon mode; persistent operation is the
+machine-local `com.roops.console` LaunchAgent (§13.1 amendment, B-22), which just runs
+`loopctl serve` under KeepAlive — the harness itself still has no daemon code.
 
 | endpoint | effect |
 |---|---|
@@ -1310,7 +1312,8 @@ with no mutation and no error, a false "success" for a schedule that never took 
 ### 13.1 Request-origin gate (fail-closed, applies to every request)
 
 Every request — GET or POST, page or API — is rejected `403` unless the `Host` header is
-exactly `127.0.0.1:<port>` or `localhost:<port>`; every POST must additionally carry
+exactly `127.0.0.1:<port>` or `localhost:<port>` (or an entry in the operator's explicit
+`--allow-host` list — amendment below); every POST must additionally carry
 `Content-Type: application/json`. Rationale: binding to `127.0.0.1` stops packets arriving from
 off-box, but not a browser on this same machine tricked into firing a request here — a plain
 cross-origin `<form method="POST" action="http://127.0.0.1:PORT/...">` still reaches the
@@ -1325,11 +1328,29 @@ only send `application/x-www-form-urlencoded`/`multipart/form-data`/`text/plain`
 state) rests entirely on the browser's same-origin default; adding such a header would leak
 fleet state to any page the user's browser happens to visit.
 
-**Exposure note:** the `Host` check hard-codes the loopback literals above, so fronting the
-console with Caddy, `tailscale serve`, or rebinding the listener to `0.0.0.0` will 403 every
-request. That is deliberate for a launchd-mutating API — document it here so it isn't
-debugged the hard way. (Explicit exception to the machine-global "bind dev servers to
-`0.0.0.0`" habit: this server binds loopback-only on purpose.)
+**Exposure note:** with no `--allow-host`, the `Host` check admits only the loopback literals
+above, so fronting the console with Caddy, `tailscale serve`, or rebinding the listener to
+`0.0.0.0` will 403 every request. That is deliberate for a launchd-mutating API — document it
+here so it isn't debugged the hard way. (Explicit exception to the machine-global "bind dev
+servers to `0.0.0.0`" habit: this server binds loopback-only on purpose.)
+
+**Amendment (2026-08-04, B-22) — `--allow-host`, the trusted-proxy deployment.** `loopctl
+serve --allow-host HOST` (repeatable) adds HOST to the gate's exact-match set — nothing else
+changes: the listener still binds 127.0.0.1 only, POSTs still require the JSON Content-Type,
+`OPTIONS` still fails closed, and `Access-Control-*` stays forbidden. The intended (and only
+sanctioned) use is a trusted local reverse proxy that terminates TLS and forwards the
+browser's REAL `Host` untouched — on this machine, the dev-tailnet Caddy's `@loops` route
+proxying `loops.example.ts.net` → `127.0.0.1:8929`, with a `handle_errors` fallback to
+the static `dashboard/` files when the console is down. DNS rebinding stays dead under this
+deployment: an attacker-controlled hostname arrives as ITS OWN `Host` and fails exact-match.
+The proxy MUST NOT rewrite `Host` to a loopback literal (`header_up Host 127.0.0.1:8929`
+forges the exact credential this gate checks and would blind it to rebound hostnames);
+allowlisting the real public name is the honest form of the same trust decision. Exposure
+consequence, stated plainly: every mutation route (§13 table) becomes reachable by any
+device on the tailnet behind that hostname — the tailnet is the trust boundary. The console
+runs persistently for this via a machine-local LaunchAgent labelled `com.roops.console`
+(NOT `com.loops.<name>` — that namespace is reserved for loops), KeepAlive, logs under
+`state/`; like loop plists it is machine state, not repo content.
 
 ### 13.2 Page hydration
 

@@ -2552,6 +2552,7 @@ _CONSOLE_CONTROLS_HTML = r"""<div class="sched-panel" data-sched-panel hidden>
   <div class="sp-presets">
     <button data-spec="interval:5m">5m</button><button data-spec="interval:15m">15m</button>
     <button data-spec="interval:30m">30m</button><button data-spec="interval:1h">hourly</button>
+    <button data-spec="interval:6h">6h</button>
     <button data-kind="daily">daily</button><button data-kind="weekly">weekly</button>
     <button data-kind="monthly">monthly</button>
   </div>

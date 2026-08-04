@@ -437,7 +437,7 @@ def handle_request(root, method, path, body_bytes):
     return _json(404, {"error": "not found"})
 
 
-def check_origin(host_header, content_type, method, port):
+def check_origin(host_header, content_type, method, port, allow_hosts=()):
     """Origin/DNS-rebinding gate for the mutation API. Binding to 127.0.0.1
     stops packets arriving from off-box, but it does NOT stop a browser on
     THIS machine from being tricked into firing a request at this server —
@@ -460,11 +460,18 @@ def check_origin(host_header, content_type, method, port):
        preflight (OPTIONS) for any cross-origin fetch() with a JSON body;
        this server never answers OPTIONS, so the preflight fails closed.
 
+    `allow_hosts` (§13.1 amendment, 2026-08-04 / B-22) extends the exact-match
+    set with explicitly configured names — the trusted-proxy deployment:
+    Caddy forwards the browser's real Host (never `header_up`-spoofed) for a
+    hostname the operator listed via `loopctl serve --allow-host`. Rebinding
+    is still dead: an attacker-controlled hostname sends ITSELF as Host and
+    fails the exact match, same as before. Default `()` = behavior unchanged.
+
     Pure and socket-free (no header object, just the plain strings a real
     request would carry) so it's testable in-process without ever binding a
     port. Called by serve()'s Handler before handle_request() runs;
     handle_request()'s own signature is untouched."""
-    allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", *allow_hosts}
     if host_header not in allowed_hosts:
         return False, f"bad Host header: {host_header!r}"
     if method == "POST":
@@ -474,7 +481,7 @@ def check_origin(host_header, content_type, method, port):
     return True, ""
 
 
-def serve(root, port):
+def serve(root, port, allow_hosts=()):
     class Handler(BaseHTTPRequestHandler):
         def _respond(self, status, payload, ctype):
             self.send_response(status)
@@ -491,6 +498,7 @@ def serve(root, port):
                 self.headers.get("Content-Type", ""),
                 self.command,
                 port,
+                allow_hosts,
             )
             if not ok:
                 # The rejected request's body is never drained. Under HTTP/1.0 (this
@@ -525,7 +533,8 @@ def serve(root, port):
     # read at request time — never at class-definition time) is what makes the handler
     # and the banner below agree with the socket.
     port = httpd.server_address[1]
-    print(f"roops console: 127.0.0.1:{port} (Ctrl-C to stop)")
+    extra = f" (+Host allowlist: {', '.join(allow_hosts)})" if allow_hosts else ""
+    print(f"roops console: 127.0.0.1:{port}{extra} (Ctrl-C to stop)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

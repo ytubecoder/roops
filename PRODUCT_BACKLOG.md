@@ -2,9 +2,6 @@
 
 ## WIP
 
-### B-22: Garden console live at tailnet URL: allow-host gate, Caddy proxy + static fallback, 6h preset
-Priority: medium | Status: in-progress
-
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)
@@ -56,6 +53,9 @@ Priority: medium | Status: for-review
 Priority: high | Status: for-review
 
 ### B-21: tailnet-zones loop: generated zone diagram page (owner network-system)
+Priority: medium | Status: for-review
+
+### B-22: Garden console live at tailnet URL: allow-host gate, Caddy proxy + static fallback, 6h preset
 Priority: medium | Status: for-review
 
 ## Backlog

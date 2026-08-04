@@ -247,3 +247,21 @@ a couple of allowlisted Bash calls, contract out; order of a few thousand
 tokens. `retry_transient=1` (default). `timeout_s=900` (15 min — proportional to
 one interpret-and-write pass, well under the ceiling). `retention_days=730`
 (sets live in run dirs; keep long, revisit via the GC size indicator).
+
+12. Amendment 2026-08-04 — monthly spend ledger + account-lock signal
+Two precheck sections were added (with matching prompt guidance) after the
+2026-08-03 X check-in showed the loop's spend numbers understated reality:
+- **Monthly spend ledger**: decodes TRUE lifetime spend per group from
+  TOTAL BUDGET − TOTAL REMAINING in the latest x_cache batch (the SPEND column
+  is a date-picker window that drops exhausted groups — the budget guard's
+  documented undercount, $515.97 window vs $636.80 true on 2026-07-25), plus
+  groups-at-cap, armed headroom, serving rate between the last two imports, and
+  a snapshot-bounded month attribution (prior-month total / month-to-date or
+  UNKNOWN). `report_markdown` must OPEN with this ledger — the report answers
+  "what did X cost last month and what is it costing now" unprompted.
+- **X account signal**: read-only substring scan of the newest three OT twitter
+  agent memory files for lock/access-wall markers (an account lock halts
+  serving, makes the manual import impossible, and downs engagement — e.g. the
+  @maguyvaai lock of 2026-08-02). A current lock is an alert-severity CMP
+  action and supersedes the stale-snapshot action (the import cannot run while
+  locked). Still no CDP, no browser, no lease — file peeks only.

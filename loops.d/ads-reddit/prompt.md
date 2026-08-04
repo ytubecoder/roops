@@ -193,7 +193,13 @@ braces — write it exactly as the schema requires.
   one open action for a human to read; `alert` for a critical delivery/spend
   problem or an input gap or an invalid action set.
 - `headline`: one line, e.g. "2 open reddit actions; desktop-only delivery near zero — revert decision due".
-- `report_markdown`: a short human summary + the register (open ADR-NN titles).
+- `report_markdown`: MUST OPEN with a **Monthly ledger** block of 2–4 lines
+  derived from the digest's LIVE budget line: reddit actual-MTD vs the reddit
+  network cap; the derived run rate (actual-MTD ÷ UTC day-of-month from
+  `fetched_at` — this division is the ONE derived number allowed, show it);
+  and the projected month-end vs the cap, flagged as noisy before day ~5.
+  This opening answers "what is reddit costing this month" before any
+  exception. Then a short human summary + the register (open ADR-NN titles).
 - `metrics` MUST be a JSON **string** containing a serialized JSON object
   (e.g. `"{\"actions.open\": 3, \"actions.struck\": 1, \"scope.variants\": 12}"`);
   `"{}"` when nothing. Keys — emit ALL of these every run: `actions.open`,

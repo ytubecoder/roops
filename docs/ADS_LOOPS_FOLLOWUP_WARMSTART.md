@@ -165,3 +165,55 @@ repo has no remote configured. Review before assuming any of it was reviewed.
 - Build order + the original design: `~/projects/maguyva-marketing/docs/ads-actions-loops-warmstart.md`
 - Other open design threads: `docs/OPEN_THREADS_WARMSTART.md`
 - Harness contract (frozen): `docs/INTERFACES.md` · loop authoring: `docs/LOOP_AUTHORING.md`
+
+## Update 2026-08-04 — issue 2 ROOT-CAUSED + report upgrades shipped
+
+**Issue 2 (launchd installs) root cause found, verified with a launchd-context probe:**
+Claude CLI 2.1.221 (auto-updated 2026-08-04 08:41) keeps TWO credential copies on this Mac
+and they hold DIVERGED refresh chains:
+
+- `~/.claude/.credentials.json` (born 2026-08-04) — the LIVE chain. SSH/interactive shells
+  have the login keychain LOCKED (secret read exits 36), so every interactive/`loopctl run`
+  claude uses this file and works.
+- Keychain item "Claude Code-credentials" — a DEAD chain. launchd jobs run in the GUI
+  session where the keychain IS unlocked (probe: a launchd-spawned
+  `security find-generic-password -w` exits 0), so the engine reads the stale keychain
+  copy and dies with `Failed to authenticate: OAuth session expired and could not be
+  refreshed` — at a moment the file token was demonstrably valid.
+
+**Do NOT "fix" this by deleting the keychain item.** If a later launchd-side refresh
+re-creates/rotates the keychain chain, the single-use refresh-token family forks and the
+FILE chain dies — that breaks every interactive session on the box. The doc-supported fix
+is a SEPARATE long-lived grant that bypasses both stores
+(https://code.claude.com/docs/en/authentication.md, precedence item 5):
+
+1. **Generalissimo (one-time, ~2 min):** `claude setup-token` (over SSH is fine — open the
+   printed URL in the local browser, paste the code back), then
+   `install -m 600 /dev/stdin ~/.claude/loops-oauth-token` and paste the token.
+2. Publish to launchd env: `launchctl kickstart gui/$(id -u)/com.generalissimo.claude-oauth-env`
+   — the guarded loader LaunchAgent (`~/Library/LaunchAgents/com.generalissimo.claude-oauth-env.plist`,
+   bootstrapped 2026-08-04) setenvs `CLAUDE_CODE_OAUTH_TOKEN` from that file at every
+   login/load; it is a no-op while the file is absent. Note: `launchctl getenv` makes the
+   token readable to local processes — single-user Mac, accepted trade-off; revisit if the
+   harness ever implements `credential_env`.
+3. Install: `cd ~/projects/loops && for l in ads-google ads-intl ads-reddit ads-x ads-program; do
+   LOOPCTL_INSTALL_POLL_TIMEOUT_S=600 bin/loopctl install $l; done`
+   ⚠️ The default install poll (90s) can NEVER pass for these loops — the kickstart-verify
+   waits for a TERMINAL run and an ads loop takes minutes. Always raise
+   `LOOPCTL_INSTALL_POLL_TIMEOUT_S`.
+4. After installs land: retire the four legacy manual "ads check-in" rows on /schedules
+   (issue 3 above) — `_ADS_CHECKINS` in `growth-console/console/dashboard/schedules.py`.
+
+**Report upgrades shipped 2026-08-04 (all five loops, validated + supervised runs):**
+- **ads-x** precheck now decodes TRUE lifetime spend from TOTAL BUDGET − TOTAL REMAINING
+  (the SPEND column is a date-picker window that drops exhausted groups — $515.97 window
+  vs $636.80 true on the 2026-07-25 batch), prints a snapshot-bounded monthly ledger
+  (prior-month / month-to-date / serving rate / armed headroom) and an account-lock signal
+  read from the OT twitter agent's memory files (the 2026-08-02 @maguyvaai lock). Its
+  `report_markdown` MUST open with the ledger; an active lock is an alert that supersedes
+  the stale-import action. Verified: run 20260804T014810Z-ads-x-3fb5e2 (status alert,
+  x_account_locked, 8 open actions, ledger correct).
+- **ads-google / ads-intl / ads-reddit / ads-program** prompts now open their reports with
+  a Monthly ledger from the digest's LIVE budget line (actual-MTD vs cap, derived $/day
+  run rate, projected month-end; program adds the ~$1k real-spend soft target and defers
+  to ads-x for X truth because the scoreboard's X figure is the undercounting window sum).

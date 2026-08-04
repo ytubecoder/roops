@@ -188,7 +188,16 @@ braces — write it exactly as the schema requires.
   one open action for a human to read; `alert` for a critical delivery/spend
   problem or an input gap or an invalid action set.
 - `headline`: one line, e.g. "2 open program actions; july committed at the backstop, 2 upstream sets stale".
-- `report_markdown`: a short human summary + the register (open ADP-NN titles).
+- `report_markdown`: MUST OPEN with a **Monthly ledger** block — the program-wide
+  money picture, from the digest's LIVE budget line: per-network actual-MTD /
+  cap, the program TOTAL actual-MTD vs the monthly cap AND vs Generalissimo's
+  ~$1,000/mo real-spend soft target, plus a derived program run rate
+  (total actual-MTD ÷ UTC day-of-month from `fetched_at` — the ONE derived
+  number allowed, show the division) and projected month-end, flagged as noisy
+  before day ~5. ⚠️ The X figure in that line is the stale cache-window sum,
+  which UNDERCOUNTS true X spend (exhausted groups vanish from the window) —
+  say so and defer to the ads-x loop's decoded ledger for X truth. Then a
+  short human summary + the register (open ADP-NN titles).
 - `metrics` MUST be a JSON **string** containing a serialized JSON object
   (e.g. `"{\"actions.open\": 3, \"actions.struck\": 1, \"scope.variants\": 12}"`);
   `"{}"` when nothing. Keys — emit ALL of these every run: `actions.open`,

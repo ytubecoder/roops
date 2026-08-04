@@ -184,7 +184,15 @@ braces — write it exactly as the schema requires.
   one open action for a human to read; `alert` for a critical delivery/spend
   problem or an input gap or an invalid action set.
 - `headline`: one line, e.g. "2 open intl actions; intl-en CPC drifting above the scan band".
-- `report_markdown`: a short human summary + the register (open ADI-NN titles).
+- `report_markdown`: MUST OPEN with a **Monthly ledger** block of 2–4 lines
+  derived from the digest's LIVE budget line: google actual-MTD vs the google
+  network cap; the derived run rate (actual-MTD ÷ UTC day-of-month from
+  `fetched_at` — this division is the ONE derived number allowed, show it);
+  and the projected month-end vs the cap, flagged as noisy before day ~5.
+  Say plainly that the budget line is the WHOLE google network and cannot
+  split the intl campaigns out — use the in-scope variant rows' window spend
+  for intl-specific color only, labeled as window figures. Then a short human
+  summary + the register (open ADI-NN titles).
 - `metrics` MUST be a JSON **string** containing a serialized JSON object
   (e.g. `"{\"actions.open\": 3, \"actions.struck\": 1, \"scope.variants\": 12}"`);
   `"{}"` when nothing. Keys — emit ALL of these every run: `actions.open`,

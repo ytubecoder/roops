@@ -109,6 +109,127 @@ else:
 print("ALL X metrics below are a SNAPSHOT as of that import — never live. Writes are human checklists only.")
 print()
 
+# ---- Monthly spend ledger (decoded from x_cache TOTAL REMAINING) ----
+# The Ads Manager SPEND column is the UI date-picker window, NOT lifetime:
+# groups that exhausted their total caps before the window report "—" there and
+# vanish from the window total — this is the budget guard's documented
+# undercount (~$121 on 2026-07-25: window $515.97 vs true $636.80). True
+# lifetime per group = TOTAL BUDGET − TOTAL REMAINING, read positionally from
+# raw_json cells (cells[-3] = TOTAL BUDGET, cells[-1] = TOTAL REMAINING;
+# `header` is off-by-one vs `cells` — never zip them; store.py indexes
+# positionally and is correct).
+def _decode_batch(con, batch_id):
+    life = window = headroom = 0.0
+    rows_n = bad = at_cap = 0
+    for spend, raw in con.execute(
+            "SELECT spend_usd, raw_json FROM x_cache WHERE batch_id=?", (batch_id,)):
+        rows_n += 1
+        window += spend or 0.0
+        try:
+            cells = json.loads(raw)["cells"]
+            rem = float(cells[-1].split("\n")[0].replace("$", "").replace(",", ""))
+            bud = float(cells[-3].replace("$", "").replace(",", ""))
+        except Exception:
+            bad += 1
+            continue
+        life += bud - rem
+        if rem <= 0.01:
+            at_cap += 1
+        elif "Active" in str(cells[3] or ""):
+            headroom += rem
+    return {"life": life, "window": window, "rows": rows_n, "bad": bad,
+            "at_cap": at_cap, "headroom": headroom}
+
+print("## Monthly spend ledger (decoded from x_cache — snapshot-bounded, never live)")
+try:
+    import sqlite3
+    _db = Path.home() / ".growth-console" / "ads.db"
+    _con = sqlite3.connect(f"file:{_db}?mode=ro", uri=True, timeout=5)
+    _batches = _con.execute(
+        "SELECT batch_id, MAX(imported_at) AS ia FROM x_cache "
+        "GROUP BY batch_id ORDER BY ia").fetchall()
+    decoded = []
+    for _bid, _ia in _batches:
+        _d = _decode_batch(_con, _bid)
+        if _d["rows"] - _d["bad"] > 0:
+            decoded.append((_ia, _bid, _d))
+    _con.close()
+    if not decoded:
+        print("- x_cache has no decodable batches — TRUE spend unreadable (input gap).")
+    else:
+        _ia, _bid, _d = decoded[-1]
+        _under = _d["life"] - _d["window"]
+        print(f"- TRUE lifetime spend ${_d['life']:.2f} as of the latest import {_ia} "
+              f"(batch {_bid[:8]}, {_d['rows']} rows{', ' + str(_d['bad']) + ' undecodable' if _d['bad'] else ''}).")
+        print(f"  Window column summed ${_d['window']:.2f} → guard/window undercount ${_under:.2f}. "
+              f"NEVER quote the window number as spend.")
+        print(f"- {_d['at_cap']} groups at their total caps; ${_d['headroom']:.2f} armed headroom "
+              f"on still-active groups (hard ceiling for any future spend without a human raising caps).")
+        if len(decoded) >= 2:
+            _pia, _, _pd = decoded[-2]
+            _t0 = datetime.fromisoformat(str(_pia).replace("Z", "+00:00"))
+            _t1 = datetime.fromisoformat(str(_ia).replace("Z", "+00:00"))
+            _dd = (_t1 - _t0).total_seconds() / 86400
+            if _dd > 0.2 and _pd["rows"] >= _d["rows"] - 5:
+                print(f"- serving rate between the last two imports ({_pia} → {_ia}): "
+                      f"${max(_d['life'] - _pd['life'], 0.0) / _dd:.2f}/day over {_dd:.1f}d.")
+        _now = datetime.now(timezone.utc)
+        _month_start = _now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        _pre = [t for t in decoded
+                if datetime.fromisoformat(str(t[0]).replace("Z", "+00:00")) < _month_start]
+        _latest_dt = datetime.fromisoformat(str(_ia).replace("Z", "+00:00"))
+        if _latest_dt >= _month_start:
+            if _pre:
+                _pre_ia, _, _pre_d = _pre[-1]
+                print(f"- month attribution (UTC): lifetime was ${_pre_d['life']:.2f} at the newest "
+                      f"pre-month import ({_pre_ia}) → this-month-to-date ≈ "
+                      f"${max(_d['life'] - _pre_d['life'], 0.0):.2f} (snapshot-bounded: the pre-month "
+                      f"import may predate the month boundary by days — say so).")
+            else:
+                print("- month attribution: no pre-month import exists — all decoded lifetime "
+                      "falls in the current month as far as the cache can tell.")
+        else:
+            _tail = " (campaign may still have served its remaining armed headroom after that import)" \
+                if _d["headroom"] > 0.5 else ""
+            print(f"- month attribution (UTC): the latest import predates this month — "
+                  f"month-to-date spend is UNKNOWN from cache; last-known lifetime "
+                  f"${_d['life']:.2f} at {_ia}{_tail}. Prior-month total is snapshot-bounded "
+                  f"between ${_d['life']:.2f} and ${_d['life'] + _d['headroom']:.2f}.")
+        print("- CAVEATS: the ad-groups table virtualizes (~25 of 28 rows; absent rows understate "
+              "lifetime); every figure is as-of an import date, not calendar-exact.")
+except Exception as exc:
+    print(f"- ledger unreadable ({type(exc).__name__}: {exc}) — treat as input gap.")
+print()
+
+# ---- X account signal (read-only peek at the OT twitter agent's memory) ----
+# The engagement agent records login walls / account locks in its daily memory
+# files. An account lock halts ad serving, makes the manual scrape impossible,
+# and downs engagement — so it is a delivery-critical signal for this loop.
+# This is a plain substring scan of local files; it never touches the browser.
+print("## X account signal (from OpenTwins twitter agent memory — read-only file peek)")
+try:
+    _memdir = Path.home() / ".opentwins" / "workspaces" / "agent-twitter" / "memory"
+    _files = sorted(_memdir.glob("20??-??-??.md"))[-3:]
+    _hits = []
+    for _f in _files:
+        _text = _f.read_text(errors="replace").lower()
+        if "account has been locked" in _text or "account/access" in _text:
+            _hits.append(_f.name)
+    if _hits:
+        print(f"- 🚨 lock/access-wall markers present in: {', '.join(_hits)} (newest file matters most).")
+        print("  If the NEWEST file still shows the lock: the @maguyvaai account is locked — ads do")
+        print("  not serve, the manual scrape/CSV import is impossible, engagement is down. Unlock")
+        print("  is HUMAN-ONLY (email verification in a real browser). Raise ONE alert-severity")
+        print("  action for this; a stale-snapshot action is subordinate to it while locked")
+        print("  (the import cannot be run until the account is unlocked).")
+    elif _files:
+        print(f"- no lock/access-wall markers in the last {len(_files)} OT twitter memory files.")
+    else:
+        print("- OT twitter memory dir empty/absent — no account signal this run.")
+except Exception as exc:
+    print(f"- OT memory unreadable ({type(exc).__name__}) — no account signal this run.")
+print()
+
 # ---- SCOPE from the experiments registry (cards with an X leg) ----
 scope_variants, scope_campaigns, scope_cards = set(), {}, []
 pending_bringups = []

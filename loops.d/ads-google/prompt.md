@@ -196,7 +196,16 @@ braces — write it exactly as the schema requires.
   one open action for a human to read; `alert` for a critical delivery/spend
   problem or an input gap or an invalid action set.
 - `headline`: one line, e.g. "3 open google actions; theme search legs starved".
-- `report_markdown`: a short human summary + the register (open ADG-NN titles).
+- `report_markdown`: MUST OPEN with a **Monthly ledger** block of 2–4 lines
+  derived from the digest's LIVE budget line: google actual-MTD vs the google
+  network cap; the derived run rate (actual-MTD ÷ UTC day-of-month from
+  `fetched_at` — this division is the ONE derived number allowed, show it,
+  e.g. "$210.40 / 4d = $52.60/day"); and the projected month-end (rate × days
+  in the month) vs the cap, flagged as noisy before day ~5. Label the figure
+  as the NETWORK total — it includes google campaigns outside this loop's
+  scope (intl belongs to ads-intl). This opening answers "what is google
+  costing this month" before any exception. Then a short human summary + the
+  register (open ADG-NN titles).
 - `metrics` MUST be a JSON **string** containing a serialized JSON object
   (e.g. `"{\"actions.open\": 3, \"actions.struck\": 1, \"scope.variants\": 12}"`);
   `"{}"` when nothing. Keys — emit ALL of these every run: `actions.open`,

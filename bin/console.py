@@ -256,9 +256,9 @@ def _run_worker(root, name, started_at):
             error = None if ok else _stderr_tail(r.stderr)
             try:
                 _regen_dashboard(root)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — §13: regen is best-effort; the run already happened
                 sys.stderr.write(f"warning: dashboard regen failed: {exc}\n")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — any worker failure must land in run status, never escape the thread
             ok = False
             error = _stderr_tail(str(exc) or exc.__class__.__name__)
     finally:
@@ -300,7 +300,7 @@ def _start_run(root, name):
             target=_run_worker, args=(root, name, started_at), daemon=True
         )
         t.start()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — §13.3: a spawn failure must release the slot and report, never 500 raw
         with _RUN_STATUS_LOCK:
             _RUN_STATUS.update(
                 {

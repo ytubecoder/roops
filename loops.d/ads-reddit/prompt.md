@@ -126,7 +126,7 @@ and what the denial message said.
 python3 loops.d/ads-reddit/bin/emit_action_set.py <<'ACTIONSET'
 loop: ads-reddit
 run_id: <the RUN CONTEXT run_id>
-engine: claude
+engine: codex
 generated: optional — the emit script stamps write-time itself and ignores this
 window.scoreboard: last 7 days
 window.journal: last 60 orders

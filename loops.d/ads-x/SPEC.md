@@ -265,3 +265,15 @@ Two precheck sections were added (with matching prompt guidance) after the
   @maguyvaai lock of 2026-08-02). A current lock is an alert-severity CMP
   action and supersedes the stale-snapshot action (the import cannot run while
   locked). Still no CDP, no browser, no lease — file peeks only.
+
+## Amendment 2026-08-05 — engine flipped claude → codex
+Generalissimo's call: codex is the preferred general loop runner (claude tokens
+are reserved for development); claude stays supported per-loop if codex output
+quality falls short. The flip forces `perm_fs_write=workdir` — codex
+report_only is a read-only sandbox under which the emit script cannot write the
+action set; the write POLICY (only the shipped scripts, only this run's dir) is
+now enforced by prompt + artifact review rather than claude's Bash allowlist.
+Side benefit: codex file auth works under launchd, so the scheduled install no
+longer waits on the claude keychain/token workaround. Quality gate passed on
+the first codex run (ads-x 20260805T040147Z: ledger verbatim-correct, all 8
+prior action ids carried, set validator-clean).

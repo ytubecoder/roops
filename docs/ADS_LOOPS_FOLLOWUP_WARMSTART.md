@@ -217,3 +217,18 @@ is a SEPARATE long-lived grant that bypasses both stores
   a Monthly ledger from the digest's LIVE budget line (actual-MTD vs cap, derived $/day
   run rate, projected month-end; program adds the ~$1k real-spend soft target and defers
   to ads-x for X truth because the scoreboard's X figure is the undercounting window sum).
+
+## Update 2026-08-05 — engines flipped to CODEX; the claude-token path is superseded for ads loops
+
+Generalissimo's call ("codex is preferred unless it doesnt produce the results — im using
+claude tokens for development"): all five ads loops now run `engine=codex` with
+`perm_fs_write=workdir` (codex report_only = read-only sandbox, under which the emit script
+cannot write; the write policy is prompt+review-enforced under codex — see each loop.conf
+notes). Quality gate passed on the first codex run (ads-x 20260805T040147Z: ledger
+verbatim-correct, all 8 prior ids carried, set validator-clean; prose flatter than claude's
+but complete). Codex file auth (~/.codex/) works under launchd, so **the setup-token /
+CLAUDE_CODE_OAUTH_TOKEN step in the 2026-08-04 update is NO LONGER REQUIRED for the ads
+loops.** The guarded env-loader LaunchAgent (com.generalissimo.claude-oauth-env) stays
+bootstrapped and inert — it is the ready-made path if any future loop needs engine=claude
+under launchd. The split-brain credential analysis above remains true and load-bearing for
+interactive claude on this Mac; do not delete the keychain item.

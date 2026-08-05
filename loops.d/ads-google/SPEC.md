@@ -243,3 +243,15 @@ a couple of allowlisted Bash calls, contract out; order of a few thousand
 tokens. `retry_transient=1` (default). `timeout_s=900` (15 min — proportional to
 one interpret-and-write pass, well under the ceiling). `retention_days=730`
 (sets live in run dirs; keep long, revisit via the GC size indicator).
+
+## Amendment 2026-08-05 — engine flipped claude → codex
+Generalissimo's call: codex is the preferred general loop runner (claude tokens
+are reserved for development); claude stays supported per-loop if codex output
+quality falls short. The flip forces `perm_fs_write=workdir` — codex
+report_only is a read-only sandbox under which the emit script cannot write the
+action set; the write POLICY (only the shipped scripts, only this run's dir) is
+now enforced by prompt + artifact review rather than claude's Bash allowlist.
+Side benefit: codex file auth works under launchd, so the scheduled install no
+longer waits on the claude keychain/token workaround. Quality gate passed on
+the first codex run (ads-x 20260805T040147Z: ledger verbatim-correct, all 8
+prior action ids carried, set validator-clean).

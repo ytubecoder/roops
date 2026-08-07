@@ -2,9 +2,6 @@
 
 ## WIP
 
-### B-23: Make roops repo public: scrub identity/tailnet from history, publish
-Priority: high | Status: in-progress
-
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)
@@ -60,6 +57,9 @@ Priority: medium | Status: for-review
 
 ### B-22: Garden console live at tailnet URL: allow-host gate, Caddy proxy + static fallback, 6h preset
 Priority: medium | Status: for-review
+
+### B-23: Make roops repo public: scrub identity/tailnet from history, publish
+Priority: high | Status: for-review
 
 ## Backlog
 

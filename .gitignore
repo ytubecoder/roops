@@ -6,6 +6,9 @@ dashboard/.loops-dashboard-*.tmp
 dashboard/reports.html
 launchd/*.plist
 
+# machine-local — the kagami name-leak denylist never ships in the repo
+loops.d/kagami/leak-terms.local.txt
+
 # scratch / tooling
 .playwright-mcp/
 .superpowers/

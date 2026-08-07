@@ -2,6 +2,9 @@
 
 ## WIP
 
+### B-23: Make roops repo public: scrub identity/tailnet from history, publish
+Priority: high | Status: in-progress
+
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)

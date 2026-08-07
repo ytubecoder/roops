@@ -88,11 +88,17 @@ PY
   else add_check self-contained fail "external subresource: ${EXT:-see scan}"; fi
 
   # --- check: name-leak (no real loop names, paths, hosts on the public artifact) ---
+  # Extra terms live in leak-terms.local.txt (gitignored, machine-local) so the
+  # denylist itself never ships in the repo; absent file = built-ins only.
   if LEAK=$(python3 - "$LOOPS_ROOT" "$ART" "$HOME" <<'PY'
 import os, sys
 root, art, home = sys.argv[1:4]
 html = open(art, encoding="utf-8").read()
-terms = {home, "/Users/llm", "maguyva", "example.org", "example"}
+terms = {home}
+local = os.path.join(root, "loops.d", "kagami", "leak-terms.local.txt")
+if os.path.exists(local):
+    with open(local, encoding="utf-8") as f:
+        terms.update(t.strip() for t in f if t.strip())
 terms.update(os.listdir(os.path.join(root, "loops.d")))  # every REAL loop name
 hits = sorted(t for t in terms if t and t in html)
 if hits:

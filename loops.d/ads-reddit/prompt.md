@@ -39,10 +39,11 @@ program should yield few or zero actions. Look for:
   ~zero, the standing decision is REVERT platforms to ["ALL"] — raise that as
   the suggested order. Also: an ACTIVE campaign serving ~zero, an ad
   unexpectedly rejected/paused.
-- **Budget-guard headroom:** google network actual MTD spend approaching its
-  cap; committed-vs-actual basis; whether a positive-spend suggestion would be
-  refused by the guard (state it plainly — the guard binds on COMMITTED first,
-  then the google ACTUAL gate).
+- **Budget-guard headroom:** REDDIT network actual MTD spend approaching its
+  cap; whether a positive-spend suggestion would be refused by the guard.
+  State the basis plainly — since the 2026-07-21 budget rework only the
+  ACTUAL-spend gates refuse; committed totals are pacing/bookkeeping WARNINGS,
+  never refusals. Do not claim a committed ceiling would block an order.
 - **Review / serving state:** ads stuck in review, LEARNING vs ELIGIBLE, a
   campaign paused/enabled unexpectedly vs the journal.
 - **Program events / journal:** device-policy or targeting changes, incidents,
@@ -140,7 +141,7 @@ title: one line
 status: open
 outcome: one line
 exception: the observation with numbers and their digest source, one line
-order.network: google
+order.network: reddit
 order.verb: pause
 order.amount_usd: 0
 order.basis: committed or actual, spelled out
@@ -192,14 +193,43 @@ braces — write it exactly as the schema requires.
 - `status`: `ok` when there are zero open actions; `warn` when there is at least
   one open action for a human to read; `alert` for a critical delivery/spend
   problem or an input gap or an invalid action set.
-- `headline`: one line, e.g. "2 open reddit actions; desktop-only delivery near zero — revert decision due".
-- `report_markdown`: MUST OPEN with a **Monthly ledger** block of 2–4 lines
-  derived from the digest's LIVE budget line: reddit actual-MTD vs the reddit
-  network cap; the derived run rate (actual-MTD ÷ UTC day-of-month from
-  `fetched_at` — this division is the ONE derived number allowed, show it);
-  and the projected month-end vs the cap, flagged as noisy before day ~5.
-  This opening answers "what is reddit costing this month" before any
-  exception. Then a short human summary + the register (open ADR-NN titles).
+- `status_reason`: a short snake_case category, four words max (e.g.
+  `open_actions`, `delivery_collapse`) — a machine field, not prose. Reuse the
+  SAME string while the same condition drives the status; the reserved failure
+  spellings (`action_set_invalid`, `input_gap_*`) stay exact.
+- `headline`: one line, e.g. "2 open reddit actions; desktop-only delivery near zero — revert 9d overdue".
+- `report_markdown` — the assessment a human actually reads; it must stand in
+  for a chat check-in, not merely index the briefs (Amendment 2026-08-10).
+  Aim for under ~60 lines; every number VERBATIM from the digest. Structure,
+  in order:
+  1. **Run stamp** (1 line): data `fetched_at` + the scoreboard window — a
+     reader must be able to tell a stale report from a fresh one.
+  2. **Monthly ledger** (2–4 lines) from the digest's LIVE budget line:
+     reddit actual-MTD vs the reddit network cap; the derived run rate
+     (actual-MTD ÷ UTC day-of-month from `fetched_at`, show the division);
+     projected month-end vs the cap, flagged as noisy before day ~5. If the
+     digest shows the ledger is unreconciled (e.g. $0.00 MTD while the
+     campaign serves), say so IN this block.
+  3. **Serving state** (1–2 lines): reddit-boost-jul26 ACTIVE/PAUSED as the
+     digest states it + one delivery word (serving / starved / dark), and
+     the platforms screen currently in force.
+  4. **Variant table** — r1–r8: id, impressions, clicks, CTR, CPC, spend,
+     evaluator verdict, verbatim from the digest rows. Emit the table even
+     when every row is zero — the zeros ARE the finding.
+  5. **Conversions** (1–2 lines): the digest's CPA line — conversions
+     sitewide, intent sitewide, event name — plus the tiny-n caveat. Never
+     derive a CPA the digest does not state.
+  6. **Changed since last run** (2–5 lines): ids struck (with reasons), ids
+     minted, verdict flips, journal or program-event entries newer than the
+     prior run. If nothing changed, write exactly "No change since the
+     prior run." — silence is not an option.
+  7. **Next decision** (1–3 lines): each live decision with a concrete
+     trigger AND a date. While the desktop-only revert decision stands
+     overdue, this line AND the headline MUST carry its days-overdue count
+     (days since the digest-stated due date — date arithmetic on digest
+     dates is allowed, and with the ledger division and the pace-to-gate
+     estimate it is the ONLY derived math allowed anywhere).
+  8. **Open register**: open ADR-NN ids + one-line titles.
 - `metrics` MUST be a JSON **string** containing a serialized JSON object
   (e.g. `"{\"actions.open\": 3, \"actions.struck\": 1, \"scope.variants\": 12}"`);
   `"{}"` when nothing. Keys — emit ALL of these every run: `actions.open`,

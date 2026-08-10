@@ -34,10 +34,12 @@ quiet program should yield few or zero actions. Look for:
   budget line (monthly $2,200 total / google $900 / reddit $400 / x $400 as of
   2026-07-21 — trust the digest line over these figures if they diverge) and
   Generalissimo's SOFT target of ~$1,000/mo REAL spend.
-  🚨 The guard binds on COMMITTED basis FIRST — X's paper overcommit + reddit
-  fill the backstop, so positive-amount orders can be refused with real
-  headroom (intl 2026-07-17 lesson). Any spend recommendation must state
-  committed-vs-actual and whether the guard would refuse it.
+  🚨 Guard basis (current since the 2026-07-21 budget rework): only the
+  ACTUAL-spend gates refuse orders; committed totals (X's paper overcommit
+  included) raise pacing WARNINGS, not refusals — the old committed-binds-
+  first behavior (intl 2026-07-17 lesson) is retired. Any spend
+  recommendation states actual-basis headroom and may cite committed only
+  as the warning layer.
 - **Device-policy sync across networks (policy intent is GLOBAL):** as of
   2026-07-22 all three networks carry a device screen — google desktop-only,
   reddit platforms=DESKTOP, X web-only. Any bring-up RE-OPENS the hole (google
@@ -187,17 +189,47 @@ braces — write it exactly as the schema requires.
 - `status`: `ok` when there are zero open actions; `warn` when there is at least
   one open action for a human to read; `alert` for a critical delivery/spend
   problem or an input gap or an invalid action set.
-- `headline`: one line, e.g. "2 open program actions; july committed at the backstop, 2 upstream sets stale".
-- `report_markdown`: MUST OPEN with a **Monthly ledger** block — the program-wide
-  money picture, from the digest's LIVE budget line: per-network actual-MTD /
-  cap, the program TOTAL actual-MTD vs the monthly cap AND vs Generalissimo's
-  ~$1,000/mo real-spend soft target, plus a derived program run rate
-  (total actual-MTD ÷ UTC day-of-month from `fetched_at` — the ONE derived
-  number allowed, show the division) and projected month-end, flagged as noisy
-  before day ~5. ⚠️ The X figure in that line is the stale cache-window sum,
-  which UNDERCOUNTS true X spend (exhausted groups vanish from the window) —
-  say so and defer to the ads-x loop's decoded ledger for X truth. Then a
-  short human summary + the register (open ADP-NN titles).
+- `status_reason`: a short snake_case category, four words max (e.g.
+  `open_actions`, `delivery_blockage`, `upstream_sets_stale`) — a machine
+  field, not prose. Reuse the SAME string while the same condition drives the
+  status; the reserved failure spellings (`action_set_invalid`,
+  `input_gap_*`) stay exact.
+- `headline`: one line, e.g. "2 open program actions; program spend at the soft target, 2 upstream sets stale".
+- `report_markdown` — the program assessment a human actually reads; it must
+  stand in for a chat "how is the ads program doing overall?", not merely
+  index the briefs (Amendment 2026-08-10). Aim for under ~60 lines; every
+  number VERBATIM from the digest. Structure, in order:
+  1. **Run stamp** (1 line): data `fetched_at` + windows + one clause on
+     sibling-set freshness (e.g. "all four network sets fresh today").
+  2. **Monthly ledger** as a small TABLE — one row per network (actual-MTD,
+     committed where the digest states it, cap) and a program TOTAL row vs
+     the monthly cap AND vs Generalissimo's ~$1,000/mo real-spend soft
+     target; below it the derived program run rate (total actual-MTD ÷ UTC
+     day-of-month from `fetched_at`, show the division) and projected
+     month-end, flagged as noisy before day ~5. ⚠️ The X figure is the
+     stale cache-window sum, which UNDERCOUNTS true X spend (exhausted
+     groups vanish from the window) — say so and defer to the ads-x decoded
+     ledger for X truth. If the digest shows the ledger is unreconciled
+     (e.g. $0.00 MTD while networks serve), say so ON the table's caption
+     line, not later.
+  3. **Per-network roll-up** (1 line per network loop): its newest set's
+     freshness label, open-action count, headline gist, and its single most
+     apply-ready action id (e.g. `ads-google:ADG-EV-11`). NEVER pool CTR or
+     compare creative performance across networks; never re-derive a
+     network's checks.
+  4. **Conversions / funnel** (1–2 lines): conversions sitewide vs intent
+     sitewide from the digest's CPA line — the derived percent is allowed,
+     labeled sitewide — as the program-level "is any of this converting"
+     answer, with the tiny-n caveat.
+  5. **Changed since last run** (2–5 lines): struck/minted ADP ids, sibling
+     sets that changed materially, journal or program-event entries newer
+     than the prior run. If nothing changed, write exactly "No change since
+     the prior run." — silence is not an option.
+  6. **Decisions pending** (1 line each): every decision named in this set
+     or in a sibling set's titles that carries a due date, with the date or
+     days-overdue (date arithmetic on digest dates is allowed and is, with
+     the ledger division and the funnel percent, the ONLY derived math).
+  7. **Open register**: open ADP-NN ids + one-line titles.
 - `metrics` MUST be a JSON **string** containing a serialized JSON object
   (e.g. `"{\"actions.open\": 3, \"actions.struck\": 1, \"scope.variants\": 12}"`);
   `"{}"` when nothing. Keys — emit ALL of these every run: `actions.open`,

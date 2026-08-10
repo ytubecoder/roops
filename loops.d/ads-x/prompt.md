@@ -165,7 +165,7 @@ title: one line
 status: open
 outcome: one line
 exception: the observation with numbers and their digest source, one line
-order.network: google
+order.network: x
 order.verb: pause
 order.amount_usd: 0
 order.basis: committed or actual, spelled out
@@ -217,14 +217,45 @@ braces — write it exactly as the schema requires.
 - `status`: `ok` when there are zero open actions; `warn` when there is at least
   one open action for a human to read; `alert` for a critical delivery/spend
   problem or an input gap or an invalid action set.
+- `status_reason`: a short snake_case category, four words max (e.g.
+  `open_actions`, `snapshot_stale`, `x_account_locked`) — a machine field, not
+  prose. Reuse the SAME string while the same condition drives the status; the
+  reserved failure spellings (`action_set_invalid`, `input_gap_*`) stay exact.
 - `headline`: one line, e.g. "snapshot 4.2d stale — first action: manual X import; 2 more open".
-- `report_markdown`: MUST OPEN with a **Monthly ledger** block of 3–5 lines
-  built verbatim from the digest's ledger section — prior-month true spend (or
-  its snapshot-bounded range), this-month-to-date (or UNKNOWN and why), the
-  serving run rate, armed headroom, and the window-vs-decoded undercount when
-  they diverge. This is the first thing Generalissimo reads; it answers "what
-  did X cost last month and what is it costing now" without him asking. Then a
-  short exception summary + the register (open ADX-NN titles). Numbers come
+- `report_markdown` — the assessment a human actually reads; it must stand in
+  for a chat check-in, not merely index the briefs (Amendment 2026-08-10).
+  Aim for under ~60 lines; every number VERBATIM from the digest. Structure,
+  in order:
+  1. **Run stamp** (1 line): data `fetched_at` + the x_cache import
+     timestamp and its age — every later figure is as-of that import.
+  2. **Monthly ledger** (3–5 lines) built verbatim from the digest's ledger
+     section — prior-month true spend (or its snapshot-bounded range),
+     this-month-to-date (or UNKNOWN and why), the serving run rate, armed
+     headroom, and the window-vs-decoded undercount when they diverge. It
+     answers "what did X cost last month and what is it costing now". When
+     the digest notes the ad-groups table virtualized (fewer rows captured
+     than exist), state that decoded lifetime is a FLOOR.
+  3. **Serving state** (1–2 lines): campaign status as-of the snapshot + one
+     delivery word, AND the account signal every run — either the lock
+     alert or an explicit "no lock markers as of <newest memory file date>".
+  4. **Variant table** as-of the snapshot: list individually every row with
+     window activity or a non-watch verdict (id, impressions, clicks, CTR,
+     CPC, spend, verdict); rows with zero window activity at their caps MAY
+     collapse into one "N groups at cap, no window delivery" line.
+  5. **Conversions** (1–2 lines): the digest's CPA line — conversions
+     sitewide, intent sitewide, event name — plus the tiny-n caveat and the
+     campaign's tracked-signup reality. Never derive a CPA the digest does
+     not state.
+  6. **Changed since last run** (2–5 lines): ids struck (with reasons), ids
+     minted, a new import since the prior run, lock-state transitions,
+     journal or program-event entries newer than the prior run. If nothing
+     changed, write exactly "No change since the prior run." — silence is
+     not an option.
+  7. **Next decision** (1–3 lines): each live decision with a concrete
+     trigger AND a date where the digest states one ("N days overdue" once
+     passed — date arithmetic on digest dates is allowed and is, with the
+     ledger's stated derivations, the ONLY derived math allowed).
+  8. **Open register**: open ADX-NN ids + one-line titles. Numbers come
   from the digest only — never recomputed, never from the window column.
 - `metrics` MUST be a JSON **string** containing a serialized JSON object
   (e.g. `"{\"actions.open\": 3, \"actions.struck\": 1, \"scope.variants\": 12}"`);

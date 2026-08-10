@@ -32,9 +32,10 @@ program should yield few or zero actions. Look for:
   impressions (e.g. theme SEARCH legs starved while DG spends); a serving leg
   that suddenly zeroed.
 - **Budget-guard headroom:** google network actual MTD spend approaching its
-  cap; committed-vs-actual basis; whether a positive-spend suggestion would be
-  refused by the guard (state it plainly — the guard binds on COMMITTED first,
-  then the google ACTUAL gate).
+  cap; whether a positive-spend suggestion would be refused by the guard.
+  State the basis plainly — since the 2026-07-21 budget rework only the
+  ACTUAL-spend gates refuse; committed totals are pacing/bookkeeping WARNINGS,
+  never refusals. Do not claim a committed ceiling would block an order.
 - **Review / serving state:** ads stuck in review, LEARNING vs ELIGIBLE, a
   campaign paused/enabled unexpectedly vs the journal.
 - **Program events / journal:** device-policy or targeting changes, incidents,
@@ -195,17 +196,50 @@ braces — write it exactly as the schema requires.
 - `status`: `ok` when there are zero open actions; `warn` when there is at least
   one open action for a human to read; `alert` for a critical delivery/spend
   problem or an input gap or an invalid action set.
+- `status_reason`: a short snake_case category, four words max (e.g.
+  `open_actions`, `delivery_collapse`) — a machine field, not prose. Reuse the
+  SAME string while the same condition drives the status; the reserved failure
+  spellings (`action_set_invalid`, `input_gap_*`) stay exact.
 - `headline`: one line, e.g. "3 open google actions; theme search legs starved".
-- `report_markdown`: MUST OPEN with a **Monthly ledger** block of 2–4 lines
-  derived from the digest's LIVE budget line: google actual-MTD vs the google
-  network cap; the derived run rate (actual-MTD ÷ UTC day-of-month from
-  `fetched_at` — this division is the ONE derived number allowed, show it,
-  e.g. "$210.40 / 4d = $52.60/day"); and the projected month-end (rate × days
-  in the month) vs the cap, flagged as noisy before day ~5. Label the figure
-  as the NETWORK total — it includes google campaigns outside this loop's
-  scope (intl belongs to ads-intl). This opening answers "what is google
-  costing this month" before any exception. Then a short human summary + the
-  register (open ADG-NN titles).
+- `report_markdown` — the assessment a human actually reads; it must stand in
+  for a chat check-in, not merely index the briefs (Amendment 2026-08-10).
+  Aim for the whole report under ~60 lines; every number VERBATIM from the
+  digest. Structure, in order:
+  1. **Run stamp** (1 line): data `fetched_at` + the scoreboard window — a
+     reader must be able to tell a stale report from a fresh one without
+     opening the run dir.
+  2. **Monthly ledger** (2–4 lines) from the digest's LIVE budget line:
+     google actual-MTD vs the google network cap; the derived run rate
+     (actual-MTD ÷ UTC day-of-month from `fetched_at`, show the division,
+     e.g. "$210.40 / 4d = $52.60/day"); projected month-end (rate × days in
+     the month) vs the cap, flagged as noisy before day ~5. Label the figure
+     as the NETWORK total — it includes google campaigns outside this loop's
+     scope (intl belongs to ads-intl). If the digest shows the ledger is
+     unreconciled (e.g. $0.00 MTD while campaigns serve), say so IN this
+     block, not lines later.
+  3. **Serving state** (1 line per in-scope campaign): name, ENABLED/PAUSED
+     as the digest states it, and one delivery word — serving / starved /
+     dark.
+  4. **Variant table** — ALL in-scope variants: id, impressions, clicks,
+     CTR, CPC, spend, evaluator verdict; group g-msg and g-theme visibly;
+     name the serving surface the evaluator used where the digest states it.
+     This is the table a chat session would show inline.
+  5. **Conversions** (1–2 lines): the digest's CPA line — conversions
+     sitewide, intent sitewide, event name — plus the caveat that a sitewide
+     n this small supports no per-variant CPA ranking. Never derive a CPA
+     the digest does not state.
+  6. **Changed since last run** (2–5 lines): ids struck this run (with
+     reasons), ids newly minted, verdict/leader flips, and journal or
+     program-event entries newer than the prior run. If nothing changed,
+     write exactly "No change since the prior run." — silence is not an
+     option.
+  7. **Next decision** (1–3 lines): each live decision with a concrete
+     trigger AND a date — the digest-stated due date ("N days overdue" once
+     passed; date arithmetic on digest dates is allowed) or a pace estimate
+     to the evaluator gate (window impressions ÷ window days → days to
+     2,000, labeled "at the current pace"). These two derivations plus the
+     ledger division are the ONLY derived numbers allowed anywhere.
+  8. **Open register**: open ADG-NN ids + one-line titles.
 - `metrics` MUST be a JSON **string** containing a serialized JSON object
   (e.g. `"{\"actions.open\": 3, \"actions.struck\": 1, \"scope.variants\": 12}"`);
   `"{}"` when nothing. Keys — emit ALL of these every run: `actions.open`,

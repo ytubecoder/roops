@@ -254,3 +254,27 @@ Side benefit: codex file auth works under launchd, so the scheduled install no
 longer waits on the claude keychain/token workaround. Quality gate passed on
 the first codex run (ads-x 20260805T040147Z: ledger verbatim-correct, all 8
 prior action ids carried, set validator-clean).
+
+## Amendment 2026-08-10 — report upgraded to a full assessment + drift fixes
+
+Trigger: Generalissimo's 2026-08-10 review — loop reports must stand in for a
+chat-window campaign assessment, not an action register. `report_markdown` in
+prompt.md now mandates, in order: run stamp (fetched_at + data window), monthly
+ledger (unreconciled-ledger callout moved INTO the block), serving state per
+campaign, a per-variant metrics table verbatim from the digest, a conversions
+line (the digest's sitewide CPA line + tiny-n caveat), a mandatory "Changed
+since last run" section, a "Next decision" line with dates/days-overdue (date
+arithmetic on digest dates and pace-to-the-2,000-gate estimates are now
+explicitly allowed derived numbers, alongside the ledger division), then the
+open register. Target: whole report under ~60 lines. Also corrected: the
+guard-basis teaching ("binds on COMMITTED first") was stale — since the
+2026-07-21 budget rework committed totals warn only and ONLY the ACTUAL-spend
+gates refuse (verified against growth-console/console/ads/budget.py);
+`status_reason` standardized to a short snake_case category reused while the
+condition persists (reserved failure spellings unchanged).
+Loop-specific clone-drift fixes: the budget-headroom bullet watched the GOOGLE
+network and the emit example said `order.network: google` — both now reddit.
+§10's `scope.variants` "12 today" was ads-google residue — reddit's in-scope
+count is 8 (r1–r8). The variant table is required even when all rows are zero
+(the zeros are the finding), and the desktop-only revert's days-overdue count
+must ride the headline and Next-decision line while the decision stands.

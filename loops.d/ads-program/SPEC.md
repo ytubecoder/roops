@@ -265,3 +265,30 @@ Side benefit: codex file auth works under launchd, so the scheduled install no
 longer waits on the claude keychain/token workaround. Quality gate passed on
 the first codex run (ads-x 20260805T040147Z: ledger verbatim-correct, all 8
 prior action ids carried, set validator-clean).
+
+## Amendment 2026-08-10 — report upgraded to a full assessment + drift fixes
+
+Trigger: Generalissimo's 2026-08-10 review — loop reports must stand in for a
+chat-window campaign assessment, not an action register. `report_markdown` in
+prompt.md now mandates, in order: run stamp (fetched_at + data window), monthly
+ledger (unreconciled-ledger callout moved INTO the block), serving state per
+campaign, a per-variant metrics table verbatim from the digest, a conversions
+line (the digest's sitewide CPA line + tiny-n caveat), a mandatory "Changed
+since last run" section, a "Next decision" line with dates/days-overdue (date
+arithmetic on digest dates and pace-to-the-2,000-gate estimates are now
+explicitly allowed derived numbers, alongside the ledger division), then the
+open register. Target: whole report under ~60 lines. Also corrected: the
+guard-basis teaching ("binds on COMMITTED first") was stale — since the
+2026-07-21 budget rework committed totals warn only and ONLY the ACTUAL-spend
+gates refuse (verified against growth-console/console/ads/budget.py);
+`status_reason` standardized to a short snake_case category reused while the
+condition persists (reserved failure spellings unchanged).
+Loop-specific: the ledger is now a TABLE with a committed column; a per-network
+roll-up cites sibling action ids (never pooled CTR); a sitewide funnel line
+(conversions vs intent, percent allowed) answers "is any of this converting";
+a Decisions-pending register carries dates/days-overdue. Also noted: §5's cap
+figures ($1,600 monthly / $500 google) are stale — the digest's LIVE budget
+line ($2,200 / google $900 / reddit $400 / x $400 as of 2026-07-21) is
+authoritative, as prompt.md already instructs. §1's "one of five per-network
+loops; this is the first" is ads-google clone residue — this is the
+program-level fifth loop.

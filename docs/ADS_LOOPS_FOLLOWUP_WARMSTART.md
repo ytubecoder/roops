@@ -232,3 +232,34 @@ loops.** The guarded env-loader LaunchAgent (com.generalissimo.claude-oauth-env)
 bootstrapped and inert — it is the ready-made path if any future loop needs engine=claude
 under launchd. The split-brain credential analysis above remains true and load-bearing for
 interactive claude on this Mac; do not delete the keychain item.
+
+## 2026-08-10 — reboot outage found + fleet revived; reports upgraded to chat-grade
+
+The Aug 7 15:10 Mac reboot silently killed every bootstrapped loop (install is
+`launchctl bootstrap` from `launchd/*.plist`; nothing in `~/Library/LaunchAgents`
+⇒ not reboot-persistent; no dead-man alarm fired). Ads loops missed Aug 7–9 while
+the dashboard showed the Aug 6 reports as "latest". All eleven previously-live
+loops reinstalled with `LOOPCTL_INSTALL_POLL_TIMEOUT_S=600` — re-learned the hard
+way that the 90s default can never outlast a codex verification run and on
+timeout install BOOTS THE JOB BACK OUT, orphaning the codex process and leaving
+a stuck `started` row + stale lock (clean up: kill orphan, rm lock if its pid is
+dead). Open backlog items raised: reboot-persistent install, fleet staleness
+alarm.
+
+Same day, commit 0d1fec0: all five prompts upgraded from "ledger + title
+register" to a mandated 8-part chat-grade assessment (run stamp / monthly ledger
+w/ in-block unreconciled callout / serving state / per-variant table /
+conversions line / changed-since-last-run / next-decision with days-overdue /
+open register; ~60-line target), after a five-reader audit found the codex-era
+reports ~3.6× thinner than the Aug-4 claude ones at 6–28× the tokens. Drift
+fixed in the same pass: stale guard-basis teaching (ACTUAL gates refuse,
+committed warns only — verified vs growth-console budget.py), ads-reddit's
+google-contaminated budget bullet + emit example, ads-x emit example network,
+status_reason snake_case discipline, SPEC scope.variants clone-drift (intl 4,
+reddit 8, x 28). Verified via supervised ads-reddit run 20260810T124631Z: full
+structure rendered, ids carried, headline "revert at least 15d overdue".
+
+Program consequence the loops will observe next run: reddit-boost-jul26 was
+PAUSED 2026-08-10 (maguyva journal row 124, Generalissimo's verdict — no reddit
+serving at all, desktop screen retained, revert-to-ALL rejected) ⇒ ADR-01's
+ACTIVE-but-dark premise is gone and it should self-strike; ADR-03 may persist.

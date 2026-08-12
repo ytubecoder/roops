@@ -28,7 +28,7 @@ PROJECT = "maguyva-actions"
 MAX_OPS = 20  # sanity cap per run — a promoted run proposing more is suspect
 
 ID_RE = re.compile(r"\b((?:CRO|AEO|SEO|COMP|ALL)-\d{2})\b")
-FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.S)
+FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
 
 def map_covered_ids(map_path: Path) -> set[str]:
@@ -136,6 +136,7 @@ def main() -> int:
             capture_output=True,
             text=True,
             timeout=60,
+            check=False,
         )
         if r.returncode == 0:
             print(

@@ -1,0 +1,37 @@
+{
+  "panels": [
+    {
+      "title": "Uncovered open actions",
+      "metric": "actions.uncovered",
+      "type": "number",
+      "unit": "actions",
+      "direction": "higher_is_worse",
+      "thresholds": { "warn": 1, "alert": 5 },
+      "missing": "hold"
+    },
+    {
+      "title": "Proposals this run",
+      "metric": "proposals",
+      "type": "number",
+      "unit": "tickets",
+      "direction": "neutral",
+      "missing": "gap"
+    },
+    {
+      "title": "Register/map conflicts",
+      "metric": "conflicts",
+      "type": "number",
+      "unit": "conflicts",
+      "direction": "higher_is_worse",
+      "thresholds": { "warn": 1, "alert": 3 },
+      "missing": "hold"
+    },
+    {
+      "title": "Open actions (all registers)",
+      "metric": "actions.open",
+      "type": "trend",
+      "window_days": 90,
+      "missing": "hold"
+    }
+  ]
+}

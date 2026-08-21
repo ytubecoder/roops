@@ -216,6 +216,13 @@ class LoopsRoot:
 
     def base_env(self, **extra):
         env = {
+            # These assert launchd behaviour — plists, bootout/bootstrap — so
+            # they must exercise the launchd backend on ANY host. Without this
+            # the whole file fails when the suite runs on the Linux box the
+            # fleet now lives on, because _install_backend() correctly picks
+            # systemd there. Pinning it is the point of the seam, not a fudge:
+            # the systemd path has its own file, test_loopctl_systemd.py.
+            "LOOPS_INSTALL_BACKEND": "launchd",
             "LOOPS_LAUNCHCTL": self.fake_launchctl,
             "FAKE_LAUNCHCTL_LOG": self.launchctl_log,
             "FAKE_LAUNCHCTL_ROOT": self.root,

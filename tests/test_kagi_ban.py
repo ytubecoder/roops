@@ -71,6 +71,13 @@ def make_stub_av(dirpath, scan_json_path):
     return stub
 
 
+@unittest.skipUnless(
+    sys.platform.startswith("darwin"),
+    "kagi-ban audits the macOS host it runs on: av is a macOS .app, and the "
+    "precheck reads the login PATH via `/bin/zsh -l`, which Debian does not "
+    "ship. The loop cannot run on Linux, so neither can its precheck tests. "
+    "The renderer tests below are pure Python and are NOT skipped.",
+)
 class KagiBanPrecheckTests(unittest.TestCase):
     def run_precheck(self, root, scan_json_path):
         out_dir = os.path.join(root, "state", "runs", "test-run")

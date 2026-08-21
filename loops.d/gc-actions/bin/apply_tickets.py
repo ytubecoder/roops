@@ -27,7 +27,74 @@ GC_DIR = Path(
 PROJECT = "maguyva-actions"
 MAX_OPS = 20  # sanity cap per run — a promoted run proposing more is suspect
 
-ID_RE = re.compile(r"\b((?:CRO|AEO|SEO|COMP|ALL)-\d{2})\b")
+
+def load_onboarded_prefixes(gc_dir: Path) -> list[str]:
+    """Registry-derived onboarded id-prefixes from action-sources.yaml (spec
+    docs/superpowers/specs/2026-08-21-action-source-onboarding-design.md §4.5).
+    Line-oriented stdlib parse, no PyYAML — never fatal, always falls back to
+    the literal list on any registry problem. Keep in sync with
+    precheck.sh's copy of this function.
+    """
+    fallback = ["CRO", "AEO", "SEO", "COMP", "ALL"]
+    reg_path = gc_dir / "action-sources.yaml"
+    try:
+        text = reg_path.read_text()
+    except OSError as e:
+        print(
+            f"apply_tickets: cannot read {reg_path} ({e}) — falling back to literal prefix list",
+            file=sys.stderr,
+        )
+        return fallback
+
+    blocks = []
+    block_lines: list[str] = []
+    in_sources = False
+
+    def flush():
+        if block_lines:
+            blocks.append("\n".join(block_lines))
+            block_lines.clear()
+
+    for line in text.splitlines():
+        if re.match(r"^[A-Za-z_][\w-]*:", line):
+            # top-level key — leaves (or re-enters) the sources: section
+            flush()
+            in_sources = line.startswith("sources:")
+            continue
+        if not in_sources:
+            continue
+        if re.match(r"^  - id:", line):
+            flush()
+        block_lines.append(line)
+    flush()
+
+    prefixes = set()
+    for block in blocks:
+        if not re.search(r"^\s*status:\s*onboarded\b", block, re.M):
+            continue
+        for m in re.finditer(r"prefix:\s*([A-Za-z0-9_-]+)", block):
+            p = m.group(1)
+            if re.match(r"^[A-Z]{2,6}$", p):
+                prefixes.add(p)
+            else:
+                print(
+                    f"apply_tickets: skipping malformed prefix {p!r} in {reg_path}",
+                    file=sys.stderr,
+                )
+
+    if not prefixes:
+        print(
+            f"apply_tickets: no onboarded prefixes found in {reg_path} — falling back to literal prefix list",
+            file=sys.stderr,
+        )
+        return fallback
+
+    return sorted(prefixes) + ["ALL"]
+
+
+ID_RE = re.compile(
+    r"\b((?:" + "|".join(load_onboarded_prefixes(GC_DIR)) + r")-\d{2})\b"
+)
 FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
 

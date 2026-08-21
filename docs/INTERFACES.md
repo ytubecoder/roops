@@ -969,6 +969,46 @@ marker `[FILL: <hint>]`.
    with a non-failed runner_status**; if not, report failure loudly and leave the job booted out.
    Env/auth breakage only surfaces in the real launchd context — this step is the point.
 
+**Amendment 2026-08-22 — install is platform-dispatched (B-24).** Steps 1, 2 and 5 are backend-
+independent and unchanged. Steps 3 and 4 are the launchd *implementation* of "write the unit, arm
+it"; `_install_backend()` chooses which implementation runs — `launchd` on darwin, `systemd`
+everywhere else. Darwin keeps launchd so this repo's hermetic suite still runs on the macOS dev
+box. The systemd sibling:
+
+| launchd | systemd |
+|---|---|
+| `launchd/com.loops.<name>.plist` (in-repo, gitignored) | `~/.config/systemd/user/loops-<name>.{service,timer}` |
+| `LOOPS_LAUNCHCTL` test seam | `LOOPS_SYSTEMCTL` test seam, plus `LOOPS_SYSTEMD_UNIT_DIR` so no test writes to the real unit dir |
+| `bootout` + `bootstrap` | `daemon-reload` + `enable --now <timer>` |
+| `kickstart -p` (step 5's trigger) | `start --no-block <service>` |
+| `pause` = `bootout`, keeps the plist | `pause` = `disable --now <timer>`, keeps the units |
+| `_is_installed` = plist present **and** `launchctl print` | unit files present **and** `is-enabled` |
+
+`LOOPS_INSTALL_BACKEND` forces a backend so the hermetic suite exercises the Linux path from
+macOS; an explicit argument still wins over it, and an unrecognised value raises rather than
+guessing. Four things are load-bearing and were each a real defect avoided, not a precaution:
+
+- **The service passes `--trigger launchd`.** `run-loop.sh` defaults to `--trigger manual`, and
+  **both** of its §4.1 step 1 guards exempt manual — a paused loop and a `schedule=manual` loop
+  each run anyway under that trigger. A timer unit that omits the flag silently defeats
+  `loopctl pause`. `launchd` is the vocabulary token for "the platform scheduler fired this",
+  kept platform-independent under the same alias-not-a-rewrite rule as the `com.loops.*` labels.
+- **`TimeoutStartSec=infinity`.** A `Type=oneshot` is bounded by `DefaultTimeoutStartSec` (90 s
+  upstream). Real engine runs are longer — this repo already documents a 90 s poll that "can
+  never outlast a codex verification run" — so without it systemd SIGTERMs every scheduled run at
+  90 seconds. The runner owns its own timeouts.
+- **`OnBootSec=` accompanies every `OnUnitActiveSec=`.** A monotonic timer never fires until its
+  service has run once; `StartInterval` has no such gap. Without it an interval loop goes silent
+  after a reboot.
+- **`start --no-block`** for step 5's trigger: `start` on a `Type=oneshot` otherwise blocks for
+  the entire engine run.
+
+`Persistent=true` (calendar timers) plus `loginctl enable-linger` supersedes the macOS
+"bootstrapped installs do not survive reboot" failure: units live in the user unit dir, the
+`timers.target.wants` symlink persists, and a firing missed while the host was down is caught up
+at boot. **Timezone is a deployment property, not a grammar one** — §5.1 times are local in both
+systems, so the host's timezone must match the one the fleet's schedules were authored in.
+
 ## 9. Tier-1 contract
 
 ### 9.1 Shape

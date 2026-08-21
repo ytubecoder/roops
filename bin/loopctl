@@ -203,11 +203,214 @@ def _service_label(name):
     return f"com.loops.{name}"
 
 
+# ---------------------------------------------------------------------------
+# systemd — gated systemctl invocation, the exact sibling of the seam above
+# ---------------------------------------------------------------------------
+
+def _install_backend(platform_name=None):
+    """Which init system installs loops on this host.
+
+    Darwin keeps launchd so this repo's hermetic suite still runs on the macOS
+    dev box; Linux (firstparty, WSL later) uses systemd user units.
+    """
+    if platform_name is None:
+        # LOOPS_INSTALL_BACKEND lets the hermetic suite exercise the Linux path
+        # from the macOS dev box. Explicit argument still wins over it.
+        forced = os.environ.get("LOOPS_INSTALL_BACKEND")
+        if forced:
+            if forced not in ("launchd", "systemd"):
+                raise ValueError(f"invalid LOOPS_INSTALL_BACKEND {forced!r}")
+            return forced
+    name = platform_name or sys.platform
+    return "launchd" if name.startswith("darwin") else "systemd"
+
+
+def _systemctl_bin():
+    """Mirror of _launchctl_bin's test seam."""
+    return os.environ.get("LOOPS_SYSTEMCTL", "systemctl")
+
+
+def _systemctl(args_list):
+    """The ONLY place systemctl is ever invoked from. Always --user: the fleet
+    runs as an unprivileged account with linger on, never as root."""
+    return subprocess.run(
+        [_systemctl_bin(), "--user"] + args_list,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _systemd_unit_dir():
+    """Where user units are written. LOOPS_SYSTEMD_UNIT_DIR mirrors
+    LOOPS_LAUNCHCTL as a test seam — §11 forbids a test touching anything
+    outside the repo, and ~/.config/systemd/user is very much outside it."""
+    override = os.environ.get("LOOPS_SYSTEMD_UNIT_DIR")
+    if override:
+        return override
+    home = os.environ.get("HOME", os.path.expanduser("~"))
+    return os.path.join(home, ".config", "systemd", "user")
+
+
+def _systemd_unit_names(name):
+    return f"loops-{name}.service", f"loops-{name}.timer"
+
+
+def _systemd_unit_paths(name):
+    unit_dir = _systemd_unit_dir()
+    return tuple(os.path.join(unit_dir, u) for u in _systemd_unit_names(name))
+
+
+def _render_systemd_service(name, root):
+    root = os.path.abspath(root)
+    home = os.environ.get("HOME", os.path.expanduser("~"))
+    log_dir = os.path.abspath(os.path.join(root, "state", "launchd-logs"))
+    run_loop_sh = os.path.join(root, "bin", "run-loop.sh")
+    return f"""[Unit]
+Description=roops loop {name}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# One-shot: the timer owns cadence. A restart-on-exit policy here would spin
+# a failing loop continuously instead of waiting for its next firing. The
+# test for that is a dumb substring check, so do not name the directive.
+Type=oneshot
+# A oneshot is bounded by DefaultTimeoutStartSec (90s upstream) and real engine
+# runs are longer than that — systemd would SIGTERM every scheduled run. The
+# runner owns its own timeouts; systemd must not second-guess them.
+TimeoutStartSec=infinity
+WorkingDirectory={root}
+Environment=HOME={home}
+Environment=PATH={_runtime_path(home)}
+Environment=LOOPS_ROOT={root}
+# --trigger launchd is deliberate on Linux too: it is the vocabulary token for
+# "the platform scheduler fired this", the same alias-not-a-rewrite rule that
+# keeps the com.loops.* labels. Omitting it defaults run-loop.sh to
+# --trigger manual, and BOTH of its guards exempt manual — a paused loop and a
+# schedule=manual loop would each keep firing.
+ExecStart=/bin/bash {run_loop_sh} {name} --trigger launchd
+StandardOutput=append:{log_dir}/{name}.out.log
+StandardError=append:{log_dir}/{name}.err.log
+"""
+
+
+def _render_systemd_timer(name, systemd_spec):
+    if not systemd_spec:
+        raise ValueError(
+            f"refusing to render a timer for {name}: schedule emits no systemd form "
+            "(schedule=manual is never installed)"
+        )
+    service, _timer = _systemd_unit_names(name)
+    lines = [
+        "[Unit]",
+        f"Description=roops loop {name} schedule",
+        "",
+        "[Timer]",
+        f"Unit={service}",
+    ]
+    if "OnUnitActiveSec" in systemd_spec:
+        # OnUnitActiveSec alone never fires until the service has run once —
+        # launchd's StartInterval has no such gap. OnBootSec is the initial
+        # trigger that closes it after a reboot.
+        lines.append("OnBootSec=5min")
+        lines.append(f"OnUnitActiveSec={systemd_spec['OnUnitActiveSec']}")
+    calendars = systemd_spec.get("OnCalendar")
+    if isinstance(calendars, str):
+        calendars = [calendars]
+    for cal in calendars or []:
+        lines.append(f"OnCalendar={cal}")
+    if calendars:
+        # Catch up a firing missed while the host was down, mirroring launchd's
+        # coalescing of calendar events missed during sleep.
+        lines.append("Persistent=true")
+    lines += ["", "[Install]", "WantedBy=timers.target"]
+    return "\n".join(lines) + "\n"
+
+
+def _systemd_write_units(root, name, conf):
+    unit_dir = _systemd_unit_dir()
+    os.makedirs(unit_dir, exist_ok=True)
+    os.makedirs(os.path.join(root, "state", "launchd-logs"), exist_ok=True)
+    sched = schedule.parse(conf["schedule"])
+    service_path, timer_path = _systemd_unit_paths(name)
+    with open(service_path, "w") as f:
+        f.write(_render_systemd_service(name, root))
+    with open(timer_path, "w") as f:
+        f.write(_render_systemd_timer(name, sched["systemd"]))
+    return timer_path
+
+
+def _systemd_install(root, name, conf):
+    """Write the units and arm the timer. Returns 0 on success, 1 on failure —
+    the caller's own post-install verification poll is unchanged."""
+    _systemd_write_units(root, name, conf)
+    _service, timer = _systemd_unit_names(name)
+    for args_list, what in (
+        (["daemon-reload"], "daemon-reload"),
+        (["enable", "--now", timer], "enable"),
+    ):
+        r = _systemctl(args_list)
+        if r.returncode != 0:
+            print(f"install failed: systemctl {what} error: {r.stderr.strip()}",
+                  file=sys.stderr)
+            return 1
+    # The kickstart analogue: fire one run now so the verification poll below
+    # has something fresh to find. --no-block because `start` on a Type=oneshot
+    # otherwise waits for the entire engine run.
+    service, _timer = _systemd_unit_names(name)
+    r = _systemctl(["start", "--no-block", service])
+    if r.returncode != 0:
+        print(f"install failed: systemctl start error: {r.stderr.strip()}",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
+def _systemd_uninstall(name):
+    """Disarm and remove. Returns True iff unit files were actually removed."""
+    _service, timer = _systemd_unit_names(name)
+    _systemctl(["disable", "--now", timer])  # best-effort; not-armed is fine
+    removed = False
+    for path in _systemd_unit_paths(name):
+        if os.path.isfile(path):
+            os.remove(path)
+            removed = True
+    if removed:
+        _systemctl(["daemon-reload"])
+    return removed
+
+
+def _systemd_set_enabled(name, enabled_value):
+    """pause/resume: arm or disarm the timer, leaving the units in place."""
+    _service, timer = _systemd_unit_names(name)
+    verb = ["enable", "--now"] if enabled_value else ["disable", "--now"]
+    return _systemctl(verb + [timer])
+
+
+def _systemd_is_installed(name):
+    service_path, timer_path = _systemd_unit_paths(name)
+    if not (os.path.isfile(service_path) and os.path.isfile(timer_path)):
+        return False
+    _service, timer = _systemd_unit_names(name)
+    return _systemctl(["is-enabled", timer]).returncode == 0
+
+
 def _plist_path(root, name):
     return os.path.join(root, "launchd", f"{_service_label(name)}.plist")
 
 
+def _install_teardown(root, name):
+    """Undo a failed or abandoned install, whichever backend performed it."""
+    if _install_backend() == "systemd":
+        _systemd_uninstall(name)
+        return
+    _launchctl(["bootout", f"gui/{os.getuid()}/{_service_label(name)}"])
+
+
 def _is_installed(root, name):
+    if _install_backend() == "systemd":
+        return _systemd_is_installed(name)
     plist_path = _plist_path(root, name)
     if not os.path.isfile(plist_path):
         return False
@@ -500,12 +703,12 @@ _render_template = skill_import._render_template
 # launchd plist generation
 # ---------------------------------------------------------------------------
 
-def _plist_dict(root, name, conf):
-    label = _service_label(name)
-    run_loop_sh = os.path.abspath(os.path.join(root, "bin", "run-loop.sh"))
-    log_dir = os.path.abspath(os.path.join(root, "state", "launchd-logs"))
-    home = os.environ.get("HOME", os.path.expanduser("~"))
-    path_val = ":".join(
+def _runtime_path(home):
+    """The PATH a scheduled run gets. Single source for both emitters: neither
+    launchd nor a systemd user unit inherits a login shell's PATH, and the
+    engine CLIs live in $HOME/.local/bin. /opt/homebrew is a no-op on Linux;
+    it stays so the two backends cannot drift apart."""
+    return ":".join(
         [
             "/opt/homebrew/bin",
             "/usr/local/bin",
@@ -516,6 +719,14 @@ def _plist_dict(root, name, conf):
             "/sbin",
         ]
     )
+
+
+def _plist_dict(root, name, conf):
+    label = _service_label(name)
+    run_loop_sh = os.path.abspath(os.path.join(root, "bin", "run-loop.sh"))
+    log_dir = os.path.abspath(os.path.join(root, "state", "launchd-logs"))
+    home = os.environ.get("HOME", os.path.expanduser("~"))
+    path_val = _runtime_path(home)
     d = {
         "Label": label,
         "ProgramArguments": ["/bin/bash", run_loop_sh, name, "--trigger", "launchd"],
@@ -961,30 +1172,36 @@ def cmd_install(args):
         return 1
 
     label = _service_label(name)
-    launchd_dir = os.path.join(root, "launchd")
-    os.makedirs(launchd_dir, exist_ok=True)
-    plist_path = _plist_path(root, name)
     log_dir = os.path.join(root, "state", "launchd-logs")
     os.makedirs(log_dir, exist_ok=True)
-
-    with open(plist_path, "wb") as f:
-        f.write(_render_plist_xml(root, name, conf))
-
     uid = os.getuid()
     before_run_id = _latest_run_id(root, name)
 
-    _launchctl(["bootout", f"gui/{uid}/{label}"])  # ignore failure — not yet installed is fine
+    if _install_backend() == "systemd":
+        if _systemd_install(root, name, conf) != 0:
+            return 1
+        installed_path = _systemd_unit_paths(name)[1]
+    else:
+        launchd_dir = os.path.join(root, "launchd")
+        os.makedirs(launchd_dir, exist_ok=True)
+        plist_path = _plist_path(root, name)
+        installed_path = plist_path
 
-    r = _launchctl(["bootstrap", f"gui/{uid}", plist_path])
-    if r.returncode != 0:
-        print(f"install failed: launchctl bootstrap error: {r.stderr.strip()}", file=sys.stderr)
-        return 1
+        with open(plist_path, "wb") as f:
+            f.write(_render_plist_xml(root, name, conf))
 
-    r = _launchctl(["kickstart", "-p", f"gui/{uid}/{label}"])
-    if r.returncode != 0:
-        print(f"install failed: launchctl kickstart error: {r.stderr.strip()}", file=sys.stderr)
-        _launchctl(["bootout", f"gui/{uid}/{label}"])
-        return 1
+        _launchctl(["bootout", f"gui/{uid}/{label}"])  # ignore failure — not yet installed is fine
+
+        r = _launchctl(["bootstrap", f"gui/{uid}", plist_path])
+        if r.returncode != 0:
+            print(f"install failed: launchctl bootstrap error: {r.stderr.strip()}", file=sys.stderr)
+            return 1
+
+        r = _launchctl(["kickstart", "-p", f"gui/{uid}/{label}"])
+        if r.returncode != 0:
+            print(f"install failed: launchctl kickstart error: {r.stderr.strip()}", file=sys.stderr)
+            _launchctl(["bootout", f"gui/{uid}/{label}"])
+            return 1
 
     # db.py start-run writes a transient runner_status="started" row BEFORE
     # the engine actually runs (§4.1 step 3) — the row for a fresh run_id
@@ -1026,26 +1243,31 @@ def cmd_install(args):
                 f"{timeout_s:.0f}s after kickstart — check engine auth/env under launchd",
                 file=sys.stderr,
             )
-        _launchctl(["bootout", f"gui/{uid}/{label}"])
+        _install_teardown(root, name)
         return 1
 
     _record_event(root, name, "installed", args.actor)
-    print(f"installed {name} -> {plist_path}")
+    print(f"installed {name} -> {installed_path}")
     return 0
 
 
 def cmd_uninstall(args):
     root, name = args.root, args.name
-    label = _service_label(name)
-    uid = os.getuid()
-    _launchctl(["bootout", f"gui/{uid}/{label}"])  # best-effort; ignore failure
-    plist_path = _plist_path(root, name)
-    removed = False
-    if os.path.isfile(plist_path):
-        os.remove(plist_path)
-        removed = True
+    if _install_backend() == "systemd":
+        removed = _systemd_uninstall(name)
+        unit_word = "unit"
+    else:
+        label = _service_label(name)
+        uid = os.getuid()
+        _launchctl(["bootout", f"gui/{uid}/{label}"])  # best-effort; ignore failure
+        plist_path = _plist_path(root, name)
+        removed = False
+        if os.path.isfile(plist_path):
+            os.remove(plist_path)
+            removed = True
+        unit_word = "plist"
     _record_event(root, name, "uninstalled", args.actor)
-    suffix = "" if removed else " (no plist was present)"
+    suffix = "" if removed else f" (no {unit_word} was present)"
     print(f"uninstalled {name}{suffix}")
     return 0
 
@@ -1059,14 +1281,20 @@ def _set_enabled(args, enabled_value):
 
     _rewrite_conf_key(conf_path, "enabled", "true" if enabled_value else "false")
 
-    label = _service_label(name)
-    plist_path = _plist_path(root, name)
-    uid = os.getuid()
-    if os.path.isfile(plist_path):
-        if enabled_value:
-            _launchctl(["bootstrap", f"gui/{uid}", plist_path])
-        else:
-            _launchctl(["bootout", f"gui/{uid}/{label}"])
+    if _install_backend() == "systemd":
+        # Arm/disarm the timer, leaving the units on disk: pause is not
+        # uninstall, and the dashboard still needs to see it installed.
+        if os.path.isfile(_systemd_unit_paths(name)[1]):
+            _systemd_set_enabled(name, enabled_value)
+    else:
+        label = _service_label(name)
+        plist_path = _plist_path(root, name)
+        uid = os.getuid()
+        if os.path.isfile(plist_path):
+            if enabled_value:
+                _launchctl(["bootstrap", f"gui/{uid}", plist_path])
+            else:
+                _launchctl(["bootout", f"gui/{uid}/{label}"])
 
     verb = "resumed" if enabled_value else "paused"
     _record_event(root, name, verb, args.actor)
@@ -1096,6 +1324,21 @@ def _apply_schedule(root, from_dir, name, spec):
     conf, _errors = loopconf.parse(conf_path)
     old_spec = conf.get("schedule", "")
     _rewrite_conf_key(conf_path, "schedule", spec)
+
+    if _install_backend() == "systemd":
+        _service_unit, timer_unit = _systemd_unit_names(name)
+        if os.path.isfile(_systemd_unit_paths(name)[1]):
+            if spec == "manual":
+                _systemd_uninstall(name)
+            else:
+                conf, _errors = loopconf.parse(conf_path)  # re-read: schedule now updated
+                _systemd_write_units(root, name, conf)
+                _systemctl(["daemon-reload"])
+                if str(conf.get("enabled", "true")).lower() != "false":
+                    # restart re-arms the TIMER with the new schedule. It does
+                    # not start the service, so rescheduling still fires no run.
+                    _systemctl(["restart", timer_unit])
+        return old_spec, spec
 
     label = _service_label(name)
     plist_path = _plist_path(root, name)

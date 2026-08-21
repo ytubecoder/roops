@@ -500,19 +500,36 @@ trail (same as `set-schedule`). `loopctl new` and `import --apply` always stamp 
 land assumed; `loopctl validate` surfaces assumed owners as non-fatal notices (§8).
 
 ### 5.1 Schedule grammar
-| form | meaning | launchd | expected interval (staleness) |
-|---|---|---|---|
-| `manual` | never scheduled | — (install refuses) | ∞ |
-| `interval:15m` / `interval:2h` | every N | `StartInterval` (seconds) | N |
-| `daily:07:30` | every day at local 07:30 | `StartCalendarInterval{Hour,Minute}` | 24h |
-| `times:07:30,19:30` | those local times daily | array of `StartCalendarInterval` | 86400/count |
-| `weekly:mon:08:00` | that weekday, local | `+Weekday` (0=Sun … 6=Sat) | 7d |
-| `monthly:01:09:00` | that day-of-month, local | `+Day` | 30d |
-All calendar times are **local**, matching launchd semantics. Parsing lives in one place:
-`bin/schedule.py` (`parse(spec) -> {kind, launchd: {...}, expected_interval_s: int}`), imported by
-`loopctl` and `dashboard/generate.py`. **launchd sleep semantics** (document, don't fight):
-calendar events missed while asleep coalesce into a single firing at wake; `StartInterval` firings
-during sleep are simply missed. "Next run" on the dashboard is therefore explicitly best-effort.
+| form | meaning | launchd | systemd | expected interval (staleness) |
+|---|---|---|---|---|
+| `manual` | never scheduled | — (install refuses) | — (`{}`) | ∞ |
+| `interval:15m` / `interval:2h` | every N | `StartInterval` (seconds) | `OnUnitActiveSec=<N>s` | N |
+| `daily:07:30` | every day at local 07:30 | `StartCalendarInterval{Hour,Minute}` | `OnCalendar=*-*-* 07:30:00` | 24h |
+| `times:07:30,19:30` | those local times daily | array of `StartCalendarInterval` | list of `OnCalendar=` | 86400/count |
+| `weekly:mon:08:00` | that weekday, local | `+Weekday` (0=Sun … 6=Sat) | `OnCalendar=Mon *-*-* 08:00:00` | 7d |
+| `monthly:01:09:00` | that day-of-month, local | `+Day` | `OnCalendar=*-*-01 09:00:00` | 30d |
+All calendar times are **local**, matching launchd semantics; systemd `OnCalendar=` is local by
+default, so neither emitter converts a timezone. Parsing lives in one place:
+`bin/schedule.py` (`parse(spec) -> {kind, launchd: {...}, systemd: {...}, expected_interval_s: int}`),
+imported by `loopctl` and `dashboard/generate.py`. **launchd sleep semantics** (document, don't
+fight): calendar events missed while asleep coalesce into a single firing at wake; `StartInterval`
+firings during sleep are simply missed. "Next run" on the dashboard is therefore explicitly
+best-effort.
+
+**Amendment 2026-08-22 — the `systemd` emitter (B-24).** `parse()` gained a `systemd` key beside
+`launchd`, for the Linux install backend (§8.1). The grammar itself is unchanged: no `loop.conf`,
+no `SPEC.md`, and no existing `launchd` output moves, so the macOS fleet is untouched. Two rules
+bind anything consuming it:
+- **The dict carries the schedule and nothing else.** First-fire and catch-up policy
+  (`OnBootSec=`, `Persistent=`) belongs to the unit writer, not to the grammar. This matters:
+  a timer carrying only `OnUnitActiveSec=` **never fires until the service has run once**, so the
+  install backend must supply the initial trigger itself. launchd's `StartInterval` has no such
+  gap — the semantics genuinely differ, and the difference is not the parser's to paper over.
+- **Weekdays are names in systemd and indices in launchd.** `WEEKDAYS` and `SYSTEMD_WEEKDAYS` sit
+  next to each other in `bin/schedule.py` for that reason; change one and you are changing both.
+  Sunday is where an off-by-one would hide (launchd `0`, systemd `Sun`).
+The emitted forms were validated against a real `systemd-analyze calendar` on `firstparty`
+(2026-08-22): all seven normalize to themselves.
 
 ### 5.2 Permission axes — semantics
 Four independent axes. Defaults are the report-only floor: `report_only / none / none / none`.

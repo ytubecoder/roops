@@ -2,6 +2,9 @@
 
 ## WIP
 
+### B-24: systemd install backend so the fleet can run on Linux (firstparty)
+Priority: high | Status: in-progress
+
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)

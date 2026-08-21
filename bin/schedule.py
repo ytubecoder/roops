@@ -2,7 +2,7 @@
 """bin/schedule.py — §5.1 schedule grammar parser. Single implementation,
 imported by loopctl and dashboard/generate.py.
 
-    parse(spec) -> {kind, launchd: {...}, expected_interval_s: int}
+    parse(spec) -> {kind, launchd: {...}, systemd: {...}, expected_interval_s: int}
 
 `expected_interval_s` is used for staleness detection on the dashboard.
 For `manual`, `expected_interval_s == 0` is a sentinel meaning "infinite /
@@ -10,6 +10,13 @@ exempt from staleness" — manual loops are never flagged stale (§5.1,
 §10 "manual loops are exempt").
 
 All calendar times in the grammar are LOCAL, matching launchd semantics.
+systemd `OnCalendar=` is also local by default, so no timezone conversion
+happens in either emitter.
+
+The `systemd` dict renders the [Timer] keys that express the schedule itself
+and nothing else. First-fire and catch-up policy (`OnBootSec=`, `Persistent=`)
+belongs to the unit writer, not to the grammar: an interval timer carrying only
+`OnUnitActiveSec=` never fires until the service has run once.
 """
 import argparse
 import json
@@ -24,6 +31,41 @@ WEEKDAYS = {
     "fri": 5,
     "sat": 6,
 }
+
+
+# systemd names weekdays; launchd numbers them. Keep the two side by side so a
+# change to one is visibly a change to the other.
+SYSTEMD_WEEKDAYS = {
+    "sun": "Sun",
+    "mon": "Mon",
+    "tue": "Tue",
+    "wed": "Wed",
+    "thu": "Thu",
+    "fri": "Fri",
+    "sat": "Sat",
+}
+
+
+def _systemd(kind, *, seconds=None, hour=None, minute=None, entries=None,
+             weekday=None, day=None):
+    """Render the systemd timer form of a parsed schedule.
+
+    Mirrors the launchd dict beside it. Returns `{}` for `manual`, an
+    `OnUnitActiveSec` for interval schedules, and an `OnCalendar` (a list for
+    `times:`) for every calendar form.
+    """
+    if kind == "manual":
+        return {}
+    if seconds is not None:
+        return {"OnUnitActiveSec": f"{seconds}s"}
+    if entries is not None:
+        return {"OnCalendar": [f"*-*-* {e['Hour']:02d}:{e['Minute']:02d}:00"
+                               for e in entries]}
+    date = "*-*-*" if day is None else f"*-*-{day:02d}"
+    stamp = f"{date} {hour:02d}:{minute:02d}:00"
+    if weekday is not None:
+        stamp = f"{SYSTEMD_WEEKDAYS[weekday]} {stamp}"
+    return {"OnCalendar": stamp}
 
 
 def _parse_hhmm(text: str):
@@ -47,7 +89,8 @@ def parse(spec: str) -> dict:
         raise ValueError("empty schedule spec")
 
     if spec == "manual":
-        return {"kind": "manual", "launchd": {}, "expected_interval_s": 0}
+        return {"kind": "manual", "launchd": {}, "systemd": _systemd("manual"),
+                "expected_interval_s": 0}
 
     if spec.startswith("interval:"):
         raw = spec[len("interval:"):]
@@ -65,6 +108,7 @@ def parse(spec: str) -> dict:
         return {
             "kind": "interval",
             "launchd": {"StartInterval": seconds},
+            "systemd": _systemd("interval", seconds=seconds),
             "expected_interval_s": seconds,
         }
 
@@ -74,6 +118,7 @@ def parse(spec: str) -> dict:
         return {
             "kind": "daily",
             "launchd": {"StartCalendarInterval": {"Hour": hour, "Minute": minute}},
+            "systemd": _systemd("daily", hour=hour, minute=minute),
             "expected_interval_s": 86400,
         }
 
@@ -89,6 +134,7 @@ def parse(spec: str) -> dict:
         return {
             "kind": "times",
             "launchd": {"StartCalendarInterval": entries},
+            "systemd": _systemd("times", entries=entries),
             "expected_interval_s": 86400 // len(entries),
         }
 
@@ -113,6 +159,8 @@ def parse(spec: str) -> dict:
                     "Weekday": WEEKDAYS[day_key],
                 }
             },
+            "systemd": _systemd("weekly", hour=hour, minute=minute,
+                                weekday=day_key),
             "expected_interval_s": 7 * 86400,
         }
 
@@ -134,6 +182,7 @@ def parse(spec: str) -> dict:
             "launchd": {
                 "StartCalendarInterval": {"Hour": hour, "Minute": minute, "Day": day}
             },
+            "systemd": _systemd("monthly", hour=hour, minute=minute, day=day),
             "expected_interval_s": 30 * 86400,
         }
 

@@ -2,9 +2,6 @@
 
 ## WIP
 
-### B-24: systemd install backend so the fleet can run on Linux (firstparty)
-Priority: high | Status: in-progress
-
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)
@@ -62,6 +59,9 @@ Priority: medium | Status: for-review
 Priority: medium | Status: for-review
 
 ### B-23: Make roops repo public: scrub identity/tailnet from history, publish
+Priority: high | Status: for-review
+
+### B-24: systemd install backend so the fleet can run on Linux (firstparty)
 Priority: high | Status: for-review
 
 ## Backlog

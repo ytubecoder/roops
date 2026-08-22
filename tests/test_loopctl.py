@@ -14,6 +14,8 @@ recording Python stub (`fake_launchctl.py`, written per-fixture) whose exit
 codes and call log are controllable via environment variables.
 """
 
+import http.server
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -22,10 +24,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import ClassVar
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOOPCTL = REPO_ROOT / "bin" / "loopctl"
@@ -1124,6 +1128,9 @@ class TestInstall(LoopsRootTestCase):
         r = run_cli(["install", name, "--root", self.root], env_overrides=env)
         self.assertEqual(r.returncode, 1)
         self.assertIn("no fresh non-failed run", r.stderr)
+        self.assertIn("install failed:", r.stderr)
+        self.assertIn("under the scheduler (launchd)", r.stderr)
+        self.assertNotIn("under launchd", r.stderr)
         calls = self.fixture.launchctl_calls()
         verbs = [c.split()[0] for c in calls]
         self.assertEqual(verbs, ["bootout", "bootstrap", "kickstart", "bootout"])
@@ -3870,6 +3877,175 @@ class TestProbeVerb(LoopsRootTestCase):
         r = run_cli(["--actor", "probe"], env_overrides={"LOOPS_ROOT": decoy})
         self.assertEqual(r.returncode, 2)
         self.assertIn("ambiguous invocation", r.stderr)
+
+
+
+def _loopctl_mod():
+    loader = importlib.machinery.SourceFileLoader("_loopctl_wp3", str(LOOPCTL))
+    spec = importlib.util.spec_from_loader("_loopctl_wp3", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+class _ProbeHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(getattr(self.server, "probe_status", 200))
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"loops":[]}')
+
+    def log_message(self, *_args):
+        return
+
+
+def _start_probe(status=200):
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), _ProbeHandler)
+    httpd.probe_status = status
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd
+
+
+class TestBackendPredicatesAndConsole(LoopsRootTestCase):
+    def test_unit_files_present_and_scheduler_loaded_launchd(self):
+        mod = _loopctl_mod()
+        name = "alpha"
+        self.fixture.minimal_valid_loop(name)
+        env_absent = self.fixture.base_env(FAKE_LAUNCHCTL_PRINT_EXIT="1")
+        with mock.patch.dict(os.environ, env_absent):
+            self.assertFalse(mod.unit_files_present(self.root, name))
+            self.assertFalse(mod.scheduler_loaded(name))
+
+        launchd_dir = os.path.join(self.root, "launchd")
+        os.makedirs(launchd_dir, exist_ok=True)
+        with open(os.path.join(launchd_dir, f"com.loops.{name}.plist"), "w") as f:
+            f.write("<plist/>\n")
+        env_ok = self.fixture.base_env(FAKE_LAUNCHCTL_PRINT_EXIT="0")
+        with mock.patch.dict(os.environ, env_ok):
+            self.assertTrue(mod.unit_files_present(self.root, name))
+            self.assertTrue(mod.scheduler_loaded(name))
+        env_fail = self.fixture.base_env(FAKE_LAUNCHCTL_PRINT_EXIT="1")
+        with mock.patch.dict(os.environ, env_fail):
+            self.assertTrue(mod.unit_files_present(self.root, name))
+            self.assertFalse(mod.scheduler_loaded(name))
+
+    def test_install_failure_strings_are_backend_neutral(self):
+        name = self._valid_loop_for_install("neutral-fail")
+        self.fixture.add_run(
+            f"20260101T000000Z-{name}-stale1", name, "2026-01-01T00:00:00Z"
+        )
+        env = self.fixture.base_env(
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="0.5", LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1"
+        )
+        r = run_cli(["install", name, "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("install failed:", r.stderr)
+        self.assertIn("under the scheduler (launchd)", r.stderr)
+        self.assertNotIn("under launchd", r.stderr)
+
+    def test_console_is_a_known_verb(self):
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(["--actor", "console"], env_overrides={"LOOPS_ROOT": decoy})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("ambiguous invocation", r.stderr)
+
+    def _valid_loop_for_install(self, name):
+        self.fixture.minimal_valid_loop(name)
+        self.fixture.write_spec(name, "filled\n" * 11)
+        return name
+
+    def _write_console_env(self):
+        with open(os.path.join(self.root, ".env"), "w") as f:
+            f.write("LOOPS_CONSOLE_ALLOW_HOSTS=a.example,a.example:443\n")
+            f.write("LOOPS_CONSOLE_PORT=18929\n")
+
+    def test_console_install_launchd_writes_plist_and_verifies(self):
+        self._write_console_env()
+        httpd = _start_probe(200)
+        self.addCleanup(httpd.shutdown)
+        self.addCleanup(httpd.server_close)
+        port = httpd.server_address[1]
+        env = self.fixture.base_env(
+            LOOPS_CONSOLE_PROBE_URL=f"http://127.0.0.1:{port}/api/state",
+            LOOPCTL_CONSOLE_VERIFY_TIMEOUT_S="5",
+        )
+        r = run_cli(["console", "install", "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        plist_path = os.path.join(self.root, "launchd", "com.roops.console.plist")
+        self.assertTrue(os.path.isfile(plist_path))
+        with open(plist_path, "rb") as f:
+            plist = plistlib.load(f)
+        self.assertEqual(plist["Label"], "com.roops.console")
+        args = plist["ProgramArguments"]
+        self.assertIn("serve", args)
+        self.assertIn("--port", args)
+        self.assertIn("18929", args)
+        self.assertIn("--allow-host", args)
+        self.assertIn("a.example", args)
+        self.assertIn("a.example:443", args)
+        idx = args.index("serve")
+        self.assertEqual(
+            args[idx : idx + 7],
+            [
+                "serve",
+                "--port",
+                "18929",
+                "--allow-host",
+                "a.example",
+                "--allow-host",
+                "a.example:443",
+            ],
+        )
+        verbs = [c.split()[0] for c in self.fixture.launchctl_calls()]
+        self.assertEqual(verbs, ["bootout", "bootstrap"])
+
+        self.fixture.launchctl_log and open(self.fixture.launchctl_log, "w").close()
+        httpd.probe_status = 500
+        r_fail = run_cli(
+            ["console", "install", "--root", self.root],
+            env_overrides=self.fixture.base_env(
+                LOOPS_CONSOLE_PROBE_URL=f"http://127.0.0.1:{port}/api/state",
+                LOOPCTL_CONSOLE_VERIFY_TIMEOUT_S="2",
+            ),
+        )
+        self.assertEqual(r_fail.returncode, 1)
+        self.assertIn("console install failed", r_fail.stderr)
+        self.assertFalse(os.path.isfile(plist_path))
+        verbs_fail = [c.split()[0] for c in self.fixture.launchctl_calls()]
+        self.assertEqual(verbs_fail[0], "bootout")
+        self.assertIn("bootstrap", verbs_fail)
+        self.assertEqual(verbs_fail[-1], "bootout")
+
+    def test_console_uninstall_and_status(self):
+        self._write_console_env()
+        httpd = _start_probe(200)
+        self.addCleanup(httpd.shutdown)
+        self.addCleanup(httpd.server_close)
+        port = httpd.server_address[1]
+        env = self.fixture.base_env(
+            LOOPS_CONSOLE_PROBE_URL=f"http://127.0.0.1:{port}/api/state",
+            LOOPCTL_CONSOLE_VERIFY_TIMEOUT_S="5",
+        )
+        r = run_cli(["console", "install", "--root", self.root], env_overrides=env)
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        st = run_cli(
+            ["console", "status", "--json", "--root", self.root], env_overrides=env
+        )
+        self.assertEqual(st.returncode, 0, msg=st.stdout + st.stderr)
+        payload = json.loads(st.stdout)
+        self.assertTrue(payload["unit"]["present"])
+        un = run_cli(["console", "uninstall", "--root", self.root], env_overrides=env)
+        self.assertEqual(un.returncode, 0, msg=un.stdout + un.stderr)
+        plist_path = os.path.join(self.root, "launchd", "com.roops.console.plist")
+        self.assertFalse(os.path.isfile(plist_path))
+        st2 = run_cli(
+            ["console", "status", "--json", "--root", self.root], env_overrides=env
+        )
+        self.assertEqual(st2.returncode, 1)
+        un2 = run_cli(["console", "uninstall", "--root", self.root], env_overrides=env)
+        self.assertEqual(un2.returncode, 0, msg=un2.stdout + un2.stderr)
 
 
 if __name__ == "__main__":

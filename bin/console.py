@@ -22,6 +22,7 @@ its own module docstring):
   never reach the real binary.
 """
 
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -82,6 +83,19 @@ loopconf = _load_module_from_path(
 )
 
 
+def _load_loopctl():
+    """bin/loopctl has no .py suffix; spec_from_file_location yields no loader."""
+    path = os.path.join(_HERE, "loopctl")
+    loader = importlib.machinery.SourceFileLoader("_console_loopctl", path)
+    spec = importlib.util.spec_from_loader("_console_loopctl", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+loopctl = _load_loopctl()
+
+
 def _launchctl_bin():
     return os.environ.get(
         "LOOPS_LAUNCHCTL", "launchctl"
@@ -110,14 +124,7 @@ def _loopctl(root, argv):
 
 
 def _loaded(root, name):
-    uid = os.getuid()
-    r = subprocess.run(
-        [_launchctl_bin(), "print", f"gui/{uid}/com.loops.{name}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return r.returncode == 0
+    return loopctl.scheduler_loaded(name)
 
 
 def _loop_names(root):
@@ -135,7 +142,7 @@ def _state(root):
     loops = []
     for name in _loop_names(root):
         conf, _errors = loopconf.parse(os.path.join(root, "loops.d", name, "loop.conf"))
-        plist = os.path.isfile(os.path.join(root, "launchd", f"com.loops.{name}.plist"))
+        plist = loopctl.unit_files_present(root, name)
         loops.append(
             {
                 "name": name,
@@ -379,7 +386,7 @@ def handle_request(root, method, path, body_bytes):
         name = m.group(1)
         if name not in _loop_names(root):
             return _json(404, {"error": f"unknown loop: {name}"})
-        if not os.path.isfile(os.path.join(root, "launchd", f"com.loops.{name}.plist")):
+        if not loopctl.unit_files_present(root, name):
             return _json(409, {"error": f"not installed — run: loopctl install {name}"})
         body_obj, err = _parse_json_object(body_bytes)
         if err:

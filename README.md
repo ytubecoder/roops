@@ -4,7 +4,7 @@
 
 
 ![Python 3](https://img.shields.io/badge/python-3-blue)
-![Platform: macOS / launchd](https://img.shields.io/badge/platform-macOS%20%2F%20launchd-lightgrey)
+![Platform: macOS launchd · Linux systemd](https://img.shields.io/badge/platform-macOS%20launchd%20·%20Linux%20systemd-lightgrey)
 ![Tests: 1000 passing](https://img.shields.io/badge/tests-1000%20passing-brightgreen)
 ![Works with Codex CLI](https://img.shields.io/badge/works%20with-Codex%20CLI-orange)
 ![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-blueviolet)
@@ -229,7 +229,7 @@ tests/run-tests.sh       # 1028 hermetic tests — no network, no real engines
 
 ## Notes
 
-- **macOS today, WSL later.** All paths are `$HOME`-relative. macOS has no `flock` and no GNU `timeout`, so the harness uses an fcntl lock helper and runner-owned process-group timeouts.
+- **macOS and Linux.** All paths are `$HOME`-relative. macOS has no `flock` and no GNU `timeout`, so the harness uses an fcntl lock helper and runner-owned process-group timeouts.
 - **Every firing is a fresh session.** No conversation carries over; prior findings are re-injected explicitly. That's what makes suppression trustworthy.
 - **Per-run tokens and cost** land in SQLite; the dashboard shows a 7-day spend roll-up.
 

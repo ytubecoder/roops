@@ -65,6 +65,9 @@ skill_import = _load_module_from_path(
 requirements = _load_module_from_path(
     os.path.join(_HERE, "requirements.py"), "_loopctl_requirements"
 )
+probe_core = _load_module_from_path(
+    os.path.join(_HERE, "probe_core.py"), "_loopctl_probe_core"
+)
 
 _DB_BIN = os.path.join(_HERE, "db.py")
 _DASHBOARD_GENERATE = os.path.join(_REPO_ROOT, "dashboard", "generate.py")
@@ -978,6 +981,132 @@ def cmd_requirements(args):
     if any_missing:
         return 2
     return 1 if any_unmet else 0
+
+
+def cmd_probe(args):
+    action = getattr(args, "probe_action", None) or "status"
+    if action == "keygen":
+        return _cmd_probe_keygen(args)
+    return _cmd_probe_status(args)
+
+
+def _probe_file_env(root):
+    return probe_core.loopconf.load_env(root)
+
+
+def _cmd_probe_status(args):
+    try:
+        file_env = _probe_file_env(args.root)
+    except loopconf.EnvFileError as e:
+        print(f"refused: .env: {e}", file=sys.stderr)
+        return 64
+    channel = probe_core.Channel(args.root, file_env=file_env, environ=os.environ)
+    remote = channel.is_remote()
+    mode = "remote" if remote else "local"
+    host = channel.host() or "-"
+    key_path = channel.key_path()
+    key_state = "present" if os.path.isfile(key_path) else "missing"
+    print(f"mode: {mode}")
+    print(f"host: {host}")
+    print(f"key: {key_path} {key_state}")
+
+    ping = channel.ping_result()
+    if ping.returncode == probe_core.EXIT_TRANSPORT:
+        print("ping: transport failed")
+        ping_ok = False
+    elif ping.returncode != 0:
+        print("ping: failed")
+        ping_ok = False
+    else:
+        ping_text = (ping.stdout or "").strip() or "(empty)"
+        print(f"ping: {ping_text}")
+        ping_ok = ping_text.startswith("ok")
+
+    listed = channel.list_result()
+    if listed.returncode == probe_core.EXIT_TRANSPORT:
+        print("list: transport failed")
+        server_map = {}
+        list_ok = False
+    elif listed.returncode != 0:
+        print("list: failed")
+        server_map = {}
+        list_ok = False
+    else:
+        server_map = probe_core.parse_list_map(listed.stdout)
+        list_ok = True
+
+    client_map = {}
+    for name, path in probe_core.iter_probe_files(args.root):
+        client_map[name] = probe_core.file_hash12(path)
+
+    names = sorted(set(client_map) | set(server_map))
+    all_ok = ping_ok and list_ok
+    if remote and key_state != "present":
+        all_ok = False
+    print("name | client-hash | server-hash | status")
+    for name in names:
+        ch = client_map.get(name, "-")
+        sh = server_map.get(name, "-")
+        if name in client_map and name in server_map:
+            status = "ok" if ch == sh else "drift"
+        elif name in client_map:
+            status = "not on server"
+        else:
+            status = "not local"
+        if status != "ok":
+            all_ok = False
+        print(f"{name} | {ch} | {sh} | {status}")
+    return 0 if all_ok else 1
+
+
+def _cmd_probe_keygen(args):
+    try:
+        file_env = _probe_file_env(args.root)
+    except loopconf.EnvFileError as e:
+        print(f"refused: .env: {e}", file=sys.stderr)
+        return 64
+    key = probe_core.probe_key_path(file_env, os.environ)
+    pub = key + ".pub"
+    if os.path.exists(key) or os.path.exists(pub):
+        print(f"refusing: key already exists: {key}", file=sys.stderr)
+        return 1
+    parent = os.path.dirname(key)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, mode=0o700)
+    keygen = os.environ.get("LOOPS_SSH_KEYGEN") or "ssh-keygen"
+    comment = f"loops-probe {probe_core.hostname()}"
+    proc = subprocess.run(
+        [keygen, "-t", "ed25519", "-N", "", "-f", key, "-C", comment],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        print(proc.stderr or proc.stdout or "ssh-keygen failed", file=sys.stderr)
+        return 1
+    try:
+        with open(pub) as f:
+            pubkey = f.read().rstrip("\n")
+    except OSError as e:
+        print(f"keygen wrote no pubkey: {e}", file=sys.stderr)
+        return 1
+    print(pubkey)
+    print()
+    print("Add to ~/.ssh/config:")
+    print()
+    print("Host llm-probe")
+    print("    HostName <fill in: IP or name of the data host>")
+    print("    User <fill in: data-host user>")
+    print(f"    IdentityFile {key}")
+    print("    IdentitiesOnly yes")
+    print("    BatchMode yes")
+    print()
+    print("ssh-keyscan -t ed25519 <HostName> >> ~/.ssh/known_hosts")
+    print()
+    print("LOOPS_PROBE_HOST=llm-probe")
+    print()
+    print(f"bin/probe-server --authorize {pub} --write")
+    return 0
 
 
 def cmd_run(args):
@@ -1937,6 +2066,14 @@ def build_parser():
     req_p.add_argument("loop_names", nargs="*", metavar="name")
     req_p.add_argument("--no-live", action="store_true")
 
+    probe_p = sub.add_parser("probe", parents=[common_sub])
+    probe_p.add_argument(
+        "probe_action",
+        nargs="?",
+        default="status",
+        choices=["status", "keygen"],
+    )
+
     run_p = sub.add_parser("run", parents=[common_sub])
     run_p.add_argument("name")
     run_p.add_argument("--trigger", default="manual")
@@ -2055,6 +2192,7 @@ def main(argv=None):
         "findings": cmd_findings,
         "import": cmd_import,
         "requirements": cmd_requirements,
+        "probe": cmd_probe,
         "ack": lambda a: cmd_disposition(a, "ack"),
         "dismiss": lambda a: cmd_disposition(a, "dismiss"),
         "snooze": lambda a: cmd_disposition(a, "snooze"),

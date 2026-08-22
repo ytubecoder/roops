@@ -3750,5 +3750,128 @@ class TestRequirementsVerb(LoopsRootTestCase):
         self.assertIn("ambiguous invocation", r.stderr)
 
 
+class TestProbeVerb(LoopsRootTestCase):
+    def _install_echo_test(self):
+        probes = os.path.join(self.root, "probes")
+        os.makedirs(probes, exist_ok=True)
+        src = REPO_ROOT / "probes" / "echo-test"
+        dst = os.path.join(probes, "echo-test")
+        shutil.copy(src, dst)
+        os.chmod(dst, 0o755)
+        return dst
+
+    def test_probe_status_and_keygen(self):
+        self._install_echo_test()
+        home = tempfile.mkdtemp(prefix="loopctl-probe-home-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        os.mkdir(os.path.join(home, ".ssh"), 0o700)
+
+        r = run_cli(
+            ["probe", "status", "--root", self.root],
+            env_overrides={
+                **self.fixture.base_env(),
+                "HOME": home,
+                "LOOPS_PROBE_HOST": "",
+            },
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("mode: local", r.stdout)
+        self.assertRegex(r.stdout, r"echo-test\b.*\bok\b")
+
+        key = os.path.join(self.root, "id_ed25519")
+        with open(key, "w") as f:
+            f.write("k\n")
+        fake = os.path.join(self.root, "fake-ssh")
+        with open(fake, "w") as f:
+            f.write("#!/usr/bin/env python3\n")
+            f.write("import sys\n")
+            f.write("args = sys.argv[sys.argv.index('--') + 2:]\n")
+            f.write("verb = args[0] if args else ''\n")
+            f.write("if verb == 'ping':\n")
+            f.write("    print('ok probe-server 1 testhost')\n")
+            f.write("    sys.exit(0)\n")
+            f.write("if verb == 'list':\n")
+            f.write("    print('echo-test deadbeefdead')\n")
+            f.write("    sys.exit(0)\n")
+            f.write("sys.exit(0)\n")
+        os.chmod(fake, 0o755)
+        with open(os.path.join(self.root, ".env"), "w") as f:
+            f.write("LOOPS_PROBE_HOST=llm-probe\n")
+            f.write(f"LOOPS_PROBE_KEY={key}\n")
+        r = run_cli(
+            ["probe", "status", "--root", self.root],
+            env_overrides={
+                **self.fixture.base_env(),
+                "HOME": home,
+                "LOOPS_SSH": fake,
+                "LOOPS_PROBE_HOST": "llm-probe",
+                "LOOPS_PROBE_KEY": key,
+            },
+        )
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertIn("drift", r.stdout)
+
+        fake_keygen = os.path.join(self.root, "fake-keygen")
+        with open(fake_keygen, "w") as f:
+            f.write("#!/usr/bin/env python3\n")
+            f.write("import sys\n")
+            f.write("key = None\n")
+            f.write("args = sys.argv[1:]\n")
+            f.write("i = 0\n")
+            f.write("while i < len(args):\n")
+            f.write("    if args[i] == '-f' and i + 1 < len(args):\n")
+            f.write("        key = args[i + 1]\n")
+            f.write("        i += 2\n")
+            f.write("        continue\n")
+            f.write("    i += 1\n")
+            f.write("if not key:\n")
+            f.write("    sys.exit(2)\n")
+            f.write("open(key, 'w').write('PRIVATE\\n')\n")
+            f.write(
+                "open(key + '.pub', 'w').write("
+                "'ssh-ed25519 AAAATEST loops-probe host\\n')\n"
+            )
+        os.chmod(fake_keygen, 0o755)
+        key_path = os.path.join(home, ".ssh", "loops-probe")
+        r = run_cli(
+            ["probe", "keygen", "--root", self.root],
+            env_overrides={
+                **self.fixture.base_env(),
+                "HOME": home,
+                "LOOPS_SSH_KEYGEN": fake_keygen,
+                "LOOPS_PROBE_HOST": "",
+                "LOOPS_PROBE_KEY": key_path,
+            },
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("Host llm-probe", r.stdout)
+        self.assertIn("ssh-keyscan -t ed25519 <HostName> >> ~/.ssh/known_hosts", r.stdout)
+        self.assertIn("bin/probe-server --authorize", r.stdout)
+        self.assertIn("--write", r.stdout)
+        self.assertIn("LOOPS_PROBE_HOST=llm-probe", r.stdout)
+        self.assertTrue(os.path.isfile(key_path))
+        self.assertTrue(os.path.isfile(key_path + ".pub"))
+
+        r = run_cli(
+            ["probe", "keygen", "--root", self.root],
+            env_overrides={
+                **self.fixture.base_env(),
+                "HOME": home,
+                "LOOPS_SSH_KEYGEN": fake_keygen,
+                "LOOPS_PROBE_HOST": "",
+                "LOOPS_PROBE_KEY": key_path,
+            },
+        )
+        self.assertNotEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("already exists", r.stderr)
+
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(["--actor", "probe"], env_overrides={"LOOPS_ROOT": decoy})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("ambiguous invocation", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
+

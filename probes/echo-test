@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# probe: echo-test
+# probe-writes: none
+# probe-output: text
+# probe-reads: none
+# Test-only probe shipped with the channel. Real probes arrive in WP4.
+if [ "${1:-}" = "--check" ]; then
+  echo "ok echo-test"
+  exit 0
+fi
+IFS='|'
+echo "$*"

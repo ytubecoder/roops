@@ -46,6 +46,9 @@ $LOOPS_ROOT/
   bin/lock.py                      # fcntl lock helper (§2)
   bin/db.py                        # sqlite schema + insert/query helpers (§3)
   bin/loopconf.py                  # loop.conf parser (§5.0) — single implementation
+  bin/probe                        # probe client (§14)
+  bin/probe-server                 # probe forced-command server (§14)
+  bin/probe_core.py                # shared probe header/env/exec/list (§14)
   bin/schedule.py                  # schedule grammar parser (§5.1)
   bin/page_envelope.py             # report-page envelope check/extract (Amendment 2, §12)
   engines/codex.sh                 # default engine adapter (§6, §7)
@@ -57,12 +60,14 @@ $LOOPS_ROOT/
   pagekit/reference/               # sanitized benchmark fixture + rendered reference page
   loops.d/<name>/                  # one dir per loop: loop.conf precheck.sh prompt.md dashboard.json
   loops.d/<name>/render.sh         # OPTIONAL page renderer (Amendment 2; executable = page-enabled)
+  probes/<name>                    # named, reviewed probe scripts (§14); built-ins are not files
   examples/<name>/                 # pilot loops, same shape; NEVER installed to launchd
   .env                             # gitignored; machine-local host config (§3 / §5.0)
   state/loops.sqlite               # WAL; runs, heartbeats, metrics (§3)
   state/runs/<run_id>/             # contract.json, output.md, usage.json, engine.log, engine.status
   state/locks/<loop>.lock          # lock files (§2)
   state/tmp/                       # runner TMPDIR default (§4.1)
+  state/probe-log/YYYY-MM-DD.log   # probe-server audit log, 0700/0600, 30-day prune (§14)
   state/loop-data/<name>/          # loop-private durable state, 0700/0600 (Amendment 2)
   reports/<name>/YYYY-MM-DD-HHMM.md
   reports/<name>/latest.md         # atomically promoted symlink-free copy
@@ -807,6 +812,10 @@ loopctl requirements [<name>…] [--json] [--no-live]                  # host ×
                                                                       #   (§5.3); zero names = every
                                                                       #   loop in --from; exit 1 if
                                                                       #   any in-scope loop unmet
+loopctl probe [status|keygen]                                        # probe channel (§14); status
+                                                                      #   is the default; never writes
+                                                                      #   (keygen writes only the local
+                                                                      #   key pair). Known verb.
 ```
 Disposition verbs are thin wrappers over `db.py dispose` (+ dashboard regen so the change is
 visible immediately). The dashboard stays static (Change 4, Option A — settled with generalissimo
@@ -1517,3 +1526,160 @@ set-schedule's "NEVER kickstart" rule stands. Contract:
 - **Security.** §13.1's Host/Content-Type gate applies unchanged; the console still emits
   no `Access-Control-*` headers; `<name>` stays `[A-Za-z0-9_-]+`; the status GET leaks
   nothing beyond `/api/state`'s existing confidentiality class.
+
+## 14. Probe channel
+
+The data host runs sshd with ONE forced command (`bin/probe-server`). Loops call
+`bin/probe <name>` and never know whether the probe ran locally or over ssh. The
+server never interprets a shell. Shared header parsing, clean env, timed exec,
+and list/hash live in `bin/probe_core.py` so the two scripts cannot drift.
+`PROBE_SERVER_VERSION = 1`.
+
+### 14.1 authorized_keys line
+
+```
+restrict,command="<abs path of bin/probe-server>" ssh-ed25519 <body> loops-probe
+```
+
+`bin/probe-server --authorize <pubkey-file> [--write] [--replace]` reads one
+`ssh-ed25519 …` line and prints that restrict line. `--write` appends it to
+`~/.ssh/authorized_keys` (created 0600 if missing; refused if the file mode is
+not 0600 or the dir is not 0700 — the message says which). Refused if the same
+key (by its base64 body) is already present unless `--replace`, which rewrites
+that key's line in place. Not reachable as the forced command: when
+`sys.argv[1:]` is non-empty AND `SSH_ORIGINAL_COMMAND` is set the server
+refuses, exit 64, and does not authorize.
+
+### 14.2 Wire grammar
+
+`SSH_ORIGINAL_COMMAND` is parsed with **no shell**: `parts = cmd.split(" ")`
+(single-space split). An empty string, two consecutive spaces, a
+leading/trailing space, a tab or newline anywhere → `refused: <reason>` on
+stderr, exit **64**, logged, nothing executed. `verb = parts[0]`, `args =
+parts[1:]`. Verb must match `^[a-z][a-z0-9-]{1,40}$`; each arg must match
+`^[A-Za-z0-9_.:@/=+-]{1,8192}$`; `len(args) <= 8`. Otherwise the same refusal.
+
+ROOT is the repo root containing the server script
+(`os.path.dirname(os.path.dirname(os.path.realpath(__file__)))`), never from
+the client's env. `.env` is loaded via `loopconf.load_env(ROOT)`; on
+`EnvFileError` → `refused: .env: <msg>`, exit 64.
+
+### 14.3 Built-ins
+
+Not files. Names `ping`, `list`, `check` are **reserved**: a file by one of
+those names in `probes/` is refused (`refused: reserved name`) and omitted from
+`list`. Built-ins take no other args (`ping x` → refused). `check` takes exactly
+one name.
+
+- `ping` → stdout `ok probe-server 1 <hostname>`, exit 0.
+- `list` → one line per executable regular file in `ROOT/probes/` whose name
+  matches the verb regex, sorted: `<name> <first 12 hex of sha256 of the file
+  bytes>`. Symlinks skipped.
+- `check <name>` → exactly as running the probe `<name>` with argv `["--check"]`
+  (same exec path, same timeout, same log).
+
+### 14.4 Header grammar
+
+Parsed from the first 20 lines of the script. The block must start at line 2
+(right after the shebang); parsing stops at the first line that is not a
+`# probe-*:` line.
+
+```
+# probe: <name>                 (must equal the file name)
+# probe-timeout-s: <int>        (optional; default 120; values above 600 are clamped to 600)
+# probe-writes: <text>          (required; "none" or a statement)
+# probe-output: json|tar|text   (required)
+# probe-reads: <text>           (required; free text)
+```
+
+Missing required line, or `probe:` name ≠ file name → `refused: bad header: …`,
+exit 64.
+
+Every probe, invoked with the single argument `--check`, verifies its own
+inputs exist, prints one line, exits 0 (ok) or 1 (unmet), and touches nothing.
+
+### 14.5 Exec + clean env + timeout
+
+`path = ROOT/probes/<verb>` must be a regular file (`os.path.islink` → refused),
+executable, with a valid header. Exec `[path, *args]` with `cwd=ROOT`,
+`stdin=/dev/null`, a **clean env** = `{HOME, PATH=requirements.runtime_path(home),
+LOOPS_ROOT=ROOT, LANG=C.UTF-8}` plus every key from `.env` — never
+`SSH_ORIGINAL_COMMAND`, never the inherited environment. stdout/stderr inherit.
+Started in its own process group (`start_new_session=True`). Header timeout
+(default 120 s, cap 600 s): on expiry `killpg(TERM)`, 10 s grace, `killpg(KILL)`,
+exit **124** with `probe timed out after N s` on stderr. Otherwise exit with the
+probe's exit code.
+
+### 14.6 Log
+
+One line per invocation (including refusals and built-ins) to
+`ROOT/state/probe-log/<YYYY-MM-DD>.log` (dir created 0700, file 0600, UTC date):
+
+```
+<ISO-8601 UTC> client=<SSH_CLIENT first field or "-"> verb=<verb> args=<args joined by space, or "-"> exit=<n> ms=<duration>
+```
+
+When `verb == "ticket-add"` log `args=<redacted>`. On every start, delete log
+files older than 30 days (by the date in the file name).
+
+### 14.7 Client (`bin/probe`)
+
+```
+bin/probe <name> [arg …] [--out FILE]
+bin/probe --check <name>
+bin/probe --list
+bin/probe --ping
+```
+
+ROOT like the server; `.env` via `loopconf.load_env` (malformed → stderr + exit
+64). `LOOPS_PROBE_HOST` unset/empty → **local mode**; set → **remote mode**.
+
+Local: built-ins answered locally (`ping` → `ok probe local <hostname>`; `list`
+→ the same hash lines); a probe is exec'd exactly as the server would.
+
+Remote: `argv = [ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o",
+"IdentitiesOnly=yes", "-i", key, "--", host, name, *args]` where `ssh =
+os.environ.get("LOOPS_SSH", "ssh")`, `key = .env LOOPS_PROBE_KEY or
+~/.ssh/loops-probe` (expanded), `host = LOOPS_PROBE_HOST`. The `--` sits
+**before** the host. Args are separate argv elements; the client validates them
+with the server's regexes first and refuses locally (exit 64) so a bad arg
+never travels. ssh exit 255 → stderr `probe transport failed: <ssh stderr>`,
+exit **75**. Any other exit code passes through.
+
+`--out FILE`: stdout goes to `FILE` created 0600 (temp file in the same
+directory, renamed into place on success; on failure the temp is removed and
+`FILE` untouched).
+
+`--check <name>`: local → run `probes/<name> --check`. Remote → `ping` must
+answer `ok …`, `list` must contain `<name> <hash>` equal to the hash of the
+client's own `ROOT/probes/<name>` (else exit 3, stderr `probe drift: <name>
+server=<h1> client=<h2>` or `probe not offered by server: <name>`), then
+`check <name>` must exit 0. One `ping`+`list` round-trip per process (in-memory
+cache). Exit 0 ok / 3 unmet / 75 transport.
+
+`--list`: prints the server's (or local) list.
+
+Client exits: 0 / the probe's / 3 (check unmet) / 64 (refused) / 75 (transport)
+/ 124 (timeout passthrough).
+
+### 14.8 `loopctl probe`
+
+`status` (default): mode (local/remote), host, key path + present/missing, ping
+result (or `transport failed`), table `name | client-hash | server-hash |
+status` (`ok` / `drift` / `not on server` / `not local`). Exit 0 if everything
+`ok`, 1 otherwise. Never writes.
+
+`keygen`: `ssh-keygen -t ed25519 -N "" -f <key> -C "loops-probe <hostname>"`
+(refuse if the key exists; `LOOPS_SSH_KEYGEN` is the test seam). Prints the
+public key, a `~/.ssh/config` stanza (`Host llm-probe`), the
+`ssh-keyscan -t ed25519 <HostName> >> ~/.ssh/known_hosts` line, `.env`
+`LOOPS_PROBE_HOST=llm-probe`, and `bin/probe-server --authorize <pubkey>
+--write`.
+
+### 14.9 Two-checkout deploy rule
+
+After cutover the probes execute from llm's checkout and the loops from
+firstparty's. The probe key cannot pull. A change to `probes/`, `bin/probe`, or
+`bin/probe-server` is pushed from llm and pulled on firstparty before any loop
+that uses it is installed. A name the server does not list, or lists with a
+different content hash, is unmet.

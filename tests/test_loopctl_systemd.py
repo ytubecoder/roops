@@ -15,9 +15,14 @@ import importlib.util
 import os
 import shutil
 import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from test_loopctl import LoopsRoot, _start_probe, run_cli
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOOPCTL = REPO_ROOT / "bin" / "loopctl"
@@ -37,8 +42,19 @@ log_path = os.environ.get("FAKE_SYSTEMCTL_LOG")
 if log_path:
     with open(log_path, "a") as f:
         f.write(" ".join(sys.argv[1:]) + "\\n")
+env_log = os.environ.get("FAKE_SYSTEMCTL_ENV_LOG")
+if env_log:
+    with open(env_log, "a") as f:
+        f.write(os.environ.get("XDG_RUNTIME_DIR", "") + "\\n")
 
 sys.exit(int(os.environ.get("FAKE_SYSTEMCTL_RC", "0")))
+"""
+
+FAKE_LOGINCTL_SRC = """#!/usr/bin/env python3
+import os
+import sys
+print("Linger=" + os.environ.get("FAKE_LOGINCTL_LINGER", "yes"))
+sys.exit(int(os.environ.get("FAKE_LOGINCTL_RC", "0")))
 """
 
 
@@ -274,6 +290,204 @@ class TestLinuxDispatchFromDarwin(unittest.TestCase):
         loopctl._install_teardown(self.root, "ads-x")
         _svc, timer = loopctl._systemd_unit_paths("ads-x")
         self.assertFalse(os.path.isfile(timer))
+
+
+def _write_fake_bin(path, src):
+    with open(path, "w") as f:
+        f.write(src)
+    os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC | stat.S_IXGRP)
+    return path
+
+
+class TestSystemdPredicatesAndHostChecks(unittest.TestCase):
+    def setUp(self):
+        self.fx = SystemdFixture()
+        self.fx.activate()
+        os.environ["LOOPS_INSTALL_BACKEND"] = "systemd"
+        self.addCleanup(os.environ.pop, "LOOPS_INSTALL_BACKEND", None)
+        self.addCleanup(self.fx.cleanup)
+        self.loginctl = _write_fake_bin(
+            os.path.join(self.fx.dir, "fake_loginctl.py"), FAKE_LOGINCTL_SRC
+        )
+        os.environ["LOOPS_LOGINCTL"] = self.loginctl
+        self.addCleanup(os.environ.pop, "LOOPS_LOGINCTL", None)
+        self.env_log = os.path.join(self.fx.dir, "systemctl.env.log")
+        os.environ["FAKE_SYSTEMCTL_ENV_LOG"] = self.env_log
+        self.addCleanup(os.environ.pop, "FAKE_SYSTEMCTL_ENV_LOG", None)
+
+    def test_unit_files_present_requires_both_units(self):
+        name = "ads-x"
+        self.assertFalse(loopctl.unit_files_present("/unused", name))
+        svc, timer = loopctl._systemd_unit_paths(name)
+        Path(svc).write_text("[Service]\n")
+        self.assertFalse(loopctl.unit_files_present("/unused", name))
+        Path(timer).write_text("[Timer]\n")
+        self.assertTrue(loopctl.unit_files_present("/unused", name))
+
+    def test_scheduler_loaded_uses_is_enabled_with_xdg_default(self):
+        uid = os.getuid()
+        with mock.patch.dict(os.environ, {"FAKE_SYSTEMCTL_RC": "0"}):
+            os.environ.pop("XDG_RUNTIME_DIR", None)
+            self.assertTrue(loopctl.scheduler_loaded("ads-x"))
+        with open(self.env_log) as f:
+            seen = [ln.strip() for ln in f if ln.strip()]
+        self.assertIn(f"/run/user/{uid}", seen)
+        calls = " | ".join(self.fx.calls())
+        self.assertIn("is-enabled loops-ads-x.timer", calls)
+        open(self.env_log, "w").close()
+        open(self.fx.log, "w").close()
+        os.environ["FAKE_SYSTEMCTL_RC"] = "1"
+        os.environ.pop("XDG_RUNTIME_DIR", None)
+        try:
+            self.assertFalse(loopctl.scheduler_loaded("ads-x"))
+        finally:
+            os.environ.pop("FAKE_SYSTEMCTL_RC", None)
+
+    def test_host_checks_linger_tz_xdg(self):
+        root = tempfile.mkdtemp(prefix="loops-hostcheck-")
+        self.addCleanup(shutil.rmtree, root, True)
+        run_user = os.path.join(self.fx.dir, "run-user")
+        os.makedirs(run_user, exist_ok=True)
+        user = os.environ.get("USER", "unknown")
+
+        os.environ["FAKE_LOGINCTL_LINGER"] = "no"
+        msgs = loopctl._host_checks(root, run_user_dir=run_user)
+        self.assertTrue(any("enable-linger" in m for m in msgs), msgs)
+        self.assertTrue(any(user in m for m in msgs), msgs)
+
+        os.environ["FAKE_LOGINCTL_LINGER"] = "yes"
+        msgs = loopctl._host_checks(root, run_user_dir=run_user)
+        self.assertFalse(any("enable-linger" in m for m in msgs), msgs)
+
+        zone_root = os.path.join(self.fx.dir, "zones")
+        utc_dir = os.path.join(zone_root, "zoneinfo", "Etc")
+        manila_dir = os.path.join(zone_root, "zoneinfo", "Asia")
+        os.makedirs(utc_dir, exist_ok=True)
+        os.makedirs(manila_dir, exist_ok=True)
+        Path(os.path.join(utc_dir, "UTC")).write_text("")
+        Path(os.path.join(manila_dir, "Manila")).write_text("")
+        utc_link = os.path.join(self.fx.dir, "localtime-utc")
+        manila_link = os.path.join(self.fx.dir, "localtime-manila")
+        os.symlink(os.path.join(utc_dir, "UTC"), utc_link)
+        os.symlink(os.path.join(manila_dir, "Manila"), manila_link)
+
+        Path(os.path.join(root, ".env")).write_text("LOOPS_EXPECT_TZ=Asia/Manila\n")
+        with mock.patch.dict(os.environ, {"LOOPS_LOCALTIME_PATH": utc_link}):
+            msgs = loopctl._host_checks(root, run_user_dir=run_user)
+        joined = " ".join(msgs)
+        self.assertIn("Etc/UTC", joined)
+        self.assertIn("Asia/Manila", joined)
+
+        with mock.patch.dict(os.environ, {"LOOPS_LOCALTIME_PATH": manila_link}):
+            msgs = loopctl._host_checks(root, run_user_dir=run_user)
+        self.assertFalse(any("timezone" in m for m in msgs), msgs)
+
+        Path(os.path.join(root, ".env")).write_text("")
+        with mock.patch.dict(os.environ, {"LOOPS_LOCALTIME_PATH": utc_link}):
+            msgs = loopctl._host_checks(root, run_user_dir=run_user)
+        self.assertFalse(any("timezone" in m for m in msgs), msgs)
+
+        missing = os.path.join(self.fx.dir, "missing-run-user")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("XDG_RUNTIME_DIR", None)
+            msgs = loopctl._host_checks(root, run_user_dir=missing)
+        self.assertTrue(any("XDG_RUNTIME_DIR" in m for m in msgs), msgs)
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("XDG_RUNTIME_DIR", None)
+            msgs = loopctl._host_checks(root, run_user_dir=run_user)
+        self.assertFalse(any("XDG_RUNTIME_DIR" in m for m in msgs), msgs)
+
+    def _cli_root(self):
+        fx = LoopsRoot()
+        self.addCleanup(fx.cleanup)
+        name = "ready"
+        fx.minimal_valid_loop(name)
+        fx.write_spec(name, "filled\n" * 11)
+        fx.add_run(f"20260101T000000Z-{name}-ok1", name, "2026-01-01T00:00:00Z")
+        return fx, name
+
+    def _cli_env(self, fx, **extra):
+        xdg = os.path.join(self.fx.dir, "xdg")
+        os.makedirs(xdg, exist_ok=True)
+        env = fx.base_env(
+            LOOPS_INSTALL_BACKEND="systemd",
+            LOOPS_SYSTEMCTL=self.fx.bin,
+            LOOPS_SYSTEMD_UNIT_DIR=self.fx.unit_dir,
+            FAKE_SYSTEMCTL_LOG=self.fx.log,
+            LOOPS_LOGINCTL=self.loginctl,
+            XDG_RUNTIME_DIR=xdg,
+            FAKE_LOGINCTL_LINGER="yes",
+            LOOPCTL_INSTALL_POLL_TIMEOUT_S="0.5",
+            LOOPCTL_INSTALL_POLL_INTERVAL_S="0.1",
+        )
+        env.update(extra)
+        return env
+
+    def test_install_refuses_on_failed_host_check_before_writing_units(self):
+        fx, name = self._cli_root()
+        open(self.fx.log, "w").close()
+        env = self._cli_env(fx, FAKE_LOGINCTL_LINGER="no")
+        r = run_cli(["install", name, "--root", fx.root], env_overrides=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("refusing to install", r.stderr)
+        svc, timer = loopctl._systemd_unit_paths(name)
+        self.assertFalse(os.path.isfile(svc))
+        self.assertFalse(os.path.isfile(timer))
+        self.assertEqual(self.fx.calls(), [])
+
+    def test_install_failure_strings_say_systemd(self):
+        fx, name = self._cli_root()
+        env = self._cli_env(fx)
+        r = run_cli(["install", name, "--root", fx.root], env_overrides=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("under the scheduler (systemd)", r.stderr)
+
+    def test_console_install_systemd_unit_singleton_and_verify(self):
+        fx, _name = self._cli_root()
+        with open(os.path.join(fx.root, ".env"), "w") as f:
+            f.write("LOOPS_CONSOLE_ALLOW_HOSTS=a.example,a.example:443\n")
+            f.write("LOOPS_CONSOLE_PORT=18929\n")
+        httpd = _start_probe(200)
+        self.addCleanup(httpd.shutdown)
+        self.addCleanup(httpd.server_close)
+        probe = f"http://127.0.0.1:{httpd.server_address[1]}/api/state"
+        env = self._cli_env(
+            fx,
+            LOOPS_CONSOLE_PROBE_URL=probe,
+            LOOPCTL_CONSOLE_VERIFY_TIMEOUT_S="5",
+        )
+        open(self.fx.log, "w").close()
+        r = run_cli(["console", "install", "--root", fx.root], env_overrides=env)
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        unit = os.path.join(self.fx.unit_dir, "loops-console.service")
+        self.assertTrue(os.path.isfile(unit))
+        text = Path(unit).read_text()
+        self.assertIn("Restart=always", text)
+        self.assertIn("WantedBy=default.target", text)
+        self.assertIn("append:", text)
+        self.assertIn("console.out.log", text)
+        self.assertIn("console.err.log", text)
+        self.assertIn("serve --port 18929", text)
+        self.assertIn("--allow-host a.example", text)
+        self.assertIn("--allow-host a.example:443", text)
+        calls = " | ".join(self.fx.calls())
+        self.assertIn("daemon-reload", calls)
+        self.assertIn("enable --now loops-console.service", calls)
+
+        other = tempfile.mkdtemp(prefix="loops-other-root-")
+        self.addCleanup(shutil.rmtree, other, True)
+        Path(os.path.join(other, ".env")).write_text("LOOPS_CONSOLE_PORT=18929\n")
+        r2 = run_cli(["console", "install", "--root", other], env_overrides=env)
+        self.assertEqual(r2.returncode, 1)
+        self.assertIn("belongs to", r2.stderr)
+
+        un = run_cli(["console", "uninstall", "--root", fx.root], env_overrides=env)
+        self.assertEqual(un.returncode, 0, msg=un.stdout + un.stderr)
+        self.assertFalse(os.path.isfile(unit))
+        later = " | ".join(self.fx.calls())
+        self.assertIn("disable --now loops-console.service", later)
+        self.assertGreaterEqual(later.count("daemon-reload"), 2)
 
 
 if __name__ == "__main__":

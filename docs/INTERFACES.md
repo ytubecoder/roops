@@ -793,6 +793,7 @@ loopctl set-schedule <name> <spec>                                   # §5.1-val
 loopctl set-owner <name> <owner>                                     # B-17: owner-grammar-validate BEFORE any write; rewrite conf key; best-effort dashboard regen; no launchd work (owner isn't in the plist), no loop_events row
 loopctl dashboard                                                    # regenerate + print path
 loopctl serve [--port PORT] [--allow-host HOST ...]                  # local console (§13), default port 8929; --allow-host extends the §13.1 Host allowlist (trusted proxy)
+loopctl console [install|uninstall|status]                           # console service: generate+bootstrap the persistent unit (launchd label com.roops.console / systemd loops-console.service); status = unit present + loaded + GET /api/state 200
 loopctl findings <loop>                                              # open findings: id, severity, age, times_seen, disposition
 loopctl ack <loop> <finding_id> [--note …]                           # Amendment 1 disposition verbs —
 loopctl dismiss <loop> <finding_id> --note …                         #   note REQUIRED (audit trail)
@@ -999,6 +1000,17 @@ marker `[FILL: <hint>]`.
     (`refusing to install <name>: requirement unmet — <item> (<detail>)`, one line per unmet
     item, exit 1). Runs after validate and **before** the run-first precondition, so a loop that
     cannot run here never reaches "run `loopctl run` first".
+1b. **Host checks (systemd backend only):** after requirements and the run-first
+    precondition, before any unit is written. `_host_checks(root)` returns human messages
+    for every failed check (empty = ok). Any message → print each as
+    `refusing to install: <msg>`, exit 1, nothing written. Checks:
+    linger (`loginctl show-user <user> -p Linger` contains `Linger=yes`; seam `LOOPS_LOGINCTL`;
+    non-zero exit = failed);
+    timezone (only when `.env` has `LOOPS_EXPECT_TZ`: host zone from `os.readlink("/etc/localtime")`
+    after `zoneinfo/`, else `timedatectl show -p Timezone --value`; seams `LOOPS_LOCALTIME_PATH` /
+    `LOOPS_TIMEDATECTL`);
+    XDG (`XDG_RUNTIME_DIR` set **or** `/run/user/<uid>` is a directory — then the check
+    passes and `_systemctl` uses that default). Same gate on `loopctl console install`.
 2. **(Amendment 2 — 2026-07-30) Run-first precondition:** refuse a loop with zero runs whose
    `runner_status` is `completed` or `skipped-precheck` already recorded (`_db_query(root,
    "last-runs", loop=name, limit=50)`), with a message telling the user to run `loopctl run <name>`
@@ -1021,9 +1033,12 @@ marker `[FILL: <hint>]`.
    `StandardErrorPath` under `state/`, and the schedule from §5.1.
 4. `launchctl bootout gui/$UID/com.loops.<name>` (ignore failure) → `launchctl bootstrap
    gui/$UID <plist>`.
-5. `launchctl kickstart -p gui/$UID/com.loops.<name>` and then **verify a fresh run row appeared
-   with a non-failed runner_status**; if not, report failure loudly and leave the job booted out.
-   Env/auth breakage only surfaces in the real launchd context — this step is the point.
+5. Fire the install trigger (`launchctl kickstart -p` / `systemctl start --no-block`) and then
+   **verify a fresh run row appeared with a non-failed runner_status**; if not, report failure
+   loudly and leave the job torn down. Failure strings are backend-neutral:
+   `… after the install trigger — check the engine process under the scheduler ({backend})` /
+   `… check engine auth/env under the scheduler ({backend})`. Env/auth breakage only
+   surfaces in the real scheduler context — this step is the point.
 
 **Amendment 2026-08-22 — install is platform-dispatched (B-24).** Steps 1, 2 and 5 are backend-
 independent and unchanged. Steps 3 and 4 are the launchd *implementation* of "write the unit, arm
@@ -1170,26 +1185,33 @@ be added to the render path.
 - **Top strip:** fleet counts by status, `needs_attention` count, spend today / 7d, last regen time.
 - **Stale detection:** a loop overdue by > 1.5 × its `expected_interval_s` (§5.1) is flagged
   `stale` and counts toward `needs_attention`. `manual` loops are exempt.
-  **(Amendment 2026-07-30):** staleness applies only to *installed* loops. Install state is a
-  display-only check: `launchd/com.loops.<name>.plist` exists (file presence, never a
-  `launchctl` subprocess — the generator stays hermetic). A non-manual loop without a loaded
-  schedule renders as 休 "no schedule loaded" (supervised-only), is staleness-exempt, and does
-  not count toward `needs_attention` on schedule grounds; its status still counts as before.
+  **(Amendment 2026-07-30, rewritten B-25):** staleness applies only to *installed* loops.
+  Install state is `unit_files_present(root, name)` — file presence only, never a scheduler
+  subprocess (the generator stays hermetic): launchd backend → `launchd/com.loops.<name>.plist`
+  exists; systemd backend → **both** `loops-<name>.service` and `loops-<name>.timer` exist
+  under `LOOPS_SYSTEMD_UNIT_DIR` (default `~/.config/systemd/user`). Backend =
+  `LOOPS_INSTALL_BACKEND` if set (unknown value raises), else `launchd` on darwin and
+  `systemd` otherwise. Canonical in `bin/loopctl`; `dashboard/generate.py` carries a
+  lockstep mirror (must run with no `bin/` on disk) pinned by
+  `tests/test_dashboard.py::test_unit_files_present_mirror_never_drifts`. A non-manual
+  loop without unit files renders as 休 "no schedule loaded" (supervised-only), is
+  staleness-exempt, and does not count toward `needs_attention` on schedule grounds; its
+  status still counts as before. The 巡 tooltip reads `schedule loaded ({backend})`.
   Rationale: a supervised-only fleet rendered wall-to-wall `stale`, and fake next-run
   estimates ("in 4m" for a loop that will never fire) made the column meaningless.
   **(Console amendment, §13):** the same file-presence + conf-parse check is now three-way, still
-  without a `launchctl` subprocess: plist present and `enabled=true` → 巡 "schedule loaded"
-  (next-run shown); plist present and `enabled=false` → 休 "paused" (rounds toggled off via
-  console/`loopctl pause`; `next` reads "paused"); no plist → 休 "no schedule loaded"
+  without a scheduler subprocess: unit files present and `enabled=true` → 巡 "schedule loaded"
+  (next-run shown); unit files present and `enabled=false` → 休 "paused" (rounds toggled off via
+  console/`loopctl pause`; `next` reads "paused"); no unit files → 休 "no schedule loaded"
   (supervised-only, as above). **Staleness and `needs_attention` are `enabled`-blind**: pausing
-  a loop does NOT exempt it from either — `stale` keys on `installed` (plist presence) alone,
-  so a paused loop whose last run is overdue still renders `stale` and still counts toward
-  `needs_attention`. Only the no-plist state is staleness-exempt (the pre-existing 2026-07-30
+  a loop does NOT exempt it from either — `stale` keys on `installed` (`unit_files_present`)
+  alone, so a paused loop whose last run is overdue still renders `stale` and still counts toward
+  `needs_attention`. Only the no-unit-files state is staleness-exempt (the pre-existing 2026-07-30
   amendment above). **(Resolved 2026-07-30):** paused loops stay staleness-visible — settled,
   do not relitigate. Pause has no expiry (unlike `snooze --until`), so a paused-and-forgotten
   loop is exactly the failure mode `needs_attention` exists to catch; exempting it would
   create a silent way to turn a loop off forever. A deliberate long-term off is
-  `set-schedule manual`, which removes the plist and lands in the staleness-exempt 休
+  `set-schedule manual`, which removes the unit files and lands in the staleness-exempt 休
   no-schedule state. Paused → keep nagging; manual → exempt. That split is the design.
 - **Running/overdue/died trichotomy (§4.6, Amendment 2 — 2026-07-30):** for a run row with
   `finished_at IS NULL`, age is measured against the loop's `timeout_s` (missing/unparseable
@@ -1374,18 +1396,26 @@ expect_loop=None) -> list[str]` (empty = pass) and `read_meta(path) -> dict | No
 
 Local control surface for the dashboard. `bin/console.py`, started by `loopctl serve
 [--port PORT] [--allow-host HOST ...]` (default 8929), binds 127.0.0.1 ONLY. Trusted
-unsandboxed harness code: MAY shell out (`launchctl print` for live load state; `bin/loopctl`
+unsandboxed harness code: MAY shell out (`scheduler_loaded` for live load state; `bin/loopctl`
 subprocesses for all mutations — one code path for CLI and console). §10's hermeticity binds
-dashboard/generate.py, never this module. No daemon mode; persistent operation is the
-machine-local `com.roops.console` LaunchAgent (§13.1 amendment, B-22), which just runs
-`loopctl serve` under KeepAlive — the harness itself still has no daemon code.
+dashboard/generate.py, never this module. No daemon mode; persistent operation is
+`loopctl console install` (launchd label `com.roops.console` / systemd
+`loops-console.service`, machine-local) which just runs `loopctl serve` under KeepAlive /
+`Restart=always` — the harness itself still has no daemon code. The listener stays 127.0.0.1
+only.
+
+`scheduler_loaded(name)` is the live check: launchd `launchctl print gui/$uid/com.loops.<name>`;
+systemd `systemctl --user is-enabled loops-<name>.timer`. `_systemctl` defaults
+`XDG_RUNTIME_DIR` to `/run/user/<uid>` in the child when the parent left it unset (a
+non-login ssh shell does not set it; without it `systemctl --user` cannot reach the bus).
+Honours `LOOPS_LAUNCHCTL` / `LOOPS_SYSTEMCTL`.
 
 | endpoint | effect |
 |---|---|
 | `GET /` `/loops.html` | serve generated pages (loops.html regenerated if missing). `/reports.html` retired 2026-08-02 → 404 |
 | `GET /reports/<loop>/<file>` | serve one file from `<root>/reports/` — the dashboard's own `../reports/<name>/latest.html` links. Path regex allows `[A-Za-z0-9_-]` / `[A-Za-z0-9_.-]` only (no `/`, no `%`), plus an `os.path.realpath` containment check under `<root>/reports`. No directory listing; non-file → 404. Content-Type: `.html`→`text/html`, `.json`→`application/json`, `.md`→`text/plain`, else `application/octet-stream`. **Always answered with `Content-Security-Policy: sandbox allow-scripts`** — see below. |
-| `GET /api/state` | `{loops:[{name, schedule, enabled, plist_present, loaded}]}` |
-| `POST /api/loops/<name>/rounds {on}` | resume/pause (sets `enabled=` + bootstrap/bootout). `on` must be a real JSON boolean, else 400. 409 if no plist — install/uninstall stay CLI-only (supervised verification gate, §8.1). |
+| `GET /api/state` | `{loops:[{name, schedule, enabled, plist_present, loaded}]}`. Field names kept (B-11 hydration). `plist_present` = unit files present for this host's backend (launchd plist / systemd service+timer). `loaded` = `scheduler_loaded`. |
+| `POST /api/loops/<name>/rounds {on}` | resume/pause (sets `enabled=` + bootstrap/bootout). `on` must be a real JSON boolean, else 400. 409 if unit files are not present — install/uninstall stay CLI-only (supervised verification gate, §8.1). |
 | `POST /api/loops/<name>/schedule {spec}` | `set-schedule`: §5.1-validate, rewrite conf, re-render plist, bootout+bootstrap iff loaded. NEVER kickstart. `spec` must be a JSON string, else 400; 400 on bad grammar. **`spec: "manual"` is refused 400 by the console** even though it is valid §5.1 grammar: `_apply_schedule` implements manual as an UNINSTALL (bootout + remove the plist), and install/uninstall stay CLI-only (§8.1). The refusal is console-layer only — `loopctl set-schedule <name> manual` is unchanged. |
 | `POST /api/loops/<name>/run {}` | B-13 (§13.3): start ONE supervised run (`loopctl run <name>`) in a background worker. 202 `{ok:true, state:<run-status dict>}` snapshot; 404 unknown loop; 409 `{error, loop, started_at}` while the console-wide job slot is busy; body must be a JSON object (uniform 400). **POST only — any other method is a route MISS (generic 404), never matched-then-refused**: §13.1's Content-Type gate binds only POST, so a GET-matched run route would be a plain cross-origin CSRF that fires real runs. **No installed/enabled/schedule gate** — firing a paused or never-installed loop from the page is a deliberate human act (the whole point of B-13; contrast `rounds`' 409-without-plist). |
 | `GET /api/run/status` | bare run-status dict `{running, loop, started_at, finished_at, exit_code, ok, error}` (timestamps ISO-8601 UTC). Idle = `running:false` + nulls; the terminal snapshot persists across polls until the next job RESETS it (`loop` = new name, other fields back to null mid-flight). GET only — POST is a route miss. |
@@ -1461,9 +1491,11 @@ forges the exact credential this gate checks and would blind it to rebound hostn
 allowlisting the real public name is the honest form of the same trust decision. Exposure
 consequence, stated plainly: every mutation route (§13 table) becomes reachable by any
 device on the tailnet behind that hostname — the tailnet is the trust boundary. The console
-runs persistently for this via a machine-local LaunchAgent labelled `com.roops.console`
-(NOT `com.loops.<name>` — that namespace is reserved for loops), KeepAlive, logs under
-`state/`; like loop plists it is machine state, not repo content.
+runs persistently for this via `loopctl console install`: launchd label `com.roops.console`
+(NOT `com.loops.<name>` — that namespace is reserved for loops) or systemd
+`loops-console.service`, KeepAlive/`Restart=always`, logs under `state/`; like loop unit
+files it is machine state, not repo content. Args (`--port`, `--allow-host`) are baked from
+`.env` (`LOOPS_CONSOLE_PORT`, `LOOPS_CONSOLE_ALLOW_HOSTS`) at install time.
 
 ### 13.2 Page hydration
 

@@ -1551,11 +1551,29 @@ def _stamp_html(color, marker=None, extra_badges=()):
     return out + "</span>"
 
 
+def _install_backend():
+    """Lockstep mirror of loopctl._install_backend. Must not import bin/ (lazy-seam)."""
+    forced = os.environ.get("LOOPS_INSTALL_BACKEND")
+    if forced:
+        if forced not in ("launchd", "systemd"):
+            raise ValueError(f"invalid LOOPS_INSTALL_BACKEND {forced!r}")
+        return forced
+    return "launchd" if sys.platform.startswith("darwin") else "systemd"
+
+
 def _schedule_loaded(root, name):
-    """Display-only install-state check (§10 amendment 2026-07-30): the launchd plist file
-    written by `loopctl install` exists. File presence only — never shells out to launchctl,
-    so the generator stays hermetic and subprocess-free."""
-    return os.path.isfile(os.path.join(root, "launchd", f"com.loops.{name}.plist"))
+    """Display-only install-state check: unit files present for this host's backend
+    (launchd plist / systemd timer). File presence only — never shells out, so the
+    generator stays hermetic. Mirror of loopctl.unit_files_present."""
+    backend = _install_backend()
+    if backend == "launchd":
+        return os.path.isfile(os.path.join(root, "launchd", f"com.loops.{name}.plist"))
+    unit_dir = os.environ.get("LOOPS_SYSTEMD_UNIT_DIR") or os.path.join(
+        os.path.expanduser("~"), ".config", "systemd", "user"
+    )
+    service = os.path.join(unit_dir, f"loops-{name}.service")
+    timer = os.path.join(unit_dir, f"loops-{name}.timer")
+    return os.path.isfile(service) and os.path.isfile(timer)
 
 
 # Marubatsu marks for the tokonoma — severity/status rendered as 〇 △ ×, never emoji.
@@ -2018,7 +2036,7 @@ def _render_loop_summary(loop, now):
         sw = _switch.format(
             cls="on",
             aria="rounds on",
-            title="schedule loaded (launchd)",
+            title=f"schedule loaded ({_install_backend()})",
             kanji="巡",
             gloss=_en("on"),
         )
@@ -2253,9 +2271,9 @@ def _resolve_loop(
             latest_run.get("finished_at"), latest_run["started_at"], timeout_s, now
         )
 
-    # §10 amendment 2026-07-30: staleness only applies when the schedule is actually
-    # loaded (launchd plist present). A supervised-only loop is 休 — "no schedule
-    # loaded" — not overdue; flagging the whole fleet stale made the badge meaningless.
+    # §10: staleness only applies when the schedule is actually loaded (unit files
+    # for this host's backend: launchd plist / systemd timer). A supervised-only
+    # loop is 休 — "no schedule loaded" — not overdue.
     installed = _schedule_loaded(root, name)
     stale = False
     if installed and latest_run is not None and not died:

@@ -352,6 +352,11 @@ promise the machine will actually be awake at that instant. A loop whose stalene
 watchdog you actually rely on) should have a cadence tolerant of this, not one that assumes
 perfect punctuality.
 
+On systemd the analogue is `Persistent=true` on calendar timers: a firing missed while the
+host was down is caught up at boot. Same rule — document it, don't fight it. Interval timers
+use `OnBootSec=` as the initial trigger (a monotonic `OnUnitActiveSec` never fires until the
+service has run once). Linger must be on (`loginctl enable-linger`) or user timers die at logout.
+
 ## 6. Token/cost discipline
 
 There is no new mechanism here beyond what's already described above — cost control is a design

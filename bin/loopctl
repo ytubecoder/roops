@@ -38,6 +38,8 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -235,12 +237,21 @@ def _systemctl_bin():
 
 def _systemctl(args_list):
     """The ONLY place systemctl is ever invoked from. Always --user: the fleet
-    runs as an unprivileged account with linger on, never as root."""
+    runs as an unprivileged account with linger on, never as root.
+
+    A non-login ssh shell does not set XDG_RUNTIME_DIR; without it
+    `systemctl --user` says "Failed to connect to bus". Default it in the
+    child when the parent left it unset.
+    """
+    env = os.environ.copy()
+    if not env.get("XDG_RUNTIME_DIR"):
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
     return subprocess.run(
         [_systemctl_bin(), "--user"] + args_list,
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
@@ -391,6 +402,23 @@ def _systemd_set_enabled(name, enabled_value):
     return _systemctl(verb + [timer])
 
 
+def unit_files_present(root, name):
+    """File presence only, subprocess-free. launchd = plist; systemd = both units."""
+    if _install_backend() == "systemd":
+        service_path, timer_path = _systemd_unit_paths(name)
+        return os.path.isfile(service_path) and os.path.isfile(timer_path)
+    return os.path.isfile(_plist_path(root, name))
+
+
+def scheduler_loaded(name):
+    """Live check: launchctl print / systemctl is-enabled. Shells out via seams."""
+    if _install_backend() == "systemd":
+        _service, timer = _systemd_unit_names(name)
+        return _systemctl(["is-enabled", timer]).returncode == 0
+    uid = os.getuid()
+    return _launchctl(["print", f"gui/{uid}/{_service_label(name)}"]).returncode == 0
+
+
 def _systemd_is_installed(name):
     service_path, timer_path = _systemd_unit_paths(name)
     if not (os.path.isfile(service_path) and os.path.isfile(timer_path)):
@@ -412,14 +440,80 @@ def _install_teardown(root, name):
 
 
 def _is_installed(root, name):
-    if _install_backend() == "systemd":
-        return _systemd_is_installed(name)
-    plist_path = _plist_path(root, name)
-    if not os.path.isfile(plist_path):
-        return False
+    return unit_files_present(root, name) and scheduler_loaded(name)
+
+
+def _host_timezone():
+    path = os.environ.get("LOOPS_LOCALTIME_PATH", "/etc/localtime")
+    try:
+        target = os.readlink(path)
+    except OSError:
+        target = ""
+    if "zoneinfo/" in target:
+        return target.split("zoneinfo/", 1)[1]
+    timedatectl = os.environ.get("LOOPS_TIMEDATECTL", "timedatectl")
+    try:
+        r = subprocess.run(
+            [timedatectl, "show", "-p", "Timezone", "--value"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return (r.stdout or "").strip()
+    except OSError:
+        return ""
+
+
+def _host_checks(root, run_user_dir=None):
+    """systemd-only install-time host checks. Empty list = ok."""
+    messages = []
     uid = os.getuid()
-    r = _launchctl(["print", f"gui/{uid}/{_service_label(name)}"])
-    return r.returncode == 0
+    user = os.environ.get("USER") or "unknown"
+
+    loginctl = os.environ.get("LOOPS_LOGINCTL", "loginctl")
+    linger_ok = False
+    try:
+        r = subprocess.run(
+            [loginctl, "show-user", user, "-p", "Linger"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        linger_ok = r.returncode == 0 and "Linger=yes" in (r.stdout or "")
+    except OSError:
+        linger_ok = False
+    if not linger_ok:
+        messages.append(
+            f"linger is off for {user} — run: loginctl enable-linger {user} "
+            "(timers die at logout without it)"
+        )
+
+    try:
+        envf = loopconf.load_env(root)
+    except loopconf.EnvFileError:
+        envf = {}
+    expect_tz = envf.get("LOOPS_EXPECT_TZ")
+    if expect_tz:
+        host_tz = _host_timezone()
+        if host_tz != expect_tz:
+            messages.append(
+                f"host timezone is {host_tz}, fleet schedules are authored in {expect_tz} "
+                "(LOOPS_EXPECT_TZ) — fix the host or the .env, then reinstall"
+            )
+
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    run_user = (
+        run_user_dir
+        or os.environ.get("LOOPS_RUN_USER_DIR")
+        or f"/run/user/{uid}"
+    )
+    if not xdg and not os.path.isdir(run_user):
+        messages.append(
+            f"XDG_RUNTIME_DIR is unset and /run/user/{uid} does not exist — "
+            f"systemctl --user cannot reach the bus; "
+            f"export XDG_RUNTIME_DIR=/run/user/{uid}"
+        )
+    return messages
 
 
 # ---------------------------------------------------------------------------
@@ -1308,6 +1402,11 @@ def cmd_install(args):
     before_run_id = _latest_run_id(root, name)
 
     if _install_backend() == "systemd":
+        host_msgs = _host_checks(root)
+        if host_msgs:
+            for msg in host_msgs:
+                print(f"refusing to install: {msg}", file=sys.stderr)
+            return 1
         if _systemd_install(root, name, conf) != 0:
             return 1
         installed_path = _systemd_unit_paths(name)[1]
@@ -1360,17 +1459,20 @@ def cmd_install(args):
         time.sleep(interval_s)
 
     if not verified:
+        backend = _install_backend()
         if fresh_row is not None and not fresh_row.get("finished_at"):
             print(
                 f"install failed: fresh run recorded for {name} but never reached a "
                 f"terminal state (stuck in runner_status={fresh_row.get('runner_status')!r}) "
-                f"within {timeout_s:.0f}s after kickstart — check engine process under launchd",
+                f"within {timeout_s:.0f}s after the install trigger — check the engine process "
+                f"under the scheduler ({backend})",
                 file=sys.stderr,
             )
         else:
             print(
                 f"install failed: no fresh non-failed run recorded for {name} within "
-                f"{timeout_s:.0f}s after kickstart — check engine auth/env under launchd",
+                f"{timeout_s:.0f}s after the install trigger — check engine auth/env "
+                f"under the scheduler ({backend})",
                 file=sys.stderr,
             )
         _install_teardown(root, name)
@@ -1569,6 +1671,248 @@ def cmd_serve(args):
     import console
 
     return console.serve(args.root, args.port, allow_hosts=tuple(args.allow_host or ()))
+
+
+_CONSOLE_LABEL = "com.roops.console"
+_CONSOLE_UNIT = "loops-console.service"
+
+
+def _console_plist_path(root):
+    return os.path.join(root, "launchd", f"{_CONSOLE_LABEL}.plist")
+
+
+def _console_unit_path():
+    return os.path.join(_systemd_unit_dir(), _CONSOLE_UNIT)
+
+
+def _console_port_and_hosts(root):
+    env = loopconf.load_env(root)
+    port = int(env.get("LOOPS_CONSOLE_PORT") or 8929)
+    raw = env.get("LOOPS_CONSOLE_ALLOW_HOSTS") or ""
+    hosts = [h.strip() for h in raw.split(",") if h.strip()]
+    return port, hosts
+
+
+def _console_plist_dict(root, port, allow_hosts):
+    home = os.environ.get("HOME", os.path.expanduser("~"))
+    log_dir = os.path.abspath(os.path.join(root, "state", "launchd-logs"))
+    loopctl_bin = os.path.join(os.path.abspath(root), "bin", "loopctl")
+    args = [sys.executable, loopctl_bin, "serve", "--port", str(port)]
+    for host in allow_hosts:
+        args += ["--allow-host", host]
+    return {
+        "Label": _CONSOLE_LABEL,
+        "KeepAlive": True,
+        "RunAtLoad": True,
+        "WorkingDirectory": os.path.abspath(root),
+        "ProgramArguments": args,
+        "EnvironmentVariables": {
+            "HOME": home,
+            "PATH": _runtime_path(home),
+            "LOOPS_ROOT": os.path.abspath(root),
+        },
+        "StandardOutPath": os.path.join(log_dir, "console.out.log"),
+        "StandardErrorPath": os.path.join(log_dir, "console.err.log"),
+    }
+
+
+def _render_console_service(root, port, allow_hosts):
+    root = os.path.abspath(root)
+    home = os.environ.get("HOME", os.path.expanduser("~"))
+    log_dir = os.path.abspath(os.path.join(root, "state", "launchd-logs"))
+    loopctl_bin = os.path.join(root, "bin", "loopctl")
+    exec_parts = [sys.executable, loopctl_bin, "serve", "--port", str(port)]
+    for host in allow_hosts:
+        exec_parts += ["--allow-host", host]
+    exec_start = " ".join(exec_parts)
+    return (
+        "[Unit]\n"
+        "Description=roops console\n"
+        "After=network-online.target\n"
+        "[Service]\n"
+        "Type=simple\n"
+        "Restart=always\n"
+        "RestartSec=5\n"
+        f"WorkingDirectory={root}\n"
+        f"Environment=HOME={home}\n"
+        f"Environment=PATH={_runtime_path(home)}\n"
+        f"Environment=LOOPS_ROOT={root}\n"
+        f"ExecStart={exec_start}\n"
+        f"StandardOutput=append:{log_dir}/console.out.log\n"
+        f"StandardError=append:{log_dir}/console.err.log\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+
+
+def _console_existing_root(unit_path):
+    if not os.path.isfile(unit_path):
+        return None
+    with open(unit_path) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("Environment=LOOPS_ROOT="):
+                return line.split("Environment=LOOPS_ROOT=", 1)[1]
+    return None
+
+
+def _console_probe(port):
+    url = os.environ.get("LOOPS_CONSOLE_PROBE_URL") or (
+        f"http://127.0.0.1:{port}/api/state"
+    )
+    req = urllib.request.Request(url, headers={"Host": f"127.0.0.1:{port}"})
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.getcode()
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception as e:
+        return str(e)
+
+
+def _console_verify(port):
+    timeout_s = float(os.environ.get("LOOPCTL_CONSOLE_VERIFY_TIMEOUT_S", "30"))
+    deadline = time.monotonic() + timeout_s
+    while True:
+        result = _console_probe(port)
+        if result == 200:
+            return True, timeout_s
+        if time.monotonic() >= deadline:
+            return False, timeout_s
+        time.sleep(1)
+
+
+def _console_loaded():
+    if _install_backend() == "systemd":
+        return _systemctl(["is-enabled", _CONSOLE_UNIT]).returncode == 0
+    uid = os.getuid()
+    return _launchctl(["print", f"gui/{uid}/{_CONSOLE_LABEL}"]).returncode == 0
+
+
+def _console_uninstall(root, quiet=False):
+    backend = _install_backend()
+    if backend == "systemd":
+        path = _console_unit_path()
+        _systemctl(["disable", "--now", _CONSOLE_UNIT])
+        removed = False
+        if os.path.isfile(path):
+            os.remove(path)
+            removed = True
+        _systemctl(["daemon-reload"])
+        if not quiet:
+            suffix = "" if removed else " (no unit was present)"
+            print(f"uninstalled console{suffix}")
+        return 0
+    uid = os.getuid()
+    _launchctl(["bootout", f"gui/{uid}/{_CONSOLE_LABEL}"])
+    path = _console_plist_path(root)
+    removed = False
+    if os.path.isfile(path):
+        os.remove(path)
+        removed = True
+    if not quiet:
+        suffix = "" if removed else " (no unit was present)"
+        print(f"uninstalled console{suffix}")
+    return 0
+
+
+def _console_install(args):
+    root = args.root
+    port, hosts = _console_port_and_hosts(root)
+    backend = _install_backend()
+    os.makedirs(os.path.join(root, "state", "launchd-logs"), exist_ok=True)
+    if backend == "systemd":
+        host_msgs = _host_checks(root)
+        if host_msgs:
+            for msg in host_msgs:
+                print(f"refusing to install: {msg}", file=sys.stderr)
+            return 1
+        unit_path = _console_unit_path()
+        existing = _console_existing_root(unit_path)
+        if existing is not None and os.path.abspath(existing) != os.path.abspath(root):
+            print(
+                f"refusing: {_CONSOLE_UNIT} belongs to {existing}; uninstall it there first",
+                file=sys.stderr,
+            )
+            return 1
+        os.makedirs(_systemd_unit_dir(), exist_ok=True)
+        with open(unit_path, "w") as f:
+            f.write(_render_console_service(root, port, hosts))
+        r = _systemctl(["daemon-reload"])
+        if r.returncode != 0:
+            print(
+                f"install failed: systemctl daemon-reload error: {r.stderr.strip()}",
+                file=sys.stderr,
+            )
+            return 1
+        r = _systemctl(["enable", "--now", _CONSOLE_UNIT])
+        if r.returncode != 0:
+            print(
+                f"install failed: systemctl enable error: {r.stderr.strip()}",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        launchd_dir = os.path.join(root, "launchd")
+        os.makedirs(launchd_dir, exist_ok=True)
+        plist_path = _console_plist_path(root)
+        with open(plist_path, "wb") as f:
+            f.write(plistlib.dumps(_console_plist_dict(root, port, hosts), fmt=plistlib.FMT_XML))
+        uid = os.getuid()
+        _launchctl(["bootout", f"gui/{uid}/{_CONSOLE_LABEL}"])
+        r = _launchctl(["bootstrap", f"gui/{uid}", plist_path])
+        if r.returncode != 0:
+            print(
+                f"install failed: launchctl bootstrap error: {r.stderr.strip()}",
+                file=sys.stderr,
+            )
+            return 1
+    ok, timeout_s = _console_verify(port)
+    if not ok:
+        _console_uninstall(root, quiet=True)
+        print(
+            f"console install failed: no 200 from /api/state within {timeout_s:.0f}s",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"installed console ({backend})")
+    return 0
+
+
+def _console_status(args):
+    root = args.root
+    backend = _install_backend()
+    if backend == "systemd":
+        path = _console_unit_path()
+    else:
+        path = _console_plist_path(root)
+    present = os.path.isfile(path)
+    loaded = _console_loaded()
+    port, _hosts = _console_port_and_hosts(root)
+    http_val = _console_probe(port)
+    payload = {
+        "backend": backend,
+        "unit": {"present": present, "path": path},
+        "loaded": loaded,
+        "http": http_val,
+    }
+    if args.json:
+        print(json.dumps(payload))
+    else:
+        print(f"backend: {backend}")
+        print(f"unit: {'present' if present else 'absent'} ({path})")
+        print(f"loaded: {'yes' if loaded else 'no'}")
+        print(f"http: {http_val}")
+    return 0 if present and loaded and http_val == 200 else 1
+
+
+def cmd_console(args):
+    action = getattr(args, "action", None) or "status"
+    if action == "install":
+        return _console_install(args)
+    if action == "uninstall":
+        return _console_uninstall(args.root)
+    return _console_status(args)
 
 
 def cmd_findings(args):
@@ -1985,6 +2329,14 @@ def build_parser():
         "(repeatable; for a trusted local reverse proxy that forwards the real Host)",
     )
 
+    console_p = sub.add_parser("console", parents=[common_sub])
+    console_p.add_argument(
+        "action",
+        nargs="?",
+        default="status",
+        choices=["install", "uninstall", "status"],
+    )
+
     findings_p = sub.add_parser("findings", parents=[common_sub])
     findings_p.add_argument("loop")
 
@@ -2052,6 +2404,7 @@ def main(argv=None):
         "set-owner": cmd_set_owner,
         "dashboard": cmd_dashboard,
         "serve": cmd_serve,
+        "console": cmd_console,
         "findings": cmd_findings,
         "import": cmd_import,
         "requirements": cmd_requirements,

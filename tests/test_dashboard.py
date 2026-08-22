@@ -17,6 +17,8 @@ import tempfile
 import typing
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest import mock
 
 from dashboard import generate
 
@@ -486,6 +488,9 @@ class GenerateIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.fx = FixtureRoot()
         self.addCleanup(self.fx.cleanup)
+        self._backend = mock.patch.dict(os.environ, {"LOOPS_INSTALL_BACKEND": "launchd"})
+        self._backend.start()
+        self.addCleanup(self._backend.stop)
 
     def test_empty_state_no_loops_no_db_does_not_crash(self):
         out = os.path.join(self.fx.root, "dashboard", "loops.html")
@@ -2219,6 +2224,9 @@ class ConsoleControlsTests(unittest.TestCase):
     def setUp(self):
         self.fx = FixtureRoot()
         self.addCleanup(self.fx.cleanup)
+        self._backend = mock.patch.dict(os.environ, {"LOOPS_INSTALL_BACKEND": "launchd"})
+        self._backend.start()
+        self.addCleanup(self._backend.stop)
 
     def render_with(
         self, name="alpha", plist=False, schedule="interval:15m", enabled=None
@@ -2533,6 +2541,9 @@ class TestEnglishGlosses(unittest.TestCase):
     def setUp(self):
         self.fx = FixtureRoot()
         self.addCleanup(self.fx.cleanup)
+        self._backend = mock.patch.dict(os.environ, {"LOOPS_INSTALL_BACKEND": "launchd"})
+        self._backend.start()
+        self.addCleanup(self._backend.stop)
 
     def test_stamp_switch_and_run_meta_glosses(self):
         conn = self.fx.init_db()
@@ -3055,6 +3066,9 @@ class RunNowButtonTests(unittest.TestCase):
     def setUp(self):
         self.fx = FixtureRoot()
         self.addCleanup(self.fx.cleanup)
+        self._backend = mock.patch.dict(os.environ, {"LOOPS_INSTALL_BACKEND": "launchd"})
+        self._backend.start()
+        self.addCleanup(self._backend.stop)
 
     def run_branch(self, html):
         return _js_branch(_script_code(html), r"closest\(\s*['\"]\.con-run['\"]\s*\)")
@@ -3187,6 +3201,94 @@ class RunNowButtonTests(unittest.TestCase):
         html = self.render("alpha", installed=("alpha",))
         self.assertIsNotNone(_button(html, "con-run"), "no .con-run button to scan")
         assert_self_contained(self, html, "dashboard with the run-now control")
+
+
+class TestScheduleLoadedBackend(unittest.TestCase):
+    def setUp(self):
+        self.fx = FixtureRoot()
+        self.addCleanup(self.fx.cleanup)
+
+    def _html(self):
+        conn = self.fx.init_db()
+        self.fx.add_loop("alpha")
+        conn.close()
+        return generate.generate(
+            root=self.fx.root,
+            now=NOW,
+            loopconf_parse=fake_loopconf_parse(),
+            schedule_parse=fake_schedule_parse(),
+            return_html=True,
+        )
+
+    def test_schedule_loaded_systemd_both_units(self):
+        unit_dir = tempfile.mkdtemp(prefix="loops-dash-units-")
+        self.addCleanup(shutil.rmtree, unit_dir, True)
+        env = {
+            "LOOPS_INSTALL_BACKEND": "systemd",
+            "LOOPS_SYSTEMD_UNIT_DIR": unit_dir,
+        }
+        with mock.patch.dict(os.environ, env):
+            Path(os.path.join(unit_dir, "loops-alpha.service")).write_text("[Service]\n")
+            html = self._html()
+            self.assertNotIn("schedule loaded (systemd)", html)
+            self.assertIn("no schedule loaded", html)
+            Path(os.path.join(unit_dir, "loops-alpha.timer")).write_text("[Timer]\n")
+            html = self._html()
+            self.assertIn("schedule loaded (systemd)", html)
+
+    def test_unit_files_present_mirror_never_drifts(self):
+        import importlib.machinery as _ilm
+        import importlib.util as _ilu
+
+        loopctl_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "bin",
+            "loopctl",
+        )
+        loader = _ilm.SourceFileLoader("_drift_loopctl", loopctl_path)
+        spec = _ilu.spec_from_loader("_drift_loopctl", loader)
+        loopctl_mod = _ilu.module_from_spec(spec)
+        loader.exec_module(loopctl_mod)
+
+        root = tempfile.mkdtemp(prefix="loops-drift-root-")
+        self.addCleanup(shutil.rmtree, root, True)
+        unit_dir = tempfile.mkdtemp(prefix="loops-drift-units-")
+        self.addCleanup(shutil.rmtree, unit_dir, True)
+        launchd_dir = os.path.join(root, "launchd")
+        os.makedirs(launchd_dir, exist_ok=True)
+        name = "alpha"
+        plist = os.path.join(launchd_dir, f"com.loops.{name}.plist")
+        service = os.path.join(unit_dir, f"loops-{name}.service")
+        timer = os.path.join(unit_dir, f"loops-{name}.timer")
+
+        layouts = ("no files", "plist only", "service only", "both units", "plist+both")
+        for backend in ("launchd", "systemd"):
+            for layout in layouts:
+                for path in (plist, service, timer):
+                    if os.path.isfile(path):
+                        os.remove(path)
+                if layout in ("plist only", "plist+both"):
+                    Path(plist).write_text("<plist/>\n")
+                if layout in ("service only", "both units", "plist+both"):
+                    Path(service).write_text("[Service]\n")
+                if layout in ("both units", "plist+both"):
+                    Path(timer).write_text("[Timer]\n")
+                env = {
+                    "LOOPS_INSTALL_BACKEND": backend,
+                    "LOOPS_SYSTEMD_UNIT_DIR": unit_dir,
+                }
+                with mock.patch.dict(os.environ, env):
+                    self.assertEqual(
+                        generate._schedule_loaded(root, name),
+                        loopctl_mod.unit_files_present(root, name),
+                        (backend, layout),
+                    )
+
+        with mock.patch.dict(os.environ, {"LOOPS_INSTALL_BACKEND": "bogus"}):
+            with self.assertRaises(ValueError):
+                generate._schedule_loaded(root, name)
+            with self.assertRaises(ValueError):
+                loopctl_mod.unit_files_present(root, name)
 
 
 if __name__ == "__main__":

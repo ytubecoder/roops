@@ -15,7 +15,7 @@ Default root is `$HOME/projects/loops`. Override with `LOOPS_ROOT` or `--root <p
 
 ## 1. What loops is
 
-A thin harness that runs scheduled agent "loops" via launchd. Every loop is report/propose-only — enforced by per-loop permission axes at the engine level, never by prompt text. Findings persist across runs with dispositions (ack/dismiss/snooze/reopen). A static dashboard at `dashboard/loops.html` shows fleet state.
+A thin harness that runs scheduled agent "loops" via the host scheduler (launchd on macOS, systemd on Linux). Every loop is report/propose-only — enforced by per-loop permission axes at the engine level, never by prompt text. Findings persist across runs with dispositions (ack/dismiss/snooze/reopen). A static dashboard at `dashboard/loops.html` shows fleet state.
 
 The invariant: deterministic code you wrote (`precheck.sh`) gets full power; the model gets a sandbox. Do not reverse those roles.
 
@@ -75,7 +75,7 @@ Gates are unchanged from hand-authored loops: **analyze → apply → validate �
 4. `loopctl import <skill-path> --apply --answers answers.json --actor "claude/<project>"` — scaffolds the loop, records provenance. **Never installs.**
 5. `loopctl validate <name>` must exit 0. Any remaining `[FILL:` marker in `SPEC.md` is a hard fail.
 6. `loopctl run <name>` — then **read the report against ground truth**. Passing validate is necessary, never sufficient: validate cannot see a volatile `finding_id` rule or a precheck that skips forever. This step is the real gate.
-7. `loopctl install <name>` — goes live on launchd. It refuses unless a prior non-failed supervised run exists, so step 6 is mechanically enforced — with one caveat: a `runner_status=skipped-precheck` run also satisfies this precondition, and that status means the engine never actually ran (an empty-output `type=agent` precheck short-circuits before invocation) — so "mechanically enforced" guarantees a run row exists, not that step 6's report was ever produced to read.
+7. `loopctl install <name>` — goes live on the host scheduler (launchd on macOS, systemd on Linux). It refuses unless a prior non-failed supervised run exists, so step 6 is mechanically enforced — with one caveat: a `runner_status=skipped-precheck` run also satisfies this precondition, and that status means the engine never actually ran (an empty-output `type=agent` precheck short-circuits before invocation) — so "mechanically enforced" guarantees a run row exists, not that step 6's report was ever produced to read.
 
 After install, manage noise with dispositions — do not re-prompt the model to "stop mentioning X."
 
@@ -83,7 +83,7 @@ After install, manage noise with dispositions — do not re-prompt the model to 
 
 These are load-bearing. Do not paraphrase them into something softer.
 
-- The importer emits proposed precheck commands **commented out**. `precheck.sh` is trusted **UNSANDBOXED** bash — the four permission axes govern the **model**, not the precheck. A live precheck has the full run of the launchd user's account.
+- The importer emits proposed precheck commands **commented out**. `precheck.sh` is trusted **UNSANDBOXED** bash — the four permission axes govern the **model**, not the precheck. A live precheck has the full run of the host scheduler (launchd on macOS, systemd on Linux) user's account.
 - `[read-only?]` is an **advisory heuristic hint**, not a guarantee and not a security boundary. Known escapes exist (and more will). A human must read every line before uncommenting it. **NEVER** uncomment a line labelled `[MUTATING — do not enable]`, and never uncomment anything on the user's behalf without them reading it.
 - Permission axes are proposed at the report-only floor (`report_only` / `none` / `none` / `none`). Any raise is a user decision with a written justification — never silent, never inherited from the source skill.
 

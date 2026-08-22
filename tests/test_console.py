@@ -17,7 +17,10 @@ import importlib.util
 import io
 import json
 import os
+import shutil
+import stat
 import subprocess
+import tempfile
 import threading
 import time
 import unittest
@@ -25,6 +28,16 @@ from pathlib import Path
 from unittest import mock
 
 from test_loopctl import LoopsRoot
+
+_FAKE_SYSTEMCTL_SRC = """#!/usr/bin/env python3
+import os
+import sys
+log_path = os.environ.get("FAKE_SYSTEMCTL_LOG")
+if log_path:
+    with open(log_path, "a") as f:
+        f.write(" ".join(sys.argv[1:]) + "\\n")
+sys.exit(int(os.environ.get("FAKE_SYSTEMCTL_RC", "0")))
+"""
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONSOLE_PY = REPO_ROOT / "bin" / "console.py"
@@ -1240,6 +1253,85 @@ class TestRunRouteOriginGate(RunTriggerTestCase):
         self.assertEqual(self.stub.calls(), [])
         # positive control, as above
         self.assertEqual(self.gated("/api/loops/alpha/run")[0], 202)
+
+
+class TestConsoleApiSystemd(ConsoleTestCase):
+    def setUp(self):
+        super().setUp()
+        self.unit_dir = tempfile.mkdtemp(prefix="loops-console-units-")
+        self.addCleanup(shutil.rmtree, self.unit_dir, True)
+        self.fake_systemctl = os.path.join(self.unit_dir, "fake_systemctl.py")
+        with open(self.fake_systemctl, "w") as f:
+            f.write(_FAKE_SYSTEMCTL_SRC)
+        os.chmod(
+            self.fake_systemctl,
+            os.stat(self.fake_systemctl).st_mode | stat.S_IEXEC | stat.S_IXGRP,
+        )
+        self.systemctl_log = os.path.join(self.unit_dir, "systemctl.log")
+        orig = self.fixture.base_env
+
+        def base_env(**extra):
+            env = orig(**extra)
+            env["LOOPS_INSTALL_BACKEND"] = "systemd"
+            env["LOOPS_SYSTEMCTL"] = self.fake_systemctl
+            env["LOOPS_SYSTEMD_UNIT_DIR"] = self.unit_dir
+            env["FAKE_SYSTEMCTL_LOG"] = self.systemctl_log
+            return env
+
+        self.fixture.base_env = base_env
+
+    def write_units(self, name):
+        Path(os.path.join(self.unit_dir, f"loops-{name}.service")).write_text(
+            "[Service]\n"
+        )
+        Path(os.path.join(self.unit_dir, f"loops-{name}.timer")).write_text("[Timer]\n")
+
+    def test_state_plist_present_with_both_units_and_loaded_follows_is_enabled(self):
+        self.write_loop("alpha", schedule="daily:09:00")
+        self.write_units("alpha")
+        status, payload, _ = call(self.fixture, "GET", "/api/state")
+        self.assertEqual(status, 200)
+        a = {loop["name"]: loop for loop in json.loads(payload)["loops"]}["alpha"]
+        self.assertTrue(a["plist_present"])
+        self.assertTrue(a["loaded"])
+        status, payload, _ = call_raw_with_env(
+            self.fixture,
+            "GET",
+            "/api/state",
+            b"",
+            extra={"FAKE_SYSTEMCTL_RC": "1"},
+        )
+        a = {loop["name"]: loop for loop in json.loads(payload)["loops"]}["alpha"]
+        self.assertTrue(a["plist_present"])
+        self.assertFalse(a["loaded"])
+
+    def test_rounds_200_with_units_409_without(self):
+        self.write_loop("alpha", schedule="daily:09:00", enabled="true")
+        status, payload, _ = call(
+            self.fixture, "POST", "/api/loops/alpha/rounds", {"on": False}
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("loopctl install", json.loads(payload)["error"])
+        self.write_units("alpha")
+        status, payload, _ = call(
+            self.fixture, "POST", "/api/loops/alpha/rounds", {"on": False}
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("enabled=false", _read(self.conf_path("alpha")))
+
+    def test_state_plist_present_false_on_systemd_when_only_plist_exists(self):
+        self.write_loop("alpha", schedule="daily:09:00")
+        self.write_plist("alpha")
+        status, payload, _ = call(self.fixture, "GET", "/api/state")
+        self.assertEqual(status, 200)
+        a = {loop["name"]: loop for loop in json.loads(payload)["loops"]}["alpha"]
+        self.assertFalse(a["plist_present"])
+
+
+def call_raw_with_env(fixture, method, path, raw_body, extra=None):
+    env = fixture.base_env(**(extra or {}))
+    with mock.patch.dict(os.environ, env):
+        return console.handle_request(fixture.root, method, path, raw_body)
 
 
 if __name__ == "__main__":

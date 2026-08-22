@@ -39,7 +39,12 @@ must never interpret a shell, and the tests in §2 are the proof.
   touches nothing. This package ships only `probes/echo-test` (a test-only probe: header
   `probe-writes: none`, `probe-output: text`; prints its argv joined by `|`; `--check` prints
   `ok echo-test` and exits 0). Real probes come in WP4.
-- Built-ins are NOT files: `ping`, `list`, `check` (§1.2).
+- Built-ins are NOT files: `ping`, `list`, `check` (§1.2). Those three names are **reserved**: a
+  file by one of those names in `probes/` is refused by the server (`refused: reserved name`) and
+  omitted from `list`. Header parsing reads only the LEADING `# probe-*:` lines: the block must
+  start at line 2 (right after the shebang) and parsing stops at the first line that is not a
+  `# probe-*:` line — so a `probe-timeout-s` written further down in an ordinary comment is
+  ignored and cannot change the timeout.
 
 ### 1.2 `bin/probe-server` (Python, `#!/usr/bin/env python3`, executable)
 
@@ -173,7 +178,9 @@ Server:
   and the hex equals `sha256(file)[:12]`; `check echo-test` exits 0 with `ok echo-test`;
   `ping x` refused.
 - `test_server_refuses_symlink_and_bad_header` — a symlinked probe → refused; a probe with no
-  `probe-output` line → refused; a probe whose `probe:` name differs from the file name → refused.
+  `probe-output` line → refused; a probe whose `probe:` name differs from the file name → refused;
+  a file named `probes/list` (valid header) → `refused: reserved name` and absent from `list`;
+  a `# probe-timeout-s: 1` line placed AFTER a non-header comment line is ignored (default 120).
 - `test_server_timeout_kills_process_group` — a probe with `probe-timeout-s: 1` that spawns a
   child, both trapping TERM (`trap '' TERM`) and sleeping 30: server exits 124 within ~12 s, and
   neither pid is alive afterwards. Also: `probe-timeout-s: 9999` is clamped (assert via a probe

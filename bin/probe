@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""bin/probe — client for the probe channel (INTERFACES §14).
+
+    bin/probe <name> [arg …] [--out FILE]
+    bin/probe --check <name>
+    bin/probe --list
+    bin/probe --ping
+
+LOOPS_PROBE_HOST unset/empty → local mode (same clean env / timeout as the
+server). Set → ssh to the data host. Never builds a shell string.
+"""
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import probe_core  # noqa: E402
+
+
+def _usage(msg=None):
+    if msg:
+        sys.stderr.write(msg + "\n")
+    sys.stderr.write(
+        "usage: probe <name> [arg …] [--out FILE]\n"
+        "       probe --check <name>\n"
+        "       probe --list\n"
+        "       probe --ping\n"
+    )
+    return 2
+
+
+def parse_argv(argv):
+    out = None
+    check_names = []
+    flags = []
+    positionals = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--out":
+            i += 1
+            if i >= len(argv):
+                raise ValueError("--out requires a path")
+            out = argv[i]
+        elif a.startswith("--out="):
+            out = a.split("=", 1)[1]
+        elif a == "--check":
+            i += 1
+            if i >= len(argv):
+                raise ValueError("--check requires a name")
+            check_names.append(argv[i])
+        elif a.startswith("--check="):
+            check_names.append(a.split("=", 1)[1])
+        elif a in ("--list", "--ping"):
+            flags.append(a)
+        elif a in ("-h", "--help"):
+            flags.append("--help")
+        elif a.startswith("-"):
+            raise ValueError(f"unrecognized flag {a}")
+        else:
+            positionals.append(a)
+        i += 1
+    return {
+        "out": out,
+        "check_names": check_names,
+        "flags": flags,
+        "positionals": positionals,
+    }
+
+
+def _load_env(root):
+    try:
+        return probe_core.loopconf.load_env(root)
+    except probe_core.loopconf.EnvFileError as e:
+        sys.stderr.write(f"refused: .env: {e}\n")
+        return None
+
+
+def _refuse(reason):
+    sys.stderr.write(f"refused: {reason}\n")
+    return probe_core.EXIT_REFUSED
+
+
+def _run_with_out(out_path, runner):
+    handle = probe_core.atomic_out_file(out_path)
+    try:
+        rc = runner(handle.fd)
+        if rc == 0:
+            handle.commit()
+        else:
+            handle.abort()
+        return rc
+    except Exception:
+        handle.abort()
+        raise
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    try:
+        parsed = parse_argv(argv)
+    except ValueError as e:
+        return _usage(str(e))
+    if "--help" in parsed["flags"]:
+        return _usage()
+
+    flags = [f for f in parsed["flags"] if f != "--help"]
+    n_modes = len(flags) + (1 if parsed["check_names"] else 0) + (
+        1 if parsed["positionals"] else 0
+    )
+    if n_modes == 0:
+        return _usage("missing probe name")
+    if len(flags) + (1 if parsed["check_names"] else 0) > 1:
+        return _usage("use only one of --ping, --list, --check")
+    if flags and parsed["positionals"]:
+        return _usage("built-in flags take no probe name")
+    if parsed["check_names"] and parsed["positionals"]:
+        return _usage("--check does not take extra args")
+
+    root = probe_core.script_root(__file__)
+    file_env = _load_env(root)
+    if file_env is None:
+        return probe_core.EXIT_REFUSED
+
+    channel = probe_core.Channel(root, file_env=file_env, environ=os.environ)
+
+    if "--ping" in flags:
+        if parsed["out"]:
+            return _usage("--out is not valid with --ping")
+        result = channel.invoke_capture("ping", [])
+        if result.stdout:
+            sys.stdout.write(result.stdout)
+        if result.returncode == probe_core.EXIT_TRANSPORT:
+            if result.stderr:
+                sys.stderr.write(
+                    result.stderr if result.stderr.endswith("\n") else result.stderr + "\n"
+                )
+            return probe_core.EXIT_TRANSPORT
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+        return result.returncode
+
+    if "--list" in flags:
+        if parsed["out"]:
+            return _usage("--out is not valid with --list")
+        result = channel.invoke_capture("list", [])
+        if result.stdout:
+            sys.stdout.write(result.stdout)
+        if result.returncode == probe_core.EXIT_TRANSPORT:
+            if result.stderr:
+                sys.stderr.write(
+                    result.stderr if result.stderr.endswith("\n") else result.stderr + "\n"
+                )
+            return probe_core.EXIT_TRANSPORT
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+        return result.returncode
+
+    if parsed["check_names"]:
+        if parsed["out"]:
+            return _usage("--out is not valid with --check")
+        rc = 0
+        for name in parsed["check_names"]:
+            try:
+                probe_core.validate_verb_args(name, [])
+            except probe_core.Refuse as e:
+                return _refuse(e.reason)
+            one = channel.check_name(name)
+            if one != 0 and rc == 0:
+                rc = one
+        return rc
+
+    name, *args = parsed["positionals"]
+    try:
+        probe_core.validate_verb_args(name, args)
+    except probe_core.Refuse as e:
+        return _refuse(e.reason)
+
+    if parsed["out"]:
+        return _run_with_out(
+            parsed["out"],
+            lambda fd: channel.invoke_passthrough(name, args, stdout=fd),
+        )
+    return channel.invoke_passthrough(name, args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

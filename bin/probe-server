@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""bin/probe-server — forced command for the probe channel (INTERFACES §14).
+
+The data host's sshd `command=` points here. The server never interprets a
+shell: SSH_ORIGINAL_COMMAND is split on single spaces and matched against
+named probes in $LOOPS_ROOT/probes/.
+"""
+import argparse
+import os
+import stat
+import sys
+import time
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import probe_core  # noqa: E402
+
+PROBE_SERVER_VERSION = probe_core.PROBE_SERVER_VERSION
+
+
+def _refuse(reason):
+    sys.stderr.write(f"refused: {reason}\n")
+    return probe_core.EXIT_REFUSED
+
+
+def _load_env(root):
+    try:
+        return probe_core.loopconf.load_env(root)
+    except probe_core.loopconf.EnvFileError as e:
+        raise probe_core.Refuse(f".env: {e}") from e
+
+
+def _builtin_ping(args):
+    if args:
+        raise probe_core.Refuse("ping takes no args")
+    print(probe_core.ping_server_line())
+    return 0
+
+
+def _builtin_list(root, args):
+    if args:
+        raise probe_core.Refuse("list takes no args")
+    for line in probe_core.list_lines(root):
+        print(line)
+    return 0
+
+
+def _run_named_probe(root, name, args, file_env):
+    return probe_core.run_probe(root, name, args, file_env)
+
+
+def handle_forced(root):
+    t0 = time.monotonic()
+    verb = "-"
+    args = []
+    exit_code = probe_core.EXIT_REFUSED
+    probe_core.prune_logs(probe_core.ensure_log_dir(root))
+    try:
+        file_env = _load_env(root)
+        cmd = os.environ.get("SSH_ORIGINAL_COMMAND")
+        verb, args = probe_core.parse_ssh_command(cmd)
+        if verb == "ping":
+            exit_code = _builtin_ping(args)
+        elif verb == "list":
+            exit_code = _builtin_list(root, args)
+        elif verb == "check":
+            if len(args) != 1:
+                raise probe_core.Refuse("check takes one arg")
+            exit_code = _run_named_probe(root, args[0], ["--check"], file_env)
+        else:
+            exit_code = _run_named_probe(root, verb, args, file_env)
+        return exit_code
+    except probe_core.Refuse as e:
+        exit_code = _refuse(e.reason)
+        return exit_code
+    finally:
+        ms = int((time.monotonic() - t0) * 1000)
+        try:
+            probe_core.append_log(
+                root,
+                client=probe_core.ssh_client_addr(),
+                verb=verb,
+                args=args,
+                exit_code=exit_code,
+                ms=ms,
+            )
+        except OSError:
+            pass
+
+
+def _read_pubkey(path):
+    try:
+        with open(path, "r") as f:
+            lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+    except OSError as e:
+        raise probe_core.Refuse(f"cannot read pubkey: {e}") from e
+    if len(lines) != 1:
+        raise probe_core.Refuse("pubkey file must contain exactly one line")
+    parts = lines[0].split()
+    if len(parts) < 2 or parts[0] != "ssh-ed25519":
+        raise probe_core.Refuse("pubkey must be ssh-ed25519")
+    body = parts[1]
+    return f"ssh-ed25519 {body}"
+
+
+def _key_body(line):
+    parts = line.split()
+    for i, p in enumerate(parts):
+        if p == "ssh-ed25519" and i + 1 < len(parts):
+            return parts[i + 1]
+    return None
+
+
+def _ssh_paths():
+    ssh_dir = os.path.join(os.path.expanduser("~"), ".ssh")
+    ak = os.path.join(ssh_dir, "authorized_keys")
+    return ssh_dir, ak
+
+
+def _check_ssh_modes(ssh_dir, ak, *, ak_must_exist):
+    if os.path.isdir(ssh_dir):
+        mode = stat.S_IMODE(os.stat(ssh_dir).st_mode)
+        if mode != 0o700:
+            raise probe_core.Refuse(f".ssh dir mode is {mode:04o}, want 0700")
+    elif os.path.exists(ssh_dir):
+        raise probe_core.Refuse(".ssh exists but is not a directory")
+    if os.path.isfile(ak):
+        mode = stat.S_IMODE(os.stat(ak).st_mode)
+        if mode != 0o600:
+            raise probe_core.Refuse(f"authorized_keys mode is {mode:04o}, want 0600")
+    elif ak_must_exist:
+        raise probe_core.Refuse("authorized_keys missing")
+
+
+def _authorize_line(script_path, key):
+    abs_script = os.path.realpath(script_path)
+    return f'restrict,command="{abs_script}" {key} loops-probe'
+
+
+def cmd_authorize(argv):
+    parser = argparse.ArgumentParser(prog="probe-server")
+    parser.add_argument("--authorize", required=True, metavar="PUBKEY")
+    parser.add_argument("--write", action="store_true")
+    parser.add_argument("--replace", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        key = _read_pubkey(args.authorize)
+    except probe_core.Refuse as e:
+        return _refuse(e.reason)
+    line = _authorize_line(os.path.realpath(__file__), key)
+    print(line)
+    if not args.write:
+        return 0
+    try:
+        ssh_dir, ak = _ssh_paths()
+        if not os.path.isdir(ssh_dir):
+            os.mkdir(ssh_dir, 0o700)
+        _check_ssh_modes(ssh_dir, ak, ak_must_exist=False)
+        body = _key_body(line)
+        existing = []
+        if os.path.isfile(ak):
+            with open(ak, "r") as f:
+                existing = f.read().splitlines()
+        match_idxs = [i for i, ln in enumerate(existing) if _key_body(ln) == body]
+        if match_idxs and not args.replace:
+            return _refuse("key already present (pass --replace to rewrite)")
+        if match_idxs and args.replace:
+            for i in match_idxs:
+                existing[i] = line
+            # collapse to one line for that key
+            seen = False
+            rewritten = []
+            for ln in existing:
+                if _key_body(ln) == body:
+                    if seen:
+                        continue
+                    rewritten.append(line)
+                    seen = True
+                else:
+                    rewritten.append(ln)
+            data = "\n".join(rewritten) + ("\n" if rewritten else "")
+            fd = os.open(ak, os.O_WRONLY | os.O_TRUNC | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, data.encode("utf-8"))
+            finally:
+                os.close(fd)
+            os.chmod(ak, 0o600)
+            print(f"replaced {ak}")
+            return 0
+        fd = os.open(ak, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, (line + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.chmod(ak, 0o600)
+        print(f"appended {ak}")
+        return 0
+    except probe_core.Refuse as e:
+        return _refuse(e.reason)
+    except OSError as e:
+        return _refuse(str(e))
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    root = probe_core.script_root(__file__)
+    if argv and "SSH_ORIGINAL_COMMAND" in os.environ:
+        probe_core.prune_logs(probe_core.ensure_log_dir(root))
+        t0 = time.monotonic()
+        rc = _refuse("forced command does not take argv")
+        try:
+            probe_core.append_log(
+                root,
+                client=probe_core.ssh_client_addr(),
+                verb="-",
+                args=[],
+                exit_code=rc,
+                ms=int((time.monotonic() - t0) * 1000),
+            )
+        except OSError:
+            pass
+        return rc
+    if argv:
+        return cmd_authorize(argv)
+    return handle_forced(root)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

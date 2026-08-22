@@ -58,9 +58,11 @@ $LOOPS_ROOT/
   loops.d/<name>/                  # one dir per loop: loop.conf precheck.sh prompt.md dashboard.json
   loops.d/<name>/render.sh         # OPTIONAL page renderer (Amendment 2; executable = page-enabled)
   examples/<name>/                 # pilot loops, same shape; NEVER installed to launchd
+  .env                             # gitignored; machine-local host config (§3 / §5.0)
   state/loops.sqlite               # WAL; runs, heartbeats, metrics (§3)
   state/runs/<run_id>/             # contract.json, output.md, usage.json, engine.log, engine.status
   state/locks/<loop>.lock          # lock files (§2)
+  state/tmp/                       # runner TMPDIR default (§4.1)
   state/loop-data/<name>/          # loop-private durable state, 0700/0600 (Amendment 2)
   reports/<name>/YYYY-MM-DD-HHMM.md
   reports/<name>/latest.md         # atomically promoted symlink-free copy
@@ -71,8 +73,9 @@ $LOOPS_ROOT/
   docs/…
 ```
 
-`state/`, `reports/`, `launchd/*.plist`, `dashboard/loops.html` are gitignored — they are runtime
-artifacts. Every script must create the directories it needs (`mkdir -p`) rather than assuming.
+`state/`, `reports/`, `launchd/*.plist`, `dashboard/loops.html`, `.env` are gitignored — they are
+runtime / machine-local artifacts. Every script must create the directories it needs (`mkdir -p`)
+rather than assuming.
 
 ## 2. `bin/lock.py` — lock helper
 
@@ -298,6 +301,16 @@ Default `--from loops.d`; `--trigger manual`.
    _dashboard` (exit 0 only when free) gates a `dashboard/generate.py` call, both `|| true`d —
    a held lock silently skips the regen and nothing here may ever block or fail the run; the
    step 7 end-of-run regen (`--wait-s 30`) is unchanged and remains the authoritative regen.
+3a. **Env load + host requirements (config-only).** After `start-run` (a run row exists) and
+    before precheck: load `$LOOPS_ROOT/.env` via `loopconf.py env --root --json`. Malformed →
+    `runner_status=harness-error`, `status_reason=env_file_invalid`, headline/error_detail from
+    the loader's first stderr line, no engine. Each key is exported only if not already set in
+    the process environment; every key the file declares (set or not) is recorded as the engine
+    strip list. Then `requirements.py check --root --loop --from --no-live --json`: any unmet
+    item → `runner_status=precheck-failed`, `loop_status=alert`,
+    `error_detail="requirement unmet: <item> — <detail>"` (first unmet item in the headline;
+    all of them in `error_detail`), **no precheck, no engine**. Exit 2 from the checker is a
+    harness-error. The live `bin/probe --check` path is not used here (config-only).
 4. **Precheck** (`precheck.sh`, if present and executable): run with the same process-group timeout
    discipline as the engine, capped at `min(timeout_s, 300)`. stdout captured to
    `state/runs/<id>/precheck.out` with a **64 KiB cap** (truncate + append a truncation marker);
@@ -317,7 +330,8 @@ Default `--from loops.d`; `--trigger manual`.
 5. **Prompt assembly + engine invocation** (`type=agent`, or watchdog escalation): compose
    `PROMPT_FILE` per §6.2 — `prompt.md`, then the runner-generated `PRIOR FINDINGS` block (from
    `db.py prior-findings`, omitted when empty), then `PRECHECK OUTPUT` when present. Exec
-   `engines/<engine>.sh` with the env of §6, inside its **own process group** (`set -m` +
+   `engines/<engine>.sh` with the env of §6 (keys named in `.env` are unset for the adapter via
+   `env -u`; precheck and render keep the exported env), inside its **own process group** (`set -m` +
    background, or `setsid` where available). Runner-owned timeout: at `timeout_s` send `TERM` to
    the **process group**, wait a 10s grace, then `KILL`. Partial `engine.log` is preserved. The
    lock is released on every path (`trap ... EXIT`). Transient failures (adapter exit 12) are
@@ -451,7 +465,12 @@ One implementation, used by everything: `parse(path) -> (conf: dict, errors: lis
 defaults and type/range checks (grammar + field table below; unknown keys are errors). CLI:
 `loopconf.py parse --file F --json` (full dict + errors; exit 1 if errors) and
 `loopconf.py get --file F --key K` (resolved value incl. defaults; empty + exit 1 if unknown).
-`run-loop.sh` reads config via `loopconf.py get`/`parse --json`; `loopctl` and
+Also `loopconf.py env --root R [--json]` — prints `$LOOPS_ROOT/.env` as JSON (or `KEY=value`
+lines); missing file → `{}`; malformed → exit 1 with `{path}:{lineno}: {msg}` on stderr.
+`load_env(root) -> dict` is the importable form. Env keys match `ENV_KEY_RE` =
+`^[A-Z][A-Z0-9_]*$` (upper-case; `parse()` is not reused — its `KEY_RE` is lower-case). Max 64
+keys; duplicate key is an error. `$HOME`/`~` expand in every value. `run-loop.sh` reads config
+via `loopconf.py get`/`parse --json` and host env via `env --json`; `loopctl` and
 `dashboard/generate.py` import it. Dangerous-combo checks (§5.2) live in `loopctl validate`, not
 in the parser.
 
@@ -486,6 +505,7 @@ Python, and sourcing arbitrary files is a code-execution footgun):
 | `remote_mutation_justification` | cond | string | — | **required** when `perm_remote_mutation != none` |
 | `notes` | no | string | — | free text |
 | `tags` | no | comma-separated, each `^[a-z][a-z0-9:_-]{1,40}$`, deduped order-preserving, max 8 | — | grouping/filtering only; exact-match filter (Amendment 2 — 2026-07-30) |
+| `requires` | no | comma list of `kind:value`, max 16, kinds `os`/`bin`/`file`/`env`/`probe` | — | host needs (§5.3). Required-but-assumed: absence = portable, never an error. `os:` value must be `darwin` or `linux`. Deduped, order-preserving. |
 
 **Owner resolution (B-17 — 2026-08-03).** `bin/loopconf.py` exports `DEFAULT_OWNER = "loops"` and
 `resolve_owner(conf) -> (owner, assumed)`: an explicit owner passes through (`assumed=False`); a
@@ -560,6 +580,31 @@ Four independent axes. Defaults are the report-only floor: `report_only / none /
    grant network under a read-only sandbox (§7.2); the combo is a config contradiction, not a
    softer sandbox.
 
+### 5.3 Host requirements
+Optional `requires=` on `loop.conf`. Grammar: item `^(os|bin|file|env|probe):[^,\s]+$`, max 16,
+deduped. Unknown kind → parse error. Absence means portable.
+
+Single implementation: `bin/requirements.py`. `check(root, conf, *, live, env=None) ->
+list[(item, ok, detail)]`. CLI: `requirements.py check --root R --loop NAME [--from loops.d]
+[--no-live] [--json]` (exit 0 all ok, 1 any unmet, 2 usage/parse/malformed `.env` / loop not
+found). `env` is `{**os.environ` with `.env` applied where unset`}; the CLI builds that itself.
+
+| kind | ok when | live vs config-only |
+|---|---|---|
+| `os:X` | `sys.platform.startswith(X)` (`linux` matches `linux*`) | either |
+| `bin:NAME` | `shutil.which(NAME, path=runtime_path(home))` — the PATH a unit would get, not the caller's shell | either |
+| `file:PATH` | `$HOME`/`~` expanded; `isfile` and readable | either |
+| `env:KEY` | `KEY` non-empty in the merged env | either |
+| `probe:NAME` | **live** (`install` / `validate` / `loopctl requirements` default): `[<root>/bin/probe, "--check", NAME]` exit 0 (30 s, cwd=root); missing `bin/probe` → unmet `bin/probe missing`. **config-only** (`run-loop.sh`, `--no-live`): never touches the network. Local (no `LOOPS_PROBE_HOST`): `probes/NAME` is an executable file. Remote (`LOOPS_PROBE_HOST` set): the key file (`LOOPS_PROBE_KEY` or `~/.ssh/loops-probe`) is a readable file. | live may use the network; config-only must not |
+
+Enforcement:
+- `loopctl validate` — live check; unmet items are a **notice**, never an exit-code failure.
+- `loopctl install` — refuses (live) after validate and **before** the run-first precondition, one line per unmet item: `refusing to install <name>: requirement unmet — <item> (<detail>)`. Same refusal, verb swapped, for `resume` and `set-schedule` when the new spec is not `manual` (both would arm a timer). `pause` and `set-schedule manual` do not refuse.
+- `run-loop.sh` — config-only check after `.env` load, before precheck; unmet → `precheck-failed` / `alert`, no precheck, no engine.
+- `loopctl requirements [<name>…] [--json] [--no-live]` — fleet × requirement matrix for this host; zero names = every loop in `--from`; exit 1 if any in-scope loop is unmet.
+
+`runtime_path(home)` lives in `bin/requirements.py`; `loopctl` aliases it as `_runtime_path`.
+
 ## 6. Engine adapter interface
 
 `engines/<engine>.sh` is invoked by the runner as `engines/<engine>.sh` with **no arguments**;
@@ -581,6 +626,9 @@ permission axes to that CLI's flags, runs it, and writes four files. It contains
 | `PERM_FS_WRITE`, `PERM_NETWORK`, `PERM_LOCAL_EXEC`, `PERM_REMOTE_MUTATION` | axis values (§5.2) |
 | `EXEC_ALLOWLIST` | comma-separated patterns, possibly empty |
 | `LOOP_TYPE` | `agent` \| `watchdog` |
+
+Keys named in `$LOOPS_ROOT/.env` are unset for the adapter (`env -u` on the child). Precheck and
+render keep the exported env.
 
 ### 6.2 Prompt composition (runner-side, engine-neutral)
 `PROMPT_FILE` = `loops.d/<name>/prompt.md`, followed ALWAYS by the run-context block (the engine
@@ -755,6 +803,10 @@ loopctl import <skill-path> --apply [--answers F] [--name N]         #   static 
     [--owner OWNER] [--overwrite]                                    #   existing Agent Skill /
                                                                       #   scaffold a loop from it —
                                                                       #   see docs/SKILL_IMPORT.md
+loopctl requirements [<name>…] [--json] [--no-live]                  # host × requirement matrix
+                                                                      #   (§5.3); zero names = every
+                                                                      #   loop in --from; exit 1 if
+                                                                      #   any in-scope loop unmet
 ```
 Disposition verbs are thin wrappers over `db.py dispose` (+ dashboard regen so the change is
 visible immediately). The dashboard stays static (Change 4, Option A — settled with generalissimo
@@ -943,6 +995,10 @@ marker `[FILL: <hint>]`.
 ### 8.1 Install must self-verify
 `install` is not done when `launchctl bootstrap` returns. It must:
 1. Refuse `schedule=manual` and refuse a loop that fails `validate`.
+1a. **Requirements (live):** refuse when any `requires=` item is unmet on this host
+    (`refusing to install <name>: requirement unmet — <item> (<detail>)`, one line per unmet
+    item, exit 1). Runs after validate and **before** the run-first precondition, so a loop that
+    cannot run here never reaches "run `loopctl run` first".
 2. **(Amendment 2 — 2026-07-30) Run-first precondition:** refuse a loop with zero runs whose
    `runner_status` is `completed` or `skipped-precheck` already recorded (`_db_query(root,
    "last-runs", loop=name, limit=50)`), with a message telling the user to run `loopctl run <name>`

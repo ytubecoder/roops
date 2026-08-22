@@ -1,6 +1,7 @@
 """Tests for bin/loopconf.py — §5.0 + §5 loop.conf parser."""
 
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -461,6 +462,139 @@ class TestOwner(unittest.TestCase):
     def test_resolve_owner_absent_assumed(self):
         self.assertEqual(loopconf.resolve_owner({"owner": None}), ("loops", True))
         self.assertEqual(loopconf.resolve_owner({}), ("loops", True))
+
+
+class TestLoadEnv(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="loops-env-test-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def write_env(self, content):
+        path = Path(self.tmp) / ".env"
+        path.write_text(content)
+        return str(path)
+
+    def test_load_env_missing_file_is_empty(self):
+        self.assertEqual(loopconf.load_env(self.tmp), {})
+
+    def test_load_env_grammar(self):
+        self.write_env(
+            "FOO=bar\n"
+            "\n"
+            'BAZ="hello world"\n'
+            'QUOT="has \\"quotes\\""\n'
+            "# comment line\n"
+            "HOMEISH=$HOME/x\n"
+            "TILDE=~/x\n"
+            'SPACED="value with spaces" # trailing comment\n'
+            "\n"
+        )
+        got = loopconf.load_env(self.tmp)
+        home = os.path.expanduser("~")
+        self.assertEqual(
+            got,
+            {
+                "FOO": "bar",
+                "BAZ": "hello world",
+                "QUOT": 'has "quotes"',
+                "HOMEISH": home + "/x",
+                "TILDE": os.path.expanduser("~/x"),
+                "SPACED": "value with spaces",
+            },
+        )
+
+    def test_load_env_rejects_lowercase_key(self):
+        self.write_env("gc_base=1\n")
+        with self.assertRaises(loopconf.EnvFileError) as cm:
+            loopconf.load_env(self.tmp)
+        self.assertIn(":1:", str(cm.exception))
+
+    def test_load_env_rejects_duplicate_and_malformed(self):
+        self.write_env("FOO=a\nFOO=b\n")
+        with self.assertRaises(loopconf.EnvFileError) as cm:
+            loopconf.load_env(self.tmp)
+        self.assertIn(":2:", str(cm.exception))
+
+        self.write_env("bad line\n")
+        with self.assertRaises(loopconf.EnvFileError) as cm:
+            loopconf.load_env(self.tmp)
+        self.assertIn(":1:", str(cm.exception))
+
+        self.write_env('FOO="unterminated\n')
+        with self.assertRaises(loopconf.EnvFileError) as cm:
+            loopconf.load_env(self.tmp)
+        self.assertIn(":1:", str(cm.exception))
+
+    def test_load_env_max_keys(self):
+        lines = [f"KEY{i:02d}=v\n" for i in range(65)]
+        self.write_env("".join(lines))
+        with self.assertRaises(loopconf.EnvFileError):
+            loopconf.load_env(self.tmp)
+
+
+class TestRequires(unittest.TestCase):
+    def _parse_with(self, requires_line):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        p = os.path.join(d, "loop.conf")
+        with open(p, "w") as f:
+            f.write(MINIMAL_VALID)
+            if requires_line is not None:
+                f.write(requires_line + "\n")
+        return loopconf.parse(p)
+
+    def test_requires_parse_ok(self):
+        conf, errors = self._parse_with(
+            'requires="bin:gh, probe:av-scan, bin:gh"'
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(conf["requires"], ["bin:gh", "probe:av-scan"])
+
+    def test_requires_rejects_unknown_kind_and_os_value(self):
+        _conf, errors = self._parse_with("requires=auth:gh")
+        self.assertTrue(errors)
+        self.assertTrue(any("auth:gh" in e for e in errors))
+
+        _conf, errors = self._parse_with("requires=os:windows")
+        self.assertTrue(errors)
+        self.assertTrue(any("os:windows" in e for e in errors))
+
+    def test_requires_max_16(self):
+        seventeen = ",".join(f"bin:t{i}" for i in range(17))
+        _conf, errors = self._parse_with(f'requires="{seventeen}"')
+        self.assertTrue(any("16" in e or "max" in e for e in errors))
+
+    def test_requires_absent_is_none(self):
+        conf, errors = self._parse_with(None)
+        self.assertEqual(errors, [])
+        self.assertIsNone(conf["requires"])
+
+
+class TestEnvCLI(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="loops-env-cli-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def run_cli(self, args):
+        return subprocess.run(
+            [sys.executable, str(BIN)] + args,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_env_cli_json_and_error_exit(self):
+        env_path = Path(self.tmp) / ".env"
+        env_path.write_text("GC_BASE=http://x\nOTHER=1\n")
+        proc = self.run_cli(["env", "--root", self.tmp, "--json"])
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        data = json.loads(proc.stdout)
+        self.assertEqual(data, {"GC_BASE": "http://x", "OTHER": "1"})
+
+        env_path.write_text("bad line\n")
+        proc = self.run_cli(["env", "--root", self.tmp, "--json"])
+        self.assertEqual(proc.returncode, 1)
+        self.assertTrue(proc.stderr.strip())
 
 
 if __name__ == "__main__":

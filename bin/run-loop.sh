@@ -41,6 +41,12 @@ set -euo pipefail
 ROOT="${LOOPS_ROOT:-$HOME/projects/loops}"
 PY="python3"
 
+export TMPDIR="${TMPDIR:-$ROOT/state/tmp}"
+mkdir -p "$TMPDIR"
+chmod 700 "$TMPDIR" 2>/dev/null || true
+
+ENV_FILE_KEYS=""
+
 PRECHECK_MAX_TIMEOUT_S=300
 PRECHECK_CAP_BYTES=65536
 LOCK_WAIT_POLL_S=0.05
@@ -554,6 +560,89 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
+# Step 3a: load .env + host-requirement check (config-only). After start-run,
+# before precheck. Malformed .env → harness-error; unmet → precheck-failed.
+# ---------------------------------------------------------------------------
+
+env_err_file="$(mktemp "${TMPDIR:-/tmp}/loops-env-err.XXXXXX")"
+ENV_RC=0
+ENV_JSON="$("$PY" "$ROOT/bin/loopconf.py" env --root "$ROOT" --json 2>"$env_err_file")" || ENV_RC=$?
+if [ "$ENV_RC" != "0" ]; then
+  env_first_line="$(head -n1 "$env_err_file" 2>/dev/null || true)"
+  rm -f "$env_err_file"
+  [ -n "$env_first_line" ] || env_first_line="invalid .env"
+  finalize_and_finish harness-error alert alert - env_file_invalid "$env_first_line" - - 1 "$env_first_line"
+fi
+rm -f "$env_err_file"
+
+ENV_FILE_KEYS=""
+if [ -n "$ENV_JSON" ] && [ "$ENV_JSON" != "{}" ]; then
+  env_keys="$("$PY" -c 'import json,sys
+try:
+    d=json.loads(sys.argv[1])
+except Exception:
+    d={}
+print("\n".join(d.keys()))
+' "$ENV_JSON")"
+  while IFS= read -r key || [ -n "$key" ]; do
+    [ -z "$key" ] && continue
+    if [ -z "$ENV_FILE_KEYS" ]; then
+      ENV_FILE_KEYS="$key"
+    else
+      ENV_FILE_KEYS="$ENV_FILE_KEYS $key"
+    fi
+    if [ -z "${!key+x}" ]; then
+      val="$("$PY" -c 'import json,sys
+d=json.loads(sys.argv[1])
+sys.stdout.write(d.get(sys.argv[2], ""))
+' "$ENV_JSON" "$key")"
+      export "$key=$val"
+    fi
+  done <<EOF
+$env_keys
+EOF
+fi
+
+req_out_file="$(mktemp "${TMPDIR:-/tmp}/loops-req-out.XXXXXX")"
+req_err_file="$(mktemp "${TMPDIR:-/tmp}/loops-req-err.XXXXXX")"
+REQ_RC=0
+"$PY" "$ROOT/bin/requirements.py" check --root "$ROOT" --loop "$NAME" --from "$FROM" --no-live --json \
+  >"$req_out_file" 2>"$req_err_file" || REQ_RC=$?
+if [ "$REQ_RC" = "1" ]; then
+  req_msg="$("$PY" - "$req_out_file" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+unmet = [i for i in (d.get("items") or []) if not i.get("ok")]
+if not unmet:
+    print("requirement unmet")
+    print("requirement unmet")
+    sys.exit(0)
+first = unmet[0]
+headline = "requirement unmet: %s — %s" % (first.get("item") or "", first.get("detail") or "")
+print(headline)
+lines = [headline]
+for i in unmet[1:]:
+    lines.append("%s — %s" % (i.get("item") or "", i.get("detail") or ""))
+print("; ".join(lines))
+PY
+)"
+  req_headline="$(printf '%s\n' "$req_msg" | head -n1)"
+  req_detail="$(printf '%s\n' "$req_msg" | tail -n1)"
+  rm -f "$req_out_file" "$req_err_file"
+  finalize_and_finish precheck-failed alert alert - requirement_unmet "$req_headline" - - 1 "$req_detail"
+fi
+if [ "$REQ_RC" = "2" ] || [ "$REQ_RC" != "0" ]; then
+  req_first="$(head -n1 "$req_err_file" 2>/dev/null || true)"
+  rm -f "$req_out_file" "$req_err_file"
+  [ -n "$req_first" ] || req_first="requirements check failed (exit $REQ_RC)"
+  finalize_and_finish harness-error alert alert - harness_error "$req_first" - - 1 "$req_first"
+fi
+rm -f "$req_out_file" "$req_err_file"
+
+# ---------------------------------------------------------------------------
 # Step 4: precheck (§4.1.4)
 # ---------------------------------------------------------------------------
 
@@ -681,13 +770,30 @@ mkdir -p "$CONF_WORKDIR" 2>/dev/null || true
 
 _engine_runner_fn() {
   cd "$CONF_WORKDIR" 2>/dev/null || cd "$ROOT"
-  LOOP_NAME="$NAME" RUN_ID="$RUN_ID" LOOPS_ROOT="$ROOT" WORKDIR="$CONF_WORKDIR" \
-    PROMPT_FILE="$PROMPT_FILE" OUT_DIR="$OUT_DIR" TIMEOUT_S="$CONF_TIMEOUT_S" \
-    SCHEMA_FILE="$ROOT/contract/contract.schema.json" MODEL="$CONF_MODEL" \
-    PERM_FS_WRITE="$CONF_PERM_FS_WRITE" PERM_NETWORK="$CONF_PERM_NETWORK" \
-    PERM_LOCAL_EXEC="$CONF_PERM_LOCAL_EXEC" PERM_REMOTE_MUTATION="$CONF_PERM_REMOTE_MUTATION" \
-    EXEC_ALLOWLIST="$CONF_EXEC_ALLOWLIST" LOOP_TYPE="$CONF_TYPE" \
-    exec "$ENGINE_ADAPTER" > "$OUT_DIR/.adapter.stdio.log" 2>&1
+  # bash 3.2 + set -u: "${arr[@]}" on an empty array is an unbound-variable
+  # error, so only go through `env -u` when there is something to strip.
+  if [ -n "$ENV_FILE_KEYS" ]; then
+    UNSET_ARGS=()
+    for k in $ENV_FILE_KEYS; do
+      UNSET_ARGS+=(-u "$k")
+    done
+    exec env "${UNSET_ARGS[@]}" \
+      LOOP_NAME="$NAME" RUN_ID="$RUN_ID" LOOPS_ROOT="$ROOT" WORKDIR="$CONF_WORKDIR" \
+      PROMPT_FILE="$PROMPT_FILE" OUT_DIR="$OUT_DIR" TIMEOUT_S="$CONF_TIMEOUT_S" \
+      SCHEMA_FILE="$ROOT/contract/contract.schema.json" MODEL="$CONF_MODEL" \
+      PERM_FS_WRITE="$CONF_PERM_FS_WRITE" PERM_NETWORK="$CONF_PERM_NETWORK" \
+      PERM_LOCAL_EXEC="$CONF_PERM_LOCAL_EXEC" PERM_REMOTE_MUTATION="$CONF_PERM_REMOTE_MUTATION" \
+      EXEC_ALLOWLIST="$CONF_EXEC_ALLOWLIST" LOOP_TYPE="$CONF_TYPE" \
+      "$ENGINE_ADAPTER" > "$OUT_DIR/.adapter.stdio.log" 2>&1
+  else
+    LOOP_NAME="$NAME" RUN_ID="$RUN_ID" LOOPS_ROOT="$ROOT" WORKDIR="$CONF_WORKDIR" \
+      PROMPT_FILE="$PROMPT_FILE" OUT_DIR="$OUT_DIR" TIMEOUT_S="$CONF_TIMEOUT_S" \
+      SCHEMA_FILE="$ROOT/contract/contract.schema.json" MODEL="$CONF_MODEL" \
+      PERM_FS_WRITE="$CONF_PERM_FS_WRITE" PERM_NETWORK="$CONF_PERM_NETWORK" \
+      PERM_LOCAL_EXEC="$CONF_PERM_LOCAL_EXEC" PERM_REMOTE_MUTATION="$CONF_PERM_REMOTE_MUTATION" \
+      EXEC_ALLOWLIST="$CONF_EXEC_ALLOWLIST" LOOP_TYPE="$CONF_TYPE" \
+      exec "$ENGINE_ADAPTER" > "$OUT_DIR/.adapter.stdio.log" 2>&1
+  fi
 }
 
 STEP5_START_TS=$(date +%s)

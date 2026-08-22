@@ -18,7 +18,7 @@ export LOOPS_ENGINE_OVERRIDE=fake
 export LOOPS_ALLOW_FAKE_ENGINE=1
 
 reset_fake_env() {
-  unset FAKE_EXIT FAKE_SLEEP_S FAKE_INVALID FAKE_OMIT_TMP FAKE_CONTRACT_FILE LOOPS_RETRY_BACKOFF_S 2>/dev/null || true
+  unset FAKE_EXIT FAKE_SLEEP_S FAKE_INVALID FAKE_OMIT_TMP FAKE_CONTRACT_FILE LOOPS_RETRY_BACKOFF_S GC_BASE 2>/dev/null || true
 }
 reset_fake_env
 
@@ -729,6 +729,115 @@ test_start_regen_fires_before_engine_finishes() {
 }
 
 # ===========================================================================
+# .env seam + host requirements (B-25 WP1)
+# ===========================================================================
+
+test_env_file_reaches_precheck_and_render_not_engine() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  local dir; dir="$(make_loop "$root" loopenv agent)"
+  printf 'GC_BASE=http://x\n' > "$root/.env"
+  make_precheck "$dir" <<'EOF'
+#!/usr/bin/env bash
+echo "GC_BASE=$GC_BASE"
+EOF
+  cat > "$dir/render.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "GC_BASE=$GC_BASE" > "$OUT_DIR/gc_base_from_render.txt"
+exit 0
+EOF
+  chmod +x "$dir/render.sh"
+  run_runner "$root" loopenv
+  assert_eq "env-precheck: exit" "0" "$RUNNER_EXIT"
+  local run_id; run_id="$(last_run_field "$root" loopenv run_id)"
+  local precheck; precheck="$(cat "$root/state/runs/$run_id/precheck.out" 2>/dev/null || true)"
+  assert_contains "env-precheck: precheck saw .env value" "$precheck" "http://x"
+  local render; render="$(cat "$root/state/runs/$run_id/gc_base_from_render.txt" 2>/dev/null || true)"
+  assert_contains "env-precheck: render still has GC_BASE after engine" "$render" "http://x"
+  local engine_log; engine_log="$(cat "$root/state/runs/$run_id/engine.log" 2>/dev/null || true)"
+  assert_not_contains "env-precheck: engine must not see GC_BASE value" "$engine_log" "http://x"
+  rm -rf "$root"
+}
+
+test_env_file_explicit_export_wins_but_is_still_stripped_from_engine() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  local dir; dir="$(make_loop "$root" loopenv2 agent)"
+  printf 'GC_BASE=http://x\n' > "$root/.env"
+  make_precheck "$dir" <<'EOF'
+#!/usr/bin/env bash
+echo "GC_BASE=$GC_BASE"
+EOF
+  export GC_BASE="http://shell"
+  run_runner "$root" loopenv2
+  unset GC_BASE
+  assert_eq "env-explicit: exit" "0" "$RUNNER_EXIT"
+  local run_id; run_id="$(last_run_field "$root" loopenv2 run_id)"
+  local precheck; precheck="$(cat "$root/state/runs/$run_id/precheck.out" 2>/dev/null || true)"
+  assert_contains "env-explicit: precheck saw shell value" "$precheck" "http://shell"
+  assert_not_contains "env-explicit: precheck must not see .env value" "$precheck" "http://x"
+  local engine_log; engine_log="$(cat "$root/state/runs/$run_id/engine.log" 2>/dev/null || true)"
+  assert_not_contains "env-explicit: engine log has no GC_BASE" "$engine_log" "GC_BASE"
+  rm -rf "$root"
+}
+
+test_env_file_malformed_is_harness_error() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  make_loop "$root" loopbadenv agent >/dev/null
+  printf 'bad line\n' > "$root/.env"
+  run_runner "$root" loopbadenv
+  assert_eq "env-malformed: runner_status" "harness-error" "$(last_run_field "$root" loopbadenv runner_status)"
+  local detail; detail="$(last_run_field "$root" loopbadenv error_detail)"
+  assert_contains "env-malformed: error_detail names .env:1" "$detail" ".env:1"
+  local run_id; run_id="$(last_run_field "$root" loopbadenv run_id)"
+  assert_file_missing "env-malformed: engine not invoked" "$root/state/runs/$run_id/engine.log"
+  rm -rf "$root"
+}
+
+test_requirement_unmet_is_precheck_failed_without_engine() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  local dir; dir="$(make_loop "$root" loopreq agent "requires=bin:definitely-not-a-binary")"
+  make_precheck "$dir" <<'EOF'
+#!/usr/bin/env bash
+echo "precheck-ran"
+EOF
+  run_runner "$root" loopreq
+  assert_eq "req-unmet: runner_status" "precheck-failed" "$(last_run_field "$root" loopreq runner_status)"
+  assert_eq "req-unmet: loop_status" "alert" "$(last_run_field "$root" loopreq loop_status)"
+  local detail; detail="$(last_run_field "$root" loopreq error_detail)"
+  assert_contains "req-unmet: error_detail" "$detail" "requirement unmet: bin:definitely-not-a-binary"
+  local run_id; run_id="$(last_run_field "$root" loopreq run_id)"
+  local precheck; precheck="$(cat "$root/state/runs/$run_id/precheck.out" 2>/dev/null || true)"
+  if [ -z "$precheck" ]; then tr_ok; else tr_fail "req-unmet: precheck.out should be absent or empty (got [$precheck])"; fi
+  assert_file_missing "req-unmet: engine not invoked" "$root/state/runs/$run_id/engine.log"
+  rm -rf "$root"
+}
+
+test_tmpdir_under_state() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  local dir; dir="$(make_loop "$root" looptmp agent)"
+  make_precheck "$dir" <<'EOF'
+#!/usr/bin/env bash
+echo "$TMPDIR"
+EOF
+  local saved="${TMPDIR:-}"
+  unset TMPDIR
+  run_runner "$root" looptmp
+  if [ -n "$saved" ]; then export TMPDIR="$saved"; fi
+  assert_eq "tmpdir: exit" "0" "$RUNNER_EXIT"
+  local run_id; run_id="$(last_run_field "$root" looptmp run_id)"
+  local precheck; precheck="$(cat "$root/state/runs/$run_id/precheck.out" 2>/dev/null || true)"
+  assert_eq "tmpdir: precheck TMPDIR" "$root/state/tmp" "$precheck"
+  local mode
+  mode="$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode)[-3:])' "$root/state/tmp")"
+  assert_eq "tmpdir: directory mode 700" "700" "$mode"
+  rm -rf "$root"
+}
+
+# ===========================================================================
 # main
 # ===========================================================================
 
@@ -788,6 +897,13 @@ test_prompt_composition
 echo "== bin/run-loop.sh: start-of-run non-blocking dashboard regen =="
 test_start_regen_never_blocks_or_fails_when_dashboard_lock_held
 test_start_regen_fires_before_engine_finishes
+
+echo "== bin/run-loop.sh: .env seam + host requirements =="
+test_env_file_reaches_precheck_and_render_not_engine
+test_env_file_explicit_export_wins_but_is_still_stripped_from_engine
+test_env_file_malformed_is_harness_error
+test_requirement_unmet_is_precheck_failed_without_engine
+test_tmpdir_under_state
 
 echo
 echo "passed: $TR_PASSED, failed: $TR_FAILED"

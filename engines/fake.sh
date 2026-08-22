@@ -48,9 +48,8 @@ exit_code="${FAKE_EXIT:-0}"
 {
   echo "fake engine invoked for loop=${LOOP_NAME:-} run=${RUN_ID}"
   echo "loop_type=${LOOP_TYPE:-} model=${MODEL:-} timeout_s=${TIMEOUT_S:-} exit=${exit_code}"
-  if [ -n "${PROMPT_FILE:-}" ] && [ -f "${PROMPT_FILE:-}" ]; then
-    echo "--- prompt ---"
-    cat "$PROMPT_FILE"
+  if [ -n "${GC_BASE+x}" ]; then
+    echo "GC_BASE=$GC_BASE"
   fi
 } > "$OUT_DIR/engine.log" 2>&1 || true
 

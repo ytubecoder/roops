@@ -412,6 +412,12 @@ class TestNew(LoopsRootTestCase):
         text = _read(conf_path)
         self.assertIn("name=hello-loop", text)
 
+    def test_new_scaffold_has_requires_comment(self):
+        r = run_cli(["new", "hello-loop", "--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        text = _read(os.path.join(self.fixture.loop_dir("hello-loop"), "loop.conf"))
+        self.assertIn("# requires=", text)
+
     def test_scaffold_prompt_has_finding_identity_and_rules(self):
         run_cli(["new", "hello-loop", "--root", self.root])
         text = _read(os.path.join(self.fixture.loop_dir("hello-loop"), "prompt.md"))
@@ -3617,6 +3623,131 @@ class TestValidateOwnerNotices(LoopsRootTestCase):
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         payload = json.loads(r.stdout)["owned"]
         self.assertEqual(payload["notices"], [])
+
+
+class TestRequirementsVerb(LoopsRootTestCase):
+    def _add_spec(self, name):
+        self.fixture.write_spec(name, "filled\n" * 11)
+
+    def test_requirements_verb_matrix_and_exit(self):
+        self.fixture.minimal_valid_loop("portable", extra_lines=["owner=loops"])
+        self.fixture.minimal_valid_loop(
+            "stuck",
+            extra_lines=["owner=loops", "requires=bin:definitely-not-a-binary"],
+        )
+        r = run_cli(
+            ["requirements", "portable", "stuck", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertIn("UNMET stuck", r.stdout)
+        self.assertIn("bin:definitely-not-a-binary", r.stdout)
+        self.assertTrue(
+            "OK portable" in r.stdout
+            or "OK portable (no requirements declared)" in r.stdout
+        )
+
+        r_all = run_cli(
+            ["requirements", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r_all.returncode, 1, msg=r_all.stdout + r_all.stderr)
+        self.assertIn("portable", r_all.stdout)
+        self.assertIn("stuck", r_all.stdout)
+
+        r_json = run_cli(
+            ["requirements", "--root", self.root, "--json"],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r_json.returncode, 1, msg=r_json.stdout + r_json.stderr)
+        payload = json.loads(r_json.stdout)
+        self.assertIn("portable", payload)
+        self.assertIn("stuck", payload)
+        self.assertTrue(payload["portable"]["ok"])
+        self.assertFalse(payload["stuck"]["ok"])
+        self.assertIsInstance(payload["stuck"]["items"], list)
+        self.assertEqual(
+            payload["stuck"]["items"][0]["item"], "bin:definitely-not-a-binary"
+        )
+        self.assertFalse(payload["stuck"]["items"][0]["ok"])
+
+    def test_validate_notices_unmet_requirements_without_failing(self):
+        self.fixture.minimal_valid_loop(
+            "needsgh",
+            extra_lines=["owner=loops", "requires=bin:definitely-not-a-binary"],
+        )
+        self._add_spec("needsgh")
+        r = run_cli(
+            ["validate", "needsgh", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("OK needsgh", r.stdout)
+        self.assertIn(
+            "note: requirement unmet on this host: bin:definitely-not-a-binary —",
+            r.stdout,
+        )
+
+    def test_install_refuses_unmet_requirement_before_run_first_check(self):
+        self.fixture.minimal_valid_loop(
+            "needsgh",
+            extra_lines=["owner=loops", "requires=bin:definitely-not-a-binary"],
+        )
+        self._add_spec("needsgh")
+        r = run_cli(
+            ["install", "needsgh", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertIn("requirement unmet", r.stderr)
+        self.assertNotIn("no non-failed supervised run", r.stderr)
+        plist = os.path.join(self.root, "launchd", "com.loops.needsgh.plist")
+        self.assertFalse(os.path.isfile(plist))
+        self.assertEqual(self.fixture.launchctl_calls(), [])
+
+    def test_resume_and_set_schedule_refuse_unmet(self):
+        self.fixture.minimal_valid_loop(
+            "needsgh",
+            extra_lines=[
+                "owner=loops",
+                "requires=bin:definitely-not-a-binary",
+                "enabled=false",
+            ],
+        )
+        r = run_cli(
+            ["resume", "needsgh", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertIn("requirement unmet", r.stderr)
+
+        r = run_cli(
+            ["set-schedule", "needsgh", "daily:07:30", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertIn("requirement unmet", r.stderr)
+
+        r = run_cli(
+            ["pause", "needsgh", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+
+        r = run_cli(
+            ["set-schedule", "needsgh", "manual", "--root", self.root],
+            env_overrides=self.fixture.base_env(),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+
+    def test_requirements_is_a_known_verb(self):
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        r = run_cli(
+            ["--actor", "requirements"], env_overrides={"LOOPS_ROOT": decoy}
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("ambiguous invocation", r.stderr)
 
 
 if __name__ == "__main__":

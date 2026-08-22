@@ -62,6 +62,9 @@ schedule = _load_module_from_path(os.path.join(_HERE, "schedule.py"), "_loopctl_
 skill_import = _load_module_from_path(
     os.path.join(_HERE, "skill_import.py"), "_loopctl_skill_import"
 )
+requirements = _load_module_from_path(
+    os.path.join(_HERE, "requirements.py"), "_loopctl_requirements"
+)
 
 _DB_BIN = os.path.join(_HERE, "db.py")
 _DASHBOARD_GENERATE = os.path.join(_REPO_ROOT, "dashboard", "generate.py")
@@ -682,6 +685,70 @@ def _write_file(path, content):
         f.write(content)
 
 
+_REQUIRES_COMMENT = (
+    "# requires=   # host needs: os:linux|darwin, bin:<name>, file:<path>, "
+    "env:<KEY>, probe:<name>\n"
+)
+
+
+def _insert_requires_comment(conf_path):
+    """Emit the commented requires= hint after tags (or notes) in a scaffold."""
+    if not os.path.isfile(conf_path):
+        return
+    with open(conf_path, "r") as f:
+        text = f.read()
+    if "# requires=" in text:
+        return
+    lines = text.splitlines(keepends=True)
+    insert_at = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("tags=") or stripped.startswith("# tags="):
+            insert_at = i + 1
+    if insert_at is None:
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("notes=") or stripped.startswith("# notes="):
+                insert_at = i + 1
+    if insert_at is None:
+        insert_at = len(lines)
+    lines.insert(insert_at, _REQUIRES_COMMENT)
+    with open(conf_path, "w") as f:
+        f.writelines(lines)
+
+
+def _merged_env(root):
+    env = dict(os.environ)
+    for k, v in loopconf.load_env(root).items():
+        env.setdefault(k, v)
+    return env
+
+
+def _requirement_results(root, from_dir, name, *, live):
+    conf_path = os.path.join(root, from_dir, name, "loop.conf")
+    if not os.path.isfile(conf_path):
+        return []
+    conf, _errors = loopconf.parse(conf_path)
+    env = _merged_env(root)
+    return requirements.check(root, conf, live=live, env=env)
+
+
+def _unmet_requirements(root, from_dir, name, *, live):
+    return [
+        (item, detail)
+        for item, ok, detail in _requirement_results(root, from_dir, name, live=live)
+        if not ok
+    ]
+
+
+def _refuse_unmet(verb, name, unmet):
+    for item, detail in unmet:
+        print(
+            f"refusing to {verb} {name}: requirement unmet — {item} ({detail})",
+            file=sys.stderr,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Scaffold templates (§8 "loopctl new scaffolding")
 #
@@ -703,22 +770,7 @@ _render_template = skill_import._render_template
 # launchd plist generation
 # ---------------------------------------------------------------------------
 
-def _runtime_path(home):
-    """The PATH a scheduled run gets. Single source for both emitters: neither
-    launchd nor a systemd user unit inherits a login shell's PATH, and the
-    engine CLIs live in $HOME/.local/bin. /opt/homebrew is a no-op on Linux;
-    it stays so the two backends cannot drift apart."""
-    return ":".join(
-        [
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            os.path.join(home, ".local/bin"),
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin",
-        ]
-    )
+_runtime_path = requirements.runtime_path
 
 
 def _plist_dict(root, name, conf):
@@ -774,12 +826,14 @@ def cmd_new(args):
     os.makedirs(loop_dir)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    conf_path = os.path.join(loop_dir, "loop.conf")
     _write_file(
-        os.path.join(loop_dir, "loop.conf"),
+        conf_path,
         _render_template(
             _LOOP_CONF_TEMPLATE, args.name, type=args.type_, engine=args.engine, date=today, owner=owner
         ),
     )
+    _insert_requires_comment(conf_path)
     _write_file(os.path.join(loop_dir, "prompt.md"), _render_template(_PROMPT_MD_TEMPLATE, args.name))
     _write_file(os.path.join(loop_dir, "SPEC.md"), _render_template(_SPEC_MD_TEMPLATE, args.name))
     _write_file(os.path.join(loop_dir, "dashboard.json"), '{"panels": []}\n')
@@ -815,7 +869,9 @@ def cmd_validate(args):
     for name in names:
         errors = _validate_one(args.root, args.from_dir, name)
         results[name] = errors
-        notices[name] = _owner_notices(args.root, args.from_dir, name)
+        notices[name] = _owner_notices(args.root, args.from_dir, name) + _requirement_notices(
+            args.root, args.from_dir, name
+        )
         if errors:
             any_fail = True
 
@@ -857,6 +913,71 @@ def _owner_notices(root, from_dir, name):
             f"or run `loopctl set-owner {name} <owner>`"
         ]
     return []
+
+
+def _requirement_notices(root, from_dir, name):
+    """Non-fatal: a valid loop can still be unrunnable on this host."""
+    conf_path = os.path.join(root, from_dir, name, "loop.conf")
+    if not os.path.isfile(conf_path):
+        return []
+    conf, errors = loopconf.parse(conf_path)
+    if errors:
+        return []
+    try:
+        env = _merged_env(root)
+    except loopconf.EnvFileError:
+        return []
+    results = requirements.check(root, conf, live=True, env=env)
+    return [
+        f"requirement unmet on this host: {item} — {detail}"
+        for item, ok, detail in results
+        if not ok
+    ]
+
+
+def cmd_requirements(args):
+    names = list(args.loop_names) if args.loop_names else _discover_loop_names(
+        args.root, args.from_dir
+    )
+    live = not getattr(args, "no_live", False)
+    as_json = bool(getattr(args, "json", False))
+    payload = {}
+    any_unmet = False
+    any_missing = False
+    for name in names:
+        conf_path = os.path.join(args.root, args.from_dir, name, "loop.conf")
+        if not os.path.isfile(conf_path):
+            print(f"loop not found: {name}", file=sys.stderr)
+            any_missing = True
+            continue
+        try:
+            results = _requirement_results(args.root, args.from_dir, name, live=live)
+        except loopconf.EnvFileError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        items = [
+            {"item": item, "ok": ok, "detail": detail} for item, ok, detail in results
+        ]
+        ok = all(row["ok"] for row in items)
+        if not ok:
+            any_unmet = True
+        payload[name] = {"ok": ok, "items": items}
+        if as_json:
+            continue
+        if not items:
+            print(f"OK {name} (no requirements declared)")
+            continue
+        print(f"{'OK' if ok else 'UNMET'} {name}")
+        for row in items:
+            if row["ok"]:
+                print(f"  + {row['item']}")
+            else:
+                print(f"  - {row['item']}: {row['detail']}")
+    if as_json:
+        print(json.dumps(payload))
+    if any_missing:
+        return 2
+    return 1 if any_unmet else 0
 
 
 def cmd_run(args):
@@ -1158,6 +1279,15 @@ def cmd_install(args):
             print(f"  - {e}", file=sys.stderr)
         return 1
 
+    try:
+        unmet = _unmet_requirements(root, args.from_dir, name, live=True)
+    except loopconf.EnvFileError as e:
+        print(f"refusing to install {name}: {e}", file=sys.stderr)
+        return 1
+    if unmet:
+        _refuse_unmet("install", name, unmet)
+        return 1
+
     # Amendment 2 (2026-07-30): install requires a prior non-failed supervised
     # run to already exist — makes the documented validate -> supervised run ->
     # install gauntlet mechanical rather than advisory. Applies to ALL loops,
@@ -1279,6 +1409,16 @@ def _set_enabled(args, enabled_value):
         print(f"loop not found: {name}", file=sys.stderr)
         return 1
 
+    if enabled_value:
+        try:
+            unmet = _unmet_requirements(root, args.from_dir, name, live=True)
+        except loopconf.EnvFileError as e:
+            print(f"refusing to resume {name}: {e}", file=sys.stderr)
+            return 1
+        if unmet:
+            _refuse_unmet("resume", name, unmet)
+            return 1
+
     _rewrite_conf_key(conf_path, "enabled", "true" if enabled_value else "false")
 
     if _install_backend() == "systemd":
@@ -1321,6 +1461,17 @@ def _apply_schedule(root, from_dir, name, spec):
     if not os.path.isfile(conf_path):
         raise ValueError(f"loop not found: {name}")
     schedule.parse(spec)  # raises ValueError on bad grammar — validate BEFORE any write
+    if spec != "manual":
+        try:
+            unmet = _unmet_requirements(root, from_dir, name, live=True)
+        except loopconf.EnvFileError as e:
+            raise ValueError(str(e)) from e
+        if unmet:
+            _refuse_unmet("set-schedule", name, unmet)
+            raise ValueError(
+                "requirement unmet — "
+                + "; ".join(f"{item} ({detail})" for item, detail in unmet)
+            )
     conf, _errors = loopconf.parse(conf_path)
     old_spec = conf.get("schedule", "")
     _rewrite_conf_key(conf_path, "schedule", spec)
@@ -1647,6 +1798,7 @@ def _cmd_import_apply(args):
     except skill_import.SkillApplyError as e:
         print(str(e), file=sys.stderr)
         return 1
+    _insert_requires_comment(os.path.join(dest_dir, "loop.conf"))
 
     _record_event(
         args.root,
@@ -1781,6 +1933,10 @@ def build_parser():
     validate_p.add_argument("name", nargs="?")
     validate_p.add_argument("--all", action="store_true")
 
+    req_p = sub.add_parser("requirements", parents=[common_sub])
+    req_p.add_argument("loop_names", nargs="*", metavar="name")
+    req_p.add_argument("--no-live", action="store_true")
+
     run_p = sub.add_parser("run", parents=[common_sub])
     run_p.add_argument("name")
     run_p.add_argument("--trigger", default="manual")
@@ -1898,6 +2054,7 @@ def main(argv=None):
         "serve": cmd_serve,
         "findings": cmd_findings,
         "import": cmd_import,
+        "requirements": cmd_requirements,
         "ack": lambda a: cmd_disposition(a, "ack"),
         "dismiss": lambda a: cmd_disposition(a, "dismiss"),
         "snooze": lambda a: cmd_disposition(a, "snooze"),

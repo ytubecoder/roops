@@ -37,6 +37,9 @@ _schedule = _load_schedule_module()
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
 TAG_RE = re.compile(r"^[a-z][a-z0-9:_-]{1,40}$")
+ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+REQ_RE = re.compile(r"^(os|bin|file|env|probe):[^,\s]+$")
+MAX_ENV_KEYS = 64
 
 # Field table (§5). Each entry declares: required, type, default (or
 # _REQUIRED / _CONDITIONAL sentinels), plus type-specific extras.
@@ -107,6 +110,7 @@ FIELDS = {
     },
     "notes": {"required": False, "type": "str", "default": None},
     "tags": {"required": False, "type": "tags", "default": None},
+    "requires": {"required": False, "type": "requires", "default": None},
     "i_accept_unrestricted": {"required": False, "type": "bool", "default": False},
 }
 
@@ -118,6 +122,10 @@ def _loops_root() -> str:
 class _LineError(Exception):
     def __init__(self, msg):
         super().__init__(msg)
+
+
+class EnvFileError(ValueError):
+    """Malformed `$LOOPS_ROOT/.env` line. Message is `{path}:{lineno}: {msg}`."""
 
 
 def _parse_value(rest: str):
@@ -186,6 +194,46 @@ def _expand_home(value: str) -> str:
     if value.startswith("~/"):
         return os.path.expanduser(value)
     return value
+
+
+def load_env(root: str) -> dict:
+    """Parse `<root>/.env` into a dict. Missing file → `{}`.
+
+    Reuses the loop.conf value grammar (`_split_line` / `_parse_value` /
+    `_validate_trailer` / `_expand_home`) but NOT `parse()`: env keys are
+    upper-case (`ENV_KEY_RE`) and `$HOME`/`~` expand in every value.
+    """
+    path = os.path.join(root, ".env")
+    if not os.path.isfile(path):
+        return {}
+    out = {}
+    try:
+        with open(path, "r") as f:
+            lines = f.readlines()
+    except OSError as e:
+        raise EnvFileError(f"{path}: cannot read: {e}") from e
+
+    for lineno, raw_line in enumerate(lines, start=1):
+        line = raw_line.rstrip("\n")
+        try:
+            split = _split_line(line)
+        except _LineError as e:
+            raise EnvFileError(f"{path}:{lineno}: {e}") from e
+        if split is None:
+            continue
+        key, rest = split
+        if not ENV_KEY_RE.match(key):
+            raise EnvFileError(f"{path}:{lineno}: invalid key {key!r}")
+        if key in out:
+            raise EnvFileError(f"{path}:{lineno}: duplicate key {key}")
+        try:
+            value = _parse_value(rest)
+        except _LineError as e:
+            raise EnvFileError(f"{path}:{lineno}: {e}") from e
+        if len(out) >= MAX_ENV_KEYS:
+            raise EnvFileError(f"{path}:{lineno}: max {MAX_ENV_KEYS} keys")
+        out[key] = _expand_home(value)
+    return out
 
 
 def parse(path: str):
@@ -343,6 +391,29 @@ def _typecheck(key, field, raw_value):
         if len(deduped) > 8:
             return False, None, f"{key}: max 8 tags, got {len(deduped)}"
         return True, deduped, None
+    if t == "requires":
+        entries = [e.strip() for e in raw_value.split(",")]
+        if any(e == "" for e in entries):
+            return False, None, f"{key}: empty entry"
+        allowed = "os, bin, file, env, probe"
+        for e in entries:
+            if not REQ_RE.match(e):
+                return (
+                    False,
+                    None,
+                    f"{key}: invalid item {e!r} (allowed kinds: {allowed})",
+                )
+            kind, val = e.split(":", 1)
+            if kind == "os" and val not in ("darwin", "linux"):
+                return (
+                    False,
+                    None,
+                    f"{key}: invalid item {e!r} (os value must be darwin or linux)",
+                )
+        deduped = list(dict.fromkeys(entries))
+        if len(deduped) > 16:
+            return False, None, f"{key}: max 16 items, got {len(deduped)}"
+        return True, deduped, None
     if t == "schedule":
         try:
             _schedule.parse(raw_value)
@@ -363,6 +434,10 @@ def build_parser():
     get_cmd = sub.add_parser("get")
     get_cmd.add_argument("--file", required=True)
     get_cmd.add_argument("--key", required=True)
+
+    env_cmd = sub.add_parser("env")
+    env_cmd.add_argument("--root", required=True)
+    env_cmd.add_argument("--json", action="store_true")
 
     return p
 
@@ -398,6 +473,19 @@ def main(argv=None) -> int:
             print()
         else:
             print(value)
+        return 0
+
+    if args.verb == "env":
+        try:
+            data = load_env(args.root)
+        except EnvFileError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(data))
+        else:
+            for k, v in data.items():
+                print(f"{k}={v}")
         return 0
 
     parser.print_usage(sys.stderr)

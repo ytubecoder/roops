@@ -1,4 +1,5 @@
 # runtime state — never committed
+.env
 state/
 reports/
 dashboard/loops.html

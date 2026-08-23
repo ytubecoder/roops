@@ -251,8 +251,16 @@ class TestRequirementsCheck(unittest.TestCase):
         self.assertFalse(rows[0][1])
         self.assertFalse(os.path.exists(canary))
 
+        # Point LOOPS_PROBE_KEY at a missing file explicitly: the default
+        # (~/.ssh/loops-probe) really exists on a staged fleet host, and a
+        # hermetic test must not depend on the operator's ~/.ssh.
         rows = self._check(
-            conf, live=False, env={"LOOPS_PROBE_HOST": "x"}
+            conf,
+            live=False,
+            env={
+                "LOOPS_PROBE_HOST": "x",
+                "LOOPS_PROBE_KEY": os.path.join(self.fx.root, "no-such-key"),
+            },
         )
         self.assertFalse(rows[0][1])
         self.assertIn("probe key missing", rows[0][2])

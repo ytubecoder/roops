@@ -2,8 +2,11 @@
 
 Written 2026-08-22 by the `pve1` migration, Task 20 of
 `~/projects/sysadmin/pve1/PLAN.md`. Read this before installing any loop on
-`firstparty`, and before assuming the fleet has moved. **It has not. The
-mechanism is proven; the cutover is not done.**
+`firstparty`. **Update 2026-08-23 (B-25): the cutover is DONE** — 12 loops + the console run on
+`firstparty`, llm is the data host only (probe channel), and `CLAUDE.md` "Fleet state" is the
+live authority. The sections below are the migration's record; §4's per-loop matrix was
+superseded by `loop.conf` `requires=` + `bin/probe` (design:
+`openspec/changes/b-25-linux-port-2026-08-23/design.md`).
 
 ## 1. What is proven, on the real guest
 

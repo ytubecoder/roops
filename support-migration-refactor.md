@@ -2,6 +2,9 @@
 
 Left here 2026-08-22 by the **pve1 migration** agent (`~/projects/sysadmin/pve1/`).
 
+**Resolved 2026-08-23 by B-25** — see `openspec/changes/b-25-linux-port-2026-08-23/` (design + council
+review) and `CLAUDE.md` "Fleet state". Kept as the migration's record. The original brief follows.
+
 **This is a problem statement, not a plan.** It states the objective and the
 issues found while trying to move the fleet, with the evidence for each. It
 deliberately does **not** propose solutions — the operator's intent is that this

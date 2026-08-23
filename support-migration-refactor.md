@@ -168,7 +168,7 @@ said which they want; it is listed here because it is now yours to inherit.
 | `GC_BASE` | `http://192.168.1.52:8787` in `~/projects/loops/.env`. **`llm.home.arpa` has no DNS record** — the plan and the run queue both assumed it did |
 | No `rsync` | Minimal Debian. Use tar over ssh |
 | `sqlite3` CLI | Installed 2026-08-22 for `tests/runner_test_helpers.sh`. Nothing at runtime needs it |
-| Engines | codex 0.149.0, claude 2.1.239, grok 1.0.5 — all authenticated as `svc` |
+| Engines | codex 0.149.0, claude 2.1.239, grok 1.0.5 — all authenticated as `svc`. **B-25 rehearsal 2026-08-23:** codex's Linux sandbox needs `bubblewrap` (apt) and the `codex-code-mode-host` companion next to `codex` (0.149+); both were missing and are now installed. Without them every `perm_local_exec=allowlist` loop (the five ads loops) completes but cannot write its action set |
 | Not installed | `gh`, `npm`, `node`, `jq`, Docker (Docker is deliberate — group membership is root-equivalent) |
 
 State migration, if it happens, is a **cold** copy: `loops.sqlite` carries the

@@ -37,6 +37,11 @@ Each item is a command plus the output that means "go". Record the three operato
    - Expected outcome: both status outputs empty; both SHAs identical.
    - If fails: commit or stash on llm, `git pull` on the guest, re-check.
 
+7. Codex can run a sandboxed command on the guest (found in the 2026-08-23 rehearsal)
+   - Run: ssh firstparty-svc 'command -v bwrap && test -x /usr/local/bin/codex-code-mode-host && cd ~/projects/loops && codex sandbox --full-auto -- python3 -c "print(1)"'
+   - Expected outcome: `/usr/bin/bwrap`, then `1`. Every loop with `perm_local_exec=allowlist` (the five ads loops) runs its emit script inside codex's Linux sandbox, which needs bubblewrap on PATH AND the `codex-code-mode-host` companion next to the `codex` binary (codex ≥ 0.149). Without them the engine reports "Action set not written — execution host unavailable" while the run still shows `completed`.
+   - If fails: as admin `sudo apt-get install -y bubblewrap`; download `codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz` from the matching `openai/codex` release (`gh release download rust-v<codex --version> -R openai/codex -p ...`) and `install -m 0755` it to `/usr/local/bin/codex-code-mode-host`. Re-run the check.
+
 ## Steps
 
 ### Step 1 — Freeze llm

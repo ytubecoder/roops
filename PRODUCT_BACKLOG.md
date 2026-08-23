@@ -74,6 +74,10 @@ Priority: high | Status: proposed
 
 ## Ideas
 
+### I-01: Fleet dead-man alarm: one alert when any armed loop misses its expected firing
+Priority: medium | Status: proposed
+Shape (for review, B-25 follow-up): a tiny scheduled check OUTSIDE the fleet's own scheduler that reads state/loops.sqlite and fails loudly when any loop with unit files present + enabled has no run row within (expected_interval_s + grace) — i.e. the garden's existing 'stale' derivation, but pushed, not pulled. Push target: one channel the generalissimo actually sees (proposal: a message via the existing PushNotification/mobile path, or an email through gc), deduped per loop per day. Runs on firstparty as loops-deadman.timer (systemd) with OnBootSec so a reboot does not silence it; a second, cross-host probe from llm ( ping of the guest console /api/state) covers the guest itself being down. Open question in OPEN_THREADS: push-not-pull heartbeat agreement across services.
+
 ## Bugs
 
 ## Icebox

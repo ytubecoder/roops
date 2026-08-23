@@ -3,7 +3,7 @@
 
 Runs inside trusted precheck. Parses the Tailscale policy (hujson), classifies
 every grant (zone flow / default / raw-IP pin / unclassified), joins the
-display metadata from the tailnet-setup repo (inventory + prose stay in that
+display metadata from the policy-source repo (inventory + prose stay in that
 local-only repo, never in this one), computes every count and finding_id, and
 emits: the render model ($OUT_DIR/zones-model.json), the staged baseline for
 the runner's post-promotion commit, and the engine digest on stdout.
@@ -264,7 +264,7 @@ def main():
                 (
                     "no read credential at ~/.config/tailscale-policy-read.token — "
                     "console-side policy edits are invisible until the snapshot is "
-                    "refreshed (see tailnet-setup WARMSTART for the credential decision)"
+                    "refreshed (see the policy-source WARMSTART for the credential decision)"
                 ),
             )
         )
@@ -273,7 +273,7 @@ def main():
             (
                 "WARN",
                 "records:snapshot-stale",
-                "live policy differs from the tailnet-setup repo snapshot",
+                "live policy differs from the policy-source repo snapshot",
                 (
                     f"live sha {policy_sha} vs snapshot sha {snapshot_sha} — refresh "
                     "docs/policy-live.hujson per workflows/policy-change.txt step 6"
@@ -288,7 +288,7 @@ def main():
                 f"policy references {actor} with no display mapping",
                 (
                     "add it to ip_names/ip_hues or actor_labels in "
-                    "tailnet-setup/site/zones-meta.json — it renders raw until then"
+                    "site/zones-meta.json — it renders raw until then"
                 ),
             )
         )

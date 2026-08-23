@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+# probe: ticket-add
+# probe-writes: one ticket via tickets-cli add
+# probe-output: text
+# probe-reads: $TICKETS_CLI, probes/ticket-add.allow
+"""Bounded write: one ideas-section ticket via tickets-cli, argv never a shell."""
+import base64
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+TICKETS_CLI = os.environ.get("TICKETS_CLI") or str(
+    Path.home() / ".claude" / "ticket-takeaway" / "tickets-cli.py"
+)
+ALLOW_PATH = Path(__file__).resolve().parent / "ticket-add.allow"
+REQUIRED_KEYS = {"project", "title", "section", "priority", "description"}
+PRIORITIES = ("high", "medium", "low")
+MAX_DECODED = 6144
+MAX_TITLE = 200
+MAX_DESC = 4096
+EXIT_REFUSED = 64
+
+
+def refuse(reason):
+    print(f"refused: {reason}", file=sys.stderr)
+    return EXIT_REFUSED
+
+
+def check():
+    if Path(TICKETS_CLI).is_file():
+        print("ok ticket-add")
+        return 0
+    return 1
+
+
+def allow_projects():
+    try:
+        lines = ALLOW_PATH.read_text().splitlines()
+    except OSError:
+        return set()
+    return {ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("#")}
+
+
+def pad_b64(s):
+    return s + ("=" * ((4 - len(s) % 4) % 4))
+
+
+def run(argv):
+    if len(argv) != 1:
+        return refuse("exactly one argv required")
+    try:
+        raw = base64.urlsafe_b64decode(pad_b64(argv[0]))
+    except Exception:
+        return refuse("payload is not base64url")
+    if len(raw) > MAX_DECODED:
+        return refuse("decoded payload too large")
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return refuse("payload is not JSON")
+    if not isinstance(obj, dict) or set(obj.keys()) != REQUIRED_KEYS:
+        return refuse("keys must be exactly project,title,section,priority,description")
+    project = obj["project"]
+    title = obj["title"]
+    section = obj["section"]
+    priority = obj["priority"]
+    description = obj["description"]
+    if not isinstance(project, str) or project not in allow_projects():
+        return refuse("project not allowed")
+    if section != "ideas":
+        return refuse("section must be ideas")
+    if priority not in PRIORITIES:
+        return refuse("priority must be high|medium|low")
+    if not isinstance(title, str) or not (1 <= len(title) <= MAX_TITLE) or "\n" in title:
+        return refuse("title invalid")
+    if not isinstance(description, str) or len(description) > MAX_DESC:
+        return refuse("description too long")
+    if not description.startswith("[loop:"):
+        return refuse("description must start with [loop:")
+    r = subprocess.run(
+        [
+            "python3",
+            TICKETS_CLI,
+            "add",
+            project,
+            title,
+            "--section",
+            "ideas",
+            "--priority",
+            priority,
+            "--description",
+            description,
+        ],
+        timeout=60,
+        check=False,
+    )
+    return r.returncode
+
+
+def main(argv):
+    if argv == ["--check"]:
+        return check()
+    return run(argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

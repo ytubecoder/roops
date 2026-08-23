@@ -11,7 +11,7 @@
 #      hardcodes campaign ids) — cards with an X leg (x-boost today, plus
 #      g-theme's pending x-take3 bring-up), excluding retired.
 #   NOTE: X has NO ads API. All X metrics are the LAST Ads Manager snapshot in
-#   x_cache; this loop labels the snapshot age (read-only sqlite peek) and when
+#   x_cache; this loop labels the snapshot age (GET /api/ads/x-cache) and when
 #   it exceeds ~3 days the FIRST action must be the manual scrape/CSV import.
 #   This loop NEVER touches CDP, the OpenTwins Chrome, or the browser lease.
 #   3. prints a compact, deterministic digest to stdout (impressions/CTR/spend/
@@ -29,7 +29,7 @@ mkdir -p "$INPUTS"
 fetch() { # fetch <name> <path-with-query> — bounded retry: 3 attempts, 3s/6s
   # backoff. GC cold-starts after a machine wake can exceed one 15s curl (run
   # f3acea alerted spuriously on exactly this); worst case stays under the
-  # runner's 300s precheck cap: 4 endpoints x (3x15s + 9s) = 216s.
+  # runner's 300s precheck cap: 5 endpoints x (3x15s + 9s) = 270s.
   local name="$1" path="$2" attempt
   for attempt in 1 2 3; do
     curl -s -m 15 "$GC$path" -o "$INPUTS/$name.json" 2>/dev/null || true
@@ -46,6 +46,12 @@ fetch scoreboard      "/api/ads/scoreboard"
 fetch campaigns       "/api/ads/campaigns"
 fetch journal         "/api/ads/journal?limit=60"
 fetch program-events  "/api/ads/program-events"
+fetch x-cache         "/api/ads/x-cache"
+
+"$LOOPS_ROOT/bin/probe" ads-x-ledger --out "$INPUTS/x-ledger.json" \
+  || echo "probe_exit=$?" > "$INPUTS/x-ledger.exit"
+"$LOOPS_ROOT/bin/probe" opentwins-lock-signal --out "$INPUTS/x-lock.json" \
+  || echo "probe_exit=$?" > "$INPUTS/x-lock.exit"
 
 FETCHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -85,22 +91,13 @@ print(f"inputs: scoreboard={'ok' if sb else 'MISSING'} "
       f"campaigns={'ok' if camp else 'MISSING'} "
       f"journal={'ok' if jrnl else 'MISSING'} "
       f"program_events={'ok' if prog else 'MISSING'}")
-# ---- X snapshot age (read-only sqlite peek at GC's ads.db x_cache) ----
+# ---- X snapshot age (from GET /api/ads/x-cache) ----
 snapshot_age_days = None
 snapshot_at = None
-try:
-    import sqlite3
-    _db = Path.home() / ".growth-console" / "ads.db"
-    if _db.is_file():
-        _con = sqlite3.connect(f"file:{_db}?mode=ro", uri=True, timeout=5)
-        _row = _con.execute("SELECT MAX(imported_at), source FROM x_cache").fetchone()
-        _con.close()
-        if _row and _row[0]:
-            snapshot_at = _row[0]
-            _dt = datetime.fromisoformat(str(_row[0]).replace("Z", "+00:00"))
-            snapshot_age_days = round((datetime.now(timezone.utc) - _dt).total_seconds() / 86400, 1)
-except Exception:
-    pass
+_xc = load("x-cache")
+if isinstance(_xc, dict):
+    snapshot_at = _xc.get("snapshot_at")
+    snapshot_age_days = _xc.get("age_days")
 if snapshot_age_days is None:
     print("x_cache_age: UNKNOWN — could not read x_cache (treat as stale; first action = manual X scrape/CSV import)")
 else:
@@ -118,43 +115,28 @@ print()
 # raw_json cells (cells[-3] = TOTAL BUDGET, cells[-1] = TOTAL REMAINING;
 # `header` is off-by-one vs `cells` — never zip them; store.py indexes
 # positionally and is correct).
-def _decode_batch(con, batch_id):
-    life = window = headroom = 0.0
-    rows_n = bad = at_cap = 0
-    for spend, raw in con.execute(
-            "SELECT spend_usd, raw_json FROM x_cache WHERE batch_id=?", (batch_id,)):
-        rows_n += 1
-        window += spend or 0.0
-        try:
-            cells = json.loads(raw)["cells"]
-            rem = float(cells[-1].split("\n")[0].replace("$", "").replace(",", ""))
-            bud = float(cells[-3].replace("$", "").replace(",", ""))
-        except Exception:
-            bad += 1
-            continue
-        life += bud - rem
-        if rem <= 0.01:
-            at_cap += 1
-        elif "Active" in str(cells[3] or ""):
-            headroom += rem
-    return {"life": life, "window": window, "rows": rows_n, "bad": bad,
-            "at_cap": at_cap, "headroom": headroom}
-
 print("## Monthly spend ledger (decoded from x_cache — snapshot-bounded, never live)")
 try:
-    import sqlite3
-    _db = Path.home() / ".growth-console" / "ads.db"
-    _con = sqlite3.connect(f"file:{_db}?mode=ro", uri=True, timeout=5)
-    _batches = _con.execute(
-        "SELECT batch_id, MAX(imported_at) AS ia FROM x_cache "
-        "GROUP BY batch_id ORDER BY ia").fetchall()
-    decoded = []
-    for _bid, _ia in _batches:
-        _d = _decode_batch(_con, _bid)
-        if _d["rows"] - _d["bad"] > 0:
-            decoded.append((_ia, _bid, _d))
-    _con.close()
-    if not decoded:
+    _ledger_exit = None
+    _lexit = INPUTS / "x-ledger.exit"
+    if _lexit.is_file():
+        for _line in _lexit.read_text().splitlines():
+            if _line.startswith("probe_exit="):
+                try:
+                    _ledger_exit = int(_line.split("=", 1)[1].strip())
+                except ValueError:
+                    pass
+    if _ledger_exit == 75:
+        print("- ledger unreadable: probe transport failed (llm unreachable) — treat as input gap.")
+        decoded = None
+    else:
+        _ledger = json.loads((INPUTS / "x-ledger.json").read_text())
+        decoded = [(b["imported_at"], b["batch_id"], b)
+                   for b in (_ledger.get("batches") or [])
+                   if b["rows"] - b["bad"] > 0]
+    if decoded is None:
+        pass
+    elif not decoded:
         print("- x_cache has no decodable batches — TRUE spend unreadable (input gap).")
     else:
         _ia, _bid, _d = decoded[-1]
@@ -208,24 +190,36 @@ print()
 # This is a plain substring scan of local files; it never touches the browser.
 print("## X account signal (from OpenTwins twitter agent memory — read-only file peek)")
 try:
-    _memdir = Path.home() / ".opentwins" / "workspaces" / "agent-twitter" / "memory"
-    _files = sorted(_memdir.glob("20??-??-??.md"))[-3:]
-    _hits = []
-    for _f in _files:
-        _text = _f.read_text(errors="replace").lower()
-        if "account has been locked" in _text or "account/access" in _text:
-            _hits.append(_f.name)
-    if _hits:
-        print(f"- 🚨 lock/access-wall markers present in: {', '.join(_hits)} (newest file matters most).")
-        print("  If the NEWEST file still shows the lock: the @maguyvaai account is locked — ads do")
-        print("  not serve, the manual scrape/CSV import is impossible, engagement is down. Unlock")
-        print("  is HUMAN-ONLY (email verification in a real browser). Raise ONE alert-severity")
-        print("  action for this; a stale-snapshot action is subordinate to it while locked")
-        print("  (the import cannot be run until the account is unlocked).")
-    elif _files:
-        print(f"- no lock/access-wall markers in the last {len(_files)} OT twitter memory files.")
+    _lock_exit = None
+    _kexit = INPUTS / "x-lock.exit"
+    if _kexit.is_file():
+        for _line in _kexit.read_text().splitlines():
+            if _line.startswith("probe_exit="):
+                try:
+                    _lock_exit = int(_line.split("=", 1)[1].strip())
+                except ValueError:
+                    pass
+    if _lock_exit == 75:
+        print("- OT memory unreadable: probe transport failed (llm unreachable) — no account signal this run.")
     else:
-        print("- OT twitter memory dir empty/absent — no account signal this run.")
+        _lock = json.loads((INPUTS / "x-lock.json").read_text())
+        _files = _lock.get("files") or []
+        _hits = []
+        for _h in (_lock.get("hits") or []):
+            _name = _h.get("file")
+            if _name and _name not in _hits:
+                _hits.append(_name)
+        if _hits:
+            print(f"- 🚨 lock/access-wall markers present in: {', '.join(_hits)} (newest file matters most).")
+            print("  If the NEWEST file still shows the lock: the @maguyvaai account is locked — ads do")
+            print("  not serve, the manual scrape/CSV import is impossible, engagement is down. Unlock")
+            print("  is HUMAN-ONLY (email verification in a real browser). Raise ONE alert-severity")
+            print("  action for this; a stale-snapshot action is subordinate to it while locked")
+            print("  (the import cannot be run until the account is unlocked).")
+        elif _files:
+            print(f"- no lock/access-wall markers in the last {len(_files)} OT twitter memory files.")
+        else:
+            print("- OT twitter memory dir empty/absent — no account signal this run.")
 except Exception as exc:
     print(f"- OT memory unreadable ({type(exc).__name__}) — no account signal this run.")
 print()

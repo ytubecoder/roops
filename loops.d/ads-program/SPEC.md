@@ -56,7 +56,9 @@ sleep coalesces missed calendar firings into one at wake (best-effort); the
 freshness guarantees live in the set/registry logic, not timing.
 Runs LAST so it can read same-day network sets — but never TRUSTS the order:
 each sibling set carries a freshness label and a missing/stale set is reported
-as a gap in this loop's own set, never a run failure.
+as a gap in this loop's own set, never a run failure. It reads its four sibling
+loops' newest action sets from the shared `state/runs/`, so the five ads loops
+must run on the same host/root.
 
 5. Scope & exclusions
 **In scope (program-level only):** budget totals vs configured caps (monthly

@@ -7,9 +7,26 @@
 # commit. The engine only interprets the digest this script prints.
 set -euo pipefail
 
-TAILNET_SETUP="${TAILNET_SETUP_DIR:-$HOME/projects/tailnet-setup}"
-SNAPSHOT="$TAILNET_SETUP/docs/policy-live.hujson"
-META="$TAILNET_SETUP/site/zones-meta.json"
+REMOTE="$OUT_DIR/remote"; mkdir -p "$REMOTE"
+tz_rc=0
+"$LOOPS_ROOT/bin/probe" sysadmin-tailnet --out "$REMOTE/sysadmin-tailnet.tar" || tz_rc=$?
+if [ "$tz_rc" -eq 75 ]; then
+  echo "ERROR: probe transport failed (llm unreachable)" >&2
+  exit 1
+elif [ "$tz_rc" -ne 0 ]; then
+  exit 1
+fi
+python3 - "$REMOTE/sysadmin-tailnet.tar" "$REMOTE" "$LOOPS_ROOT" <<'PY'
+import os
+import sys
+
+sys.path.insert(0, os.path.join(sys.argv[3], "bin"))
+from probe_core import extract_tar
+
+extract_tar(sys.argv[1], sys.argv[2])
+PY
+SNAPSHOT="$OUT_DIR/remote/docs/policy-live.hujson"
+META="$OUT_DIR/remote/site/zones-meta.json"
 TOKEN_FILE="${TS_POLICY_READ_TOKEN_FILE:-$HOME/.config/tailscale-policy-read.token}"
 POLICY_FILE="$OUT_DIR/policy.hujson"
 

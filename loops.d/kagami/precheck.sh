@@ -10,7 +10,12 @@
 set -euo pipefail
 
 # launchd's minimal PATH lacks gh/git — pin to the login-shell PATH (kagi-ban pattern).
-AUDIT_PATH="$(/bin/zsh -l -c 'printf %s "$PATH"' 2>/dev/null | tail -n 1)"
+# Guard: Debian guests have no zsh; empty AUDIT_PATH is a WARN below, not a crash.
+if command -v zsh >/dev/null 2>&1; then
+  AUDIT_PATH="$(zsh -l -c 'printf %s "$PATH"' 2>/dev/null | tail -n 1)"
+else
+  AUDIT_PATH=""
+fi
 case "$AUDIT_PATH" in
   */bin*) export PATH="$AUDIT_PATH" ;;
   *) echo "WARN: could not resolve login-shell PATH; using inherited PATH" >&2 ;;

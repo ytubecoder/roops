@@ -294,7 +294,7 @@ $notes
 
   <footer>
     data <span class="cmd">zones-model.json</span> · policy sha <span class="cmd">$policy_sha</span> ($source) ·
-    inventory + prose <span class="cmd">tailnet-setup/site/zones-meta.json</span><br>
+    inventory + prose <span class="cmd">site/zones-meta.json</span><br>
     render <span class="cmd">render_zones.py</span> · loop <span class="cmd">$loop</span> ·
     raw envelope embedded as <span class="cmd">#report-data</span> · regenerated every run — this page cannot drift from policy
   </footer>

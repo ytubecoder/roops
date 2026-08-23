@@ -4,28 +4,94 @@
 Reads the PROMOTED latest.json (suppressed findings already filtered out by
 the runner), extracts `create_ticket` ops from finding details, dedupes
 against the action↔ticket map (disposition-aware) and the board file, and
-creates tickets in the maguyva-actions project's IDEAS section via
-tickets-cli. That is the ONLY write it performs: it never moves, edits,
+creates tickets in the maguyva-actions project's IDEAS section via the
+ticket-add probe. That is the ONLY write it performs: it never moves, edits,
 accepts, or strikes anything, and it never touches any other project.
 
 Idempotent by construction: a created ticket's description carries the
 `[loop:gc-actions | <ID>]` prefix, so the id is board-covered on any re-run.
 """
 
+import base64
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-CLI = Path.home() / ".claude/ticket-takeaway/tickets-cli.py"
-GC_DIR = Path(
-    os.environ.get("GC_ACTIONS_DIR")
-    or Path.home() / "projects/maguyva-marketing/gc-actions"
-)
 PROJECT = "maguyva-actions"
 MAX_OPS = 20  # sanity cap per run — a promoted run proposing more is suspect
+FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def _loops_root() -> Path:
+    raw = os.environ.get("LOOPS_ROOT")
+    if raw:
+        return Path(raw)
+    return Path(__file__).resolve().parents[3]
+
+
+def _probe_core():
+    root = _loops_root()
+    bin_dir = str(root / "bin")
+    if bin_dir not in sys.path:
+        sys.path.insert(0, bin_dir)
+    from probe_core import extract_tar  # noqa: WPS433
+
+    return extract_tar
+
+
+def fetch_gc_dir() -> Path:
+    """Fresh board snapshot via gc-actions-files (board may have changed)."""
+    extract_tar = _probe_core()
+    root = _loops_root()
+    tmp = tempfile.mkdtemp(prefix="gc-actions-files-")
+    tar_path = os.path.join(tmp, "gc.tar")
+    dest = os.path.join(tmp, "gc")
+    r = subprocess.run(
+        [str(root / "bin" / "probe"), "gc-actions-files", "--out", tar_path],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if r.returncode == 75:
+        print(
+            "apply_tickets: probe transport failed (llm unreachable)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if r.returncode != 0:
+        print(
+            f"apply_tickets: gc-actions-files probe failed: {(r.stderr or '').strip()}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    extract_tar(tar_path, dest)
+    return Path(dest)
+
+
+def create_ticket(title: str, prio: str, desc: str) -> subprocess.CompletedProcess:
+    payload = base64.urlsafe_b64encode(
+        json.dumps(
+            {
+                "project": PROJECT,
+                "title": title,
+                "section": "ideas",
+                "priority": prio,
+                "description": desc,
+            }
+        ).encode()
+    ).decode().rstrip("=")
+    return subprocess.run(
+        [str(_loops_root() / "bin" / "probe"), "ticket-add", payload],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
 
 
 def load_onboarded_prefixes(gc_dir: Path) -> list[str]:
@@ -92,13 +158,7 @@ def load_onboarded_prefixes(gc_dir: Path) -> list[str]:
     return sorted(prefixes) + ["ALL"]
 
 
-ID_RE = re.compile(
-    r"\b((?:" + "|".join(load_onboarded_prefixes(GC_DIR)) + r")-\d{2})\b"
-)
-FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
-
-
-def map_covered_ids(map_path: Path) -> set[str]:
+def map_covered_ids(map_path: Path, id_re: re.Pattern) -> set[str]:
     """Action ids the map covers — EXCLUDING disposition `uncovered` rows
     (those are exactly the ids the loop is allowed to ticket)."""
     if not map_path.is_file():
@@ -116,7 +176,7 @@ def map_covered_ids(map_path: Path) -> set[str]:
         if m:
             disp = m.group(1)
             continue
-        ids.update(ID_RE.findall(line))
+        ids.update(id_re.findall(line))
     rows.append((disp, ids))
     covered: set[str] = set()
     for d, i in rows:
@@ -125,10 +185,10 @@ def map_covered_ids(map_path: Path) -> set[str]:
     return covered
 
 
-def board_ids(board_path: Path) -> set[str]:
+def board_ids(board_path: Path, id_re: re.Pattern) -> set[str]:
     if not board_path.is_file():
         return set()
-    return set(ID_RE.findall(board_path.read_text()))
+    return set(id_re.findall(board_path.read_text()))
 
 
 def main() -> int:
@@ -136,6 +196,10 @@ def main() -> int:
     if not latest or not Path(latest).is_file():
         print(f"apply_tickets: LATEST_JSON missing ({latest})", file=sys.stderr)
         return 1
+    gc_dir = fetch_gc_dir()
+    id_re = re.compile(
+        r"\b((?:" + "|".join(load_onboarded_prefixes(gc_dir)) + r")-\d{2})\b"
+    )
     contract = json.loads(Path(latest).read_text())
     ops = []
     for f in contract.get("findings", []):
@@ -162,12 +226,12 @@ def main() -> int:
         )
         return 1
 
-    covered = map_covered_ids(GC_DIR / "action-ticket-map.yaml") | board_ids(
-        GC_DIR / "PRODUCT_BACKLOG.md"
+    covered = map_covered_ids(gc_dir / "action-ticket-map.yaml", id_re) | board_ids(
+        gc_dir / "PRODUCT_BACKLOG.md", id_re
     )
     created = skipped = failed = 0
     for op in ops:
-        ids = [i for i in op.get("action_ids", []) if ID_RE.fullmatch(i)]
+        ids = [i for i in op.get("action_ids", []) if id_re.fullmatch(i)]
         title = (op.get("title") or "").strip()
         desc = (op.get("description") or "").strip()
         prio = (
@@ -186,25 +250,14 @@ def main() -> int:
             print(f"apply_tickets: {'/'.join(ids)} already covered — skipped")
             skipped += 1
             continue
-        r = subprocess.run(
-            [
-                "python3",
-                str(CLI),
-                "add",
-                PROJECT,
-                title,
-                "--section",
-                "ideas",
-                "--priority",
-                prio,
-                "--description",
-                desc,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
+        r = create_ticket(title, prio, desc)
+        if r.returncode == 75:
+            print(
+                f"apply_tickets: probe transport failed (llm unreachable) for {'/'.join(ids)}",
+                file=sys.stderr,
+            )
+            failed += 1
+            continue
         if r.returncode == 0:
             print(
                 f"apply_tickets: created Ideas ticket for {'/'.join(ids)}: {r.stdout.strip()}"

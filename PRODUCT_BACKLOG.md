@@ -2,9 +2,6 @@
 
 ## WIP
 
-### B-25: Linux port: app/loop separation, host requirements, remote probes, firstparty cutover
-Priority: high | Status: in-progress
-
 ## For Review
 
 ### B-04: Roops rebrand: landing site + UI concept (pancaking, ledger, tokonoma, engawa)
@@ -65,6 +62,9 @@ Priority: medium | Status: for-review
 Priority: high | Status: for-review
 
 ### B-24: systemd install backend so the fleet can run on Linux (firstparty)
+Priority: high | Status: for-review
+
+### B-25: Linux port: app/loop separation, host requirements, remote probes, firstparty cutover
 Priority: high | Status: for-review
 
 ## Backlog

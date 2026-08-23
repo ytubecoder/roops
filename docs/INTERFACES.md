@@ -82,6 +82,9 @@ $LOOPS_ROOT/
 runtime / machine-local artifacts. Every script must create the directories it needs (`mkdir -p`)
 rather than assuming.
 
+`state/.snapshot-counts.json` exists inside `loopctl snapshot` archives only. It is not a live
+runtime file under `$LOOPS_ROOT` and must not be written there by snapshot.
+
 ## 2. `bin/lock.py` — lock helper
 
 Replaces `flock`. Advisory, per-loop, non-blocking by default.
@@ -817,6 +820,20 @@ loopctl probe [status|keygen]                                        # probe cha
                                                                       #   is the default; never writes
                                                                       #   (keygen writes only the local
                                                                       #   key pair). Known verb.
+loopctl snapshot <out.tar.gz> [--force]                              # cold copy of state/loops.sqlite
+                                                                      #   (sqlite3 backup; never the
+                                                                      #   -wal/-shm files), state/runs/,
+                                                                      #   state/loop-data/, reports/;
+                                                                      #   refuses while any
+                                                                      #   state/locks/*.lock names a
+                                                                      #   live pid unless --force
+                                                                      #   (WARNING: N live lock(s));
+                                                                      #   known verb
+loopctl restore <in.tar.gz> [--force]                                # replace (never merge) the
+                                                                      #   managed paths; refuses when
+                                                                      #   the target db has runs rows
+                                                                      #   unless --force; extract uses
+                                                                      #   tarfile filter="data"
 ```
 Disposition verbs are thin wrappers over `db.py dispose` (+ dashboard regen so the change is
 visible immediately). The dashboard stays static (Change 4, Option A — settled with generalissimo

@@ -57,6 +57,10 @@ No installer and no dependencies — it's Python 3 and bash against the CLIs you
 
 Authoring guide: [`docs/LOOP_AUTHORING.md`](docs/LOOP_AUTHORING.md)
 
+## Hosts
+
+macOS (launchd) and Linux (systemd) are both supported. `.env` is host config (machine-local, gitignored). A loop declares what it needs from this host with `requires=`. `bin/probe` reaches a data host for inputs that still live there. `loopctl snapshot` / `loopctl restore` move fleet state as one cold copy; see [the B-25 design](openspec/changes/b-25-linux-port-2026-08-23/design.md).
+
 ## How a Loop Runs
 
 ```

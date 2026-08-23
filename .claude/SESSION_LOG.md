@@ -1,5 +1,25 @@
 # Session Log
 
+## 2026-08-23 — B-25 Linux port: app/loop separation, `requires=`, probe channel, guest staged + rehearsed; flip held
+
+### Summary
+- Spec'd (fable) and council-reviewed (codex + grok + antigravity, 2 rounds; `openspec/changes/b-25-linux-port-2026-08-23/review.md`) the port, then shipped it as five grok peons under black-box acceptance (foreman-authored specs with mandated tests + `--allow`/`--verify`, foreman-run probes, test audit; no implementation diff read): `.env` seam + `requires=` (WP1), probe channel `bin/probe`/`bin/probe-server`/`probes/` (WP2), backend-aware garden/console predicates + `loopctl console install` + systemd host checks (WP3), seven probes + kagi-ban/ads-x/gc-actions/tailnet-zones/kagami retrofits (WP4), `loopctl snapshot`/`restore` + `workflows/firstparty-cutover.txt` (WP5). 861 python tests + all shell fixtures green on macOS and on the guest.
+- Guest `firstparty` staged: git clone (repo is public), `.env`, probe key authorized on llm with `probe-server --authorize --write` (forced command verified live: `ping`/`list`/`check`/probe run OK, every shell escape `refused` exit 64, audit log on llm), `gh` + `bubblewrap` + `codex-code-mode-host` installed, orphan hello-loop timer removed. Rehearsal against a restored copy of llm's real state (1491 runs, 92 findings, 2 dispositions): every loop of the install set except kagami (no gh auth) ran `completed` on the guest, ads action sets written, kagi-ban's av scan executed on llm through the probe. The fleet still runs on llm; the flip waits for three operator answers (design §12).
+
+### Lessons Learned
+- **Accepted:** council plan-check before cutting peon specs — reviewers caught design defects the author would have shipped (`ticket-add` arg grammar could not carry titles/descriptions; `.env` leaking into the engine env; run-time `probe:` check pre-empting the precheck's transport handling; name-only drift). Verify reviewer facts though: grok asserted the repo was private and `shasum` absent — both wrong (`gh repo view`, `command -v`).
+- **Accepted:** black-box acceptance with foreman-side probes — 26/43/20/24 independent probes per WP found zero implementation defects; every probe failure was a fixture artifact (realpath `/var`→`/private/var`, `bin/loopctl` needs `SourceFileLoader`, missing `engines/codex.sh`/`SPEC.md`, grepping `schedule loaded` which also matches the 休 tooltip).
+- **Gotcha:** codex's Linux sandbox needs `bubblewrap` + `codex-code-mode-host` (0.149+); the bare `codex` binary on the guest had neither, so the five ads loops completed but could not write action sets ("execution host unavailable"). Found only by the rehearsal; now runbook prerequisite 7 and a CLAUDE.md gotcha.
+- **Gotcha:** `loopctl` resolves root from `LOOPS_ROOT`/`--root`, not from its own location — a `restore` run inside the rehearsal clone restored into the prod clone. Always pass `--root` with two checkouts on one host.
+- **Gotcha:** `peon merge` refuses on other agents' untracked loop dirs (`git stash push -u` around it); a hand-resolved merge leaves `PEON_REPORT.md` tracked and the next dispatch fails. Parallel peons that both append test classes to `tests/test_loopctl.py` always conflict at the file tail — keep both hunks.
+- **Gotcha:** a hermetic test must not assume `~/.ssh/loops-probe` is absent — it exists on a staged fleet host (fixed by pointing `LOOPS_PROBE_KEY` at a missing path).
+- **Rejected:** a LAN `http://loops.home.arpa` vhost for the console — it would extend the B-22 "tailnet is the trust boundary" mutation surface to plaintext LAN (grok's point); tailnet only (D7). A loops-client daemon on llm — sshd + one forced command is zero RAM and covers every current need (D3).
+
+### Decisions
+- One fleet on firstparty, one db, one console (sysadmin DESIGN.md §7); credentials never move unattended (D5); the flip is a single runbook executed after the operator answers phoneapp-cost-sync (move incl. its untracked tree, or uninstall), kagami auth on the guest (`gh auth login` as svc vs PAT file), and freeing the `loops` tailnet node name.
+- `.env` keys reach precheck/render/probe and are unset (`env -u`, adapter child only) for the engine; `--no-live` at run time affects only the `probe:` kind; `ping`/`list`/`check` are reserved probe names; `list` carries a content hash so same-name drift is an unmet requirement; `ticket-add` is the only writing probe (ideas-only, base64url JSON ≤ 6 KiB, project allowlist).
+- `ads-x-ledger` returns per-batch aggregates (what `_decode_batch` produced) and `av-scan` ADDS `probe_*` keys to the raw av document rather than wrapping it — both to keep the loops' digest code unchanged.
+
 ## 2026-08-03 — B-13 run-now button shipped end-to-end via the first test-gated peon dispatch
 
 ### Summary

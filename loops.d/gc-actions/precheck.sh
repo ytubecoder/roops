@@ -16,8 +16,36 @@
 # generated board markdown (no CLI invocation, no sqlite).
 set -euo pipefail
 
-DMP_ROOT="${DMP_OUTPUT_DIR:-$HOME/projects/digital-marketing-pro/output/maguyva}"
-GC_ACTIONS_DIR="${GC_ACTIONS_DIR:-$HOME/projects/maguyva-marketing/gc-actions}"
+REMOTE="$OUT_DIR/remote"; mkdir -p "$REMOTE"
+dmp_rc=0
+"$LOOPS_ROOT/bin/probe" dmp-actions --out "$REMOTE/dmp.tar" || dmp_rc=$?
+if [ "$dmp_rc" -eq 75 ]; then
+  echo "ERROR: probe transport failed (llm unreachable)" >&2
+  exit 1
+elif [ "$dmp_rc" -ne 0 ]; then
+  exit 1
+fi
+gc_rc=0
+"$LOOPS_ROOT/bin/probe" gc-actions-files --out "$REMOTE/gc.tar" || gc_rc=$?
+if [ "$gc_rc" -eq 75 ]; then
+  echo "ERROR: probe transport failed (llm unreachable)" >&2
+  exit 1
+elif [ "$gc_rc" -ne 0 ]; then
+  exit 1
+fi
+python3 - "$REMOTE" "$LOOPS_ROOT" <<'PY'
+import os
+import sys
+
+sys.path.insert(0, os.path.join(sys.argv[2], "bin"))
+from probe_core import extract_tar
+
+remote = sys.argv[1]
+extract_tar(os.path.join(remote, "dmp.tar"), os.path.join(remote, "dmp"))
+extract_tar(os.path.join(remote, "gc.tar"), os.path.join(remote, "gc"))
+PY
+DMP_ROOT="$REMOTE/dmp"
+GC_ACTIONS_DIR="$REMOTE/gc"
 
 DMP_ROOT="$DMP_ROOT" GC_ACTIONS_DIR="$GC_ACTIONS_DIR" python3 <<'PY'
 import os, re, sys

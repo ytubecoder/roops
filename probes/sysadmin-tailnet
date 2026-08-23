@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+# probe: sysadmin-tailnet
+# probe-writes: none
+# probe-output: tar
+# probe-reads: $TAILNET_SETUP_DIR (default $HOME/projects/sysadmin/tailnet)
+"""Tar docs/policy-live.hujson + site/zones-meta.json (paths kept)."""
+import os
+import sys
+import tarfile
+from pathlib import Path
+
+CAP = 4 * 1024 * 1024
+ROOT = Path(
+    os.environ.get("TAILNET_SETUP_DIR")
+    or (Path.home() / "projects" / "sysadmin" / "tailnet")
+)
+RELS = ("docs/policy-live.hujson", "site/zones-meta.json")
+
+
+class CapWriter:
+    def __init__(self, dest, cap):
+        self.dest = dest
+        self.cap = cap
+        self.n = 0
+
+    def write(self, data):
+        self.n += len(data)
+        if self.n > self.cap:
+            print("cap exceeded", file=sys.stderr)
+            sys.exit(1)
+        return self.dest.write(data)
+
+    def flush(self):
+        self.dest.flush()
+
+    def close(self):
+        pass
+
+
+def _readable(rel):
+    p = ROOT / rel
+    return p.is_file() and (not p.is_symlink()) and os.access(p, os.R_OK)
+
+
+def check():
+    if all(_readable(rel) for rel in RELS):
+        print("ok sysadmin-tailnet")
+        return 0
+    return 1
+
+
+def run():
+    for rel in RELS:
+        p = ROOT / rel
+        if p.is_symlink() or not p.is_file() or not os.access(p, os.R_OK):
+            print(rel, file=sys.stderr)
+            return 1
+    writer = CapWriter(sys.stdout.buffer, CAP)
+    with tarfile.open(fileobj=writer, mode="w|") as tar:
+        for rel in RELS:
+            tar.add(ROOT / rel, arcname=rel, recursive=False)
+    return 0
+
+
+def main(argv):
+    if argv == ["--check"]:
+        return check()
+    return run()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

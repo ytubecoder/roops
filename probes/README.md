@@ -8,9 +8,18 @@ Built-ins `ping`, `list`, and `check` are not files. Those three names are
 reserved: a file by one of those names is refused by the server and omitted
 from `list`.
 
-This directory currently ships only `echo-test` (test-only: `probe-writes:
-none`, `probe-output: text`; prints argv joined by `|`; `--check` prints
-`ok echo-test`). Real probes (`av-scan`, `ticket-add`, …) arrive in WP4.
+Shipped probes (plus test-only `echo-test`):
+
+| probe | reads | writes |
+|---|---|---|
+| `echo-test` | none (test-only) | none |
+| `av-scan` | `$AV_BIN`, `/bin/zsh -l`, Automic Vault Info.plist | none |
+| `opentwins-lock-signal` | `~/.opentwins/workspaces/agent-twitter/memory/` | none |
+| `ads-x-ledger` | `~/.growth-console/ads.db` (`ADS_DB` override) | none |
+| `dmp-actions` | `$DMP_OUTPUT_DIR` (newest 30 run dirs) | none |
+| `gc-actions-files` | `$GC_ACTIONS_DIR` board files | none |
+| `sysadmin-tailnet` | `$TAILNET_SETUP_DIR` policy + zones-meta | none |
+| `ticket-add` | `$TICKETS_CLI`, `probes/ticket-add.allow` | one ticket via tickets-cli add |
 
 ## Header grammar
 

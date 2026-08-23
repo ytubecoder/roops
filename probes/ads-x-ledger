@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+# probe: ads-x-ledger
+# probe-writes: none
+# probe-output: json
+# probe-reads: ~/.growth-console/ads.db (env ADS_DB override)
+"""Read-only x_cache ledger decode. Output is oldest-first batches."""
+import json
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+DB = Path(os.environ.get("ADS_DB") or (Path.home() / ".growth-console" / "ads.db"))
+
+
+def check():
+    if DB.is_file():
+        print("ok ads-x-ledger")
+        return 0
+    return 1
+
+
+def _decode_batch(con, batch_id):
+    life = window = headroom = 0.0
+    rows_n = bad = at_cap = 0
+    for spend, raw in con.execute(
+            "SELECT spend_usd, raw_json FROM x_cache WHERE batch_id=?", (batch_id,)):
+        rows_n += 1
+        window += spend or 0.0
+        try:
+            cells = json.loads(raw)["cells"]
+            rem = float(cells[-1].split("\n")[0].replace("$", "").replace(",", ""))
+            bud = float(cells[-3].replace("$", "").replace(",", ""))
+        except Exception:
+            bad += 1
+            continue
+        life += bud - rem
+        if rem <= 0.01:
+            at_cap += 1
+        elif "Active" in str(cells[3] or ""):
+            headroom += rem
+    return {"life": life, "window": window, "rows": rows_n, "bad": bad,
+            "at_cap": at_cap, "headroom": headroom}
+
+
+def run():
+    if not DB.is_file():
+        json.dump({"batches": [], "error": f"missing db: {DB}"}, sys.stdout)
+        sys.stdout.write("\n")
+        return 0
+    try:
+        con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=5)
+        batches_rows = con.execute(
+            "SELECT batch_id, MAX(imported_at) AS ia FROM x_cache "
+            "GROUP BY batch_id ORDER BY ia"
+        ).fetchall()
+        out = []
+        for bid, ia in batches_rows:
+            d = _decode_batch(con, bid)
+            d["batch_id"] = bid
+            d["imported_at"] = ia
+            out.append(d)
+        con.close()
+    except Exception as exc:
+        json.dump({"batches": [], "error": f"{type(exc).__name__}: {exc}"}, sys.stdout)
+        sys.stdout.write("\n")
+        return 0
+    json.dump({"batches": out}, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+def main(argv):
+    if argv == ["--check"]:
+        return check()
+    return run()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

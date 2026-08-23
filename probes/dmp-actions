@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+# probe: dmp-actions
+# probe-writes: none
+# probe-output: tar
+# probe-reads: $DMP_OUTPUT_DIR (default $HOME/projects/digital-marketing-pro/output/maguyva)
+"""Tar register.yaml + ACTIONS.md from the newest 30 DMP run dirs (by dir_key)."""
+import os
+import re
+import sys
+import tarfile
+from pathlib import Path
+
+CAP = 32 * 1024 * 1024
+ROOT = Path(
+    os.environ.get("DMP_OUTPUT_DIR")
+    or (Path.home() / "projects" / "digital-marketing-pro" / "output" / "maguyva")
+)
+
+
+class CapWriter:
+    def __init__(self, dest, cap):
+        self.dest = dest
+        self.cap = cap
+        self.n = 0
+
+    def write(self, data):
+        self.n += len(data)
+        if self.n > self.cap:
+            print("cap exceeded", file=sys.stderr)
+            sys.exit(1)
+        return self.dest.write(data)
+
+    def flush(self):
+        self.dest.flush()
+
+    def close(self):
+        pass
+
+
+def dir_key(p):
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})(?:-(\d{4}))?", p.name)
+    return (m.group(1), m.group(2) or "0000", p.name) if m else ("0000-00-00", "0000", p.name)
+
+
+def check():
+    if ROOT.is_dir():
+        print("ok dmp-actions")
+        return 0
+    return 1
+
+
+def run():
+    run_dirs = []
+    if ROOT.is_dir():
+        run_dirs = sorted(
+            (p for p in ROOT.iterdir() if p.is_dir() and not p.is_symlink()),
+            key=dir_key,
+        )
+    newest = run_dirs[-30:]
+    writer = CapWriter(sys.stdout.buffer, CAP)
+    with tarfile.open(fileobj=writer, mode="w|") as tar:
+        for d in newest:
+            for rel in ("actions/register.yaml", "ACTIONS.md"):
+                src = d / rel
+                if src.is_symlink() or not src.is_file():
+                    continue
+                arcname = f"{d.name}/{rel}"
+                tar.add(src, arcname=arcname, recursive=False)
+    return 0
+
+
+def main(argv):
+    if argv == ["--check"]:
+        return check()
+    return run()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

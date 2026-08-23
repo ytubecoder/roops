@@ -11,6 +11,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
@@ -704,6 +705,17 @@ class _PopenWait:
             self.returncode = EXIT_TIMEOUT
             stderr = (stderr or "") + f"probe timed out after {self._timeout_s} s\n"
             return stdout, stderr
+
+
+def extract_tar(path, dest):
+    """Extract a probe tar into dest using tarfile's data filter.
+
+    Refuses absolute paths, `..`, links, and device nodes (Python 3.12+
+    `filter='data'`). dest is created if missing.
+    """
+    os.makedirs(dest, exist_ok=True)
+    with tarfile.open(path) as tf:
+        tf.extractall(dest, filter="data")
 
 
 def atomic_out_file(out_path):

@@ -49,7 +49,10 @@ snapshot page inventory. Excluded: any write path on the machine via av
 (`harden`, `save`, `inject`, `open` — LOOP_HANDOFF hard constraint); remote
 mutation; scanning other hosts; re-deriving findings from live files outside
 the scan JSON; maguyva or other external tools in the engine. The probe is
-local `av` only, and only `scan` / `--version`.
+local `av` only, and only `scan` / `--version`. The subject of the report is
+the probe host (the machine where `av` actually runs), not the runner host;
+the page names that host (`subject: …`) from `probe_host` on the scan
+document.
 
 6. Guardrails
 - Report/propose-only: never `av harden`, `av save`, `av inject`, or `av open`

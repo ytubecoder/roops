@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,30 +29,90 @@ render_page = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(render_page)
 
 
-def run_renderer(scan_path, out, pagekit=None):
+BIN_FILES = (
+    "probe",
+    "probe_core.py",
+    "loopconf.py",
+    "requirements.py",
+    "schedule.py",
+)
+
+
+def _copy_probe_bin(root):
+    dest = os.path.join(root, "bin")
+    os.makedirs(dest, exist_ok=True)
+    for name in BIN_FILES:
+        shutil.copy(os.path.join(REPO, "bin", name), os.path.join(dest, name))
+    os.chmod(os.path.join(dest, "probe"), 0o755)
+
+
+def _av_scan_header():
+    path = os.path.join(REPO, "probes", "av-scan")
+    out = []
+    with open(path) as f:
+        for i, line in enumerate(f):
+            if i == 0:
+                out.append(line.rstrip("\n"))
+                continue
+            if line.startswith("# probe"):
+                out.append(line.rstrip("\n"))
+            else:
+                break
+    return "\n".join(out) + "\n"
+
+
+def _install_fake_av_scan(root, scan_json_path):
+    probes = os.path.join(root, "probes")
+    os.makedirs(probes, exist_ok=True)
+    merged = os.path.join(root, "scan-fixture.json")
+    try:
+        with open(scan_json_path) as f:
+            data = json.load(f)
+        data.setdefault("probe_host", "testhost")
+        data.setdefault("probe_av_version", "0.0-stub")
+        data.setdefault("probe_login_path", "/usr/bin")
+        with open(merged, "w") as f:
+            json.dump(data, f)
+    except (OSError, ValueError):
+        shutil.copy(scan_json_path, merged)
+    body = (
+        _av_scan_header()
+        + "if [ \"${1:-}\" = \"--check\" ]; then echo \"ok av-scan fake\"; exit 0; fi\n"
+        + f'cat "{merged}"\n'
+    )
+    path = os.path.join(probes, "av-scan")
+    with open(path, "w") as f:
+        f.write(body)
+    os.chmod(path, 0o755)
+    return path
+
+
+def run_renderer(scan_path, out, pagekit=None, host="fixture", av_version="0.0-stub"):
     """Invoke render_page.py as the runner does. `pagekit` overrides $PAGEKIT so
-    a test can point at a throwaway kit without touching the real one."""
+    a test can point at a throwaway kit without touching the real one.
+    Pass host=None / av_version=None to let the scan document supply them."""
     env = dict(os.environ)
     if pagekit is None:
         env.pop("PAGEKIT", None)
     else:
         env["PAGEKIT"] = pagekit
+    cmd = [
+        sys.executable,
+        os.path.join(LOOP, "render_page.py"),
+        scan_path,
+        "--loop",
+        "kagi-ban",
+        "--run-id",
+        "test-run",
+        "-o",
+        out,
+    ]
+    if host is not None:
+        cmd.extend(["--host", host])
+    if av_version is not None:
+        cmd.extend(["--av-version", av_version])
     return subprocess.run(
-        [
-            sys.executable,
-            os.path.join(LOOP, "render_page.py"),
-            scan_path,
-            "--loop",
-            "kagi-ban",
-            "--run-id",
-            "test-run",
-            "-o",
-            out,
-            "--host",
-            "fixture",
-            "--av-version",
-            "0.0-stub",
-        ],
+        cmd,
         capture_output=True,
         text=True,
         check=False,
@@ -71,27 +132,22 @@ def make_stub_av(dirpath, scan_json_path):
     return stub
 
 
-@unittest.skipUnless(
-    sys.platform.startswith("darwin"),
-    "kagi-ban audits the macOS host it runs on: av is a macOS .app, and the "
-    "precheck reads the login PATH via `/bin/zsh -l`, which Debian does not "
-    "ship. The loop cannot run on Linux, so neither can its precheck tests. "
-    "The renderer tests below are pure Python and are NOT skipped.",
-)
 class KagiBanPrecheckTests(unittest.TestCase):
     def run_precheck(self, root, scan_json_path):
         out_dir = os.path.join(root, "state", "runs", "test-run")
         os.makedirs(out_dir, exist_ok=True)
-        stub = make_stub_av(root, scan_json_path)
+        _copy_probe_bin(root)
+        _install_fake_av_scan(root, scan_json_path)
         env = dict(
             os.environ,
-            AV_BIN=stub,
             OUT_DIR=out_dir,
             LOOPS_ROOT=root,
             LOOP_NAME="kagi-ban",
             RUN_ID="test-run",
             WORKDIR=root,
         )
+        env.pop("LOOPS_PROBE_HOST", None)
+        env.pop("LOOPS_PROBE_KEY", None)
         proc = subprocess.run(
             ["bash", os.path.join(LOOP, "precheck.sh")],
             capture_output=True,
@@ -152,6 +208,55 @@ class KagiBanPrecheckTests(unittest.TestCase):
                     os.path.join(out_dir, "loop-data.commit", "scan-prev.json")
                 )
             )
+
+    def test_precheck_transport_failure_exits_1(self):
+        with tempfile.TemporaryDirectory() as root:
+            out_dir = os.path.join(root, "state", "runs", "test-run")
+            os.makedirs(out_dir, exist_ok=True)
+            _copy_probe_bin(root)
+            os.makedirs(os.path.join(root, "probes"), exist_ok=True)
+            fake_ssh = os.path.join(root, "fake-ssh")
+            with open(fake_ssh, "w") as f:
+                f.write("#!/bin/sh\necho ssh-failed >&2\nexit 255\n")
+            os.chmod(fake_ssh, 0o755)
+            env = dict(
+                os.environ,
+                OUT_DIR=out_dir,
+                LOOPS_ROOT=root,
+                LOOP_NAME="kagi-ban",
+                RUN_ID="test-run",
+                WORKDIR=root,
+                LOOPS_PROBE_HOST="x",
+                LOOPS_SSH=fake_ssh,
+            )
+            proc = subprocess.run(
+                ["bash", os.path.join(LOOP, "precheck.sh")],
+                capture_output=True,
+                text=True,
+                env=env,
+                cwd=LOOP,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("transport", proc.stderr)
+
+    def test_page_shows_probe_host_and_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(FIXTURE) as f:
+                scan = json.load(f)
+            scan["probe_host"] = "llm"
+            scan["probe_av_version"] = "2.4.0"
+            scan_path = os.path.join(tmp, "scan.json")
+            with open(scan_path, "w") as f:
+                json.dump(scan, f)
+            out = os.path.join(tmp, "page.html")
+            proc = run_renderer(scan_path, out, host=None, av_version=None)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(out) as f:
+                page = f.read()
+            self.assertIn("llm", page)
+            self.assertIn("2.4.0", page)
+            self.assertIn("subject: llm", page)
 
 
 class KagiBanRendererTests(unittest.TestCase):

@@ -367,5 +367,15 @@ class KagamiMirror(unittest.TestCase):
             conn.close()
 
 
+class KagamiPrecheckPortabilityTests(unittest.TestCase):
+    def test_precheck_does_not_hardcode_bin_zsh_login(self):
+        path = os.path.join(REPO, "loops.d", "kagami", "precheck.sh")
+        with open(path) as f:
+            text = f.read()
+        self.assertNotIn("/bin/zsh -l", text)
+        self.assertIn("command -v zsh", text)
+
+
 if __name__ == "__main__":
     unittest.main()
+

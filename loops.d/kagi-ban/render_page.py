@@ -18,7 +18,6 @@ import json
 import os
 import pathlib
 import platform
-import plistlib
 import re
 import sys
 from string import Template
@@ -167,12 +166,10 @@ def sev_marker(sev):
     )
 
 
-def detect_av_version():
-    try:
-        with open("/Applications/Automic Vault.app/Contents/Info.plist", "rb") as f:
-            return plistlib.load(f).get("CFBundleShortVersionString", "")
-    except (OSError, plistlib.InvalidFileException):
+def detect_av_version(data=None):
+    if not data:
         return ""
+    return data.get("probe_av_version") or ""
 
 
 # Key + separator exactly as bin/redact.py's _KV_RE sees them — same keyword
@@ -377,6 +374,7 @@ $groups
   <footer>
     data <span class="cmd">$scan_file</span> · produced by
     <span class="cmd">av scan --json</span> (exit 0 even with findings — alert on count)<br>
+    subject: $host<br>
     render <span class="cmd">render_page.py</span> · raw envelope embedded as
     <span class="cmd">#report-data</span> · remediation for this machine follows the
     native headless plan, not <span class="cmd">av save</span>
@@ -412,13 +410,17 @@ def main():
         default=None,
         help="output file; defaults to av-exposure-audit_<host>_<scan-date>.html",
     )
-    ap.add_argument("--host", default=platform.node().removesuffix(".local"))
-    ap.add_argument("--av-version", default=detect_av_version())
+    ap.add_argument("--host", default=None)
+    ap.add_argument("--av-version", default=None)
     ap.add_argument("--loop", required=True)
     ap.add_argument("--run-id", required=True)
     args = ap.parse_args()
 
     data = json.loads(args.scan_json.read_text())
+    if not args.host:
+        args.host = data.get("probe_host") or platform.node().removesuffix(".local")
+    if args.av_version is None:
+        args.av_version = detect_av_version(data)
     findings = neutralize_kv_phrases(data.get("findings", []))
     sev, tools, paths = build_stats(findings)
     scanned = datetime.datetime.fromtimestamp(

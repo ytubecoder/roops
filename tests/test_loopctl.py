@@ -4437,6 +4437,24 @@ class TestSnapshotRestore(LoopsRootTestCase):
             self.assertIn(name, step3, msg=f"{name} missing from step 3")
 
 
+class TestValidateAllRealFleet(unittest.TestCase):
+    def test_validate_all_over_real_loops_d_exits_0(self):
+        # HOME is a throwaway so live probe --check cannot see operator
+        # data dirs. Unmet probe: items are notices, not failures.
+        with tempfile.TemporaryDirectory() as home:
+            env = os.environ.copy()
+            env["HOME"] = home
+            env.pop("LOOPS_PROBE_HOST", None)
+            env.pop("AV_BIN", None)
+            env.pop("ADS_DB", None)
+            r = run_cli(
+                ["validate", "--all", "--root", str(REPO_ROOT)],
+                env_overrides=env,
+            )
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("OK ", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
 

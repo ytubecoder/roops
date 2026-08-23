@@ -1,47 +1,40 @@
 #!/usr/bin/env bash
 # kagi-ban precheck — trusted deterministic gathering (script→agent pattern).
-# Runs the Automic Vault scanner READ-ONLY, diffs against the committed
-# baseline, emits a digest for the engine. All counts are computed HERE
-# (model-emitted metrics get believed — house gotcha).
+# Runs the Automic Vault scanner READ-ONLY via bin/probe av-scan, diffs against
+# the committed baseline, emits a digest for the engine. All counts are
+# computed HERE (model-emitted metrics get believed — house gotcha).
 set -euo pipefail
 
-AV_BIN="${AV_BIN:-/Applications/Automic Vault.app/Contents/MacOS/av}"
-
-if [ ! -x "$AV_BIN" ]; then
-  echo "ERROR: av binary not found at $AV_BIN" >&2
+probe_rc=0
+"$LOOPS_ROOT/bin/probe" av-scan --out "$OUT_DIR/scan.json" || probe_rc=$?
+if [ "$probe_rc" -eq 75 ]; then
+  echo "ERROR: av-scan probe transport failed (llm unreachable)" >&2
+  exit 1
+elif [ "$probe_rc" -ne 0 ]; then
   exit 1
 fi
-
-# The audit's world-view must not depend on the trigger context (launchd's
-# minimal PATH silently dropped 4 path-hygiene exposures on 2026-07-30).
-# Pin to the login-shell PATH — the surface the user actually lives in.
-AUDIT_PATH="$(/bin/zsh -l -c 'printf %s "$PATH"' 2>/dev/null | tail -n 1)"
-case "$AUDIT_PATH" in
-  */bin*) export PATH="$AUDIT_PATH" ;;
-  *) echo "WARN: could not resolve login-shell PATH; using inherited PATH" >&2 ;;
-esac
-
-AV_VERSION="$("$AV_BIN" --version 2>/dev/null | head -n1 || echo unknown)"
-"$AV_BIN" scan --json > "$OUT_DIR/scan.json"
 
 mkdir -p "$OUT_DIR/loop-data.commit"
 
 python3 - "$OUT_DIR/scan.json" "$LOOPS_ROOT/state/loop-data/kagi-ban/scan-prev.json" \
-  "$OUT_DIR/loop-data.commit/scan-prev.json" "$AV_VERSION" <<'PY'
+  "$OUT_DIR/loop-data.commit/scan-prev.json" <<'PY'
 import hashlib
 import json
 import shutil
 import sys
 
-scan_path, prev_path, commit_path, av_version = sys.argv[1:5]
+scan_path, prev_path, commit_path = sys.argv[1:4]
 
-def current_findings(path):
+def load_scan(path):
     try:
         with open(path) as f:
-            return json.load(f).get("findings") or []
+            return json.load(f)
     except (OSError, ValueError) as exc:
         print(f"ERROR: current scan JSON unparseable: {exc}", file=sys.stderr)
         sys.exit(1)
+
+def current_findings(doc):
+    return doc.get("findings") or []
 
 def previous_findings(path):
     try:
@@ -62,7 +55,9 @@ def keys(findings):
                     "paths": paths}
     return out
 
-current = keys(current_findings(scan_path))
+scan_doc = load_scan(scan_path)
+av_version = scan_doc.get("probe_av_version") or "unknown"
+current = keys(current_findings(scan_doc))
 previous = keys(previous_findings(prev_path))
 new = sorted(set(current) - set(previous))
 resolved = sorted(set(previous) - set(current))

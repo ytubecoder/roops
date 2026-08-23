@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# probe: av-scan
+# probe-timeout-s: 280
+# probe-writes: none
+# probe-output: json
+# probe-reads: $AV_BIN, /bin/zsh -l, Automic Vault Info.plist
+set -euo pipefail
+
+AV_BIN="${AV_BIN:-/Applications/Automic Vault.app/Contents/MacOS/av}"
+
+if [ "${1:-}" = "--check" ]; then
+  if [ -x "$AV_BIN" ]; then
+    echo "ok av-scan $AV_BIN"
+    exit 0
+  fi
+  exit 1
+fi
+
+AUDIT_PATH=""
+if [ -x /bin/zsh ]; then
+  AUDIT_PATH="$(/bin/zsh -l -c 'printf %s "$PATH"' 2>/dev/null | tail -n 1 || true)"
+fi
+case "$AUDIT_PATH" in
+  */bin*) export PATH="$AUDIT_PATH" ;;
+esac
+
+AV_VERSION="$("$AV_BIN" --version 2>/dev/null | head -n1 || true)"
+if [ -z "$AV_VERSION" ]; then
+  AV_VERSION="$(python3 -c '
+import plistlib
+try:
+    with open("/Applications/Automic Vault.app/Contents/Info.plist", "rb") as f:
+        print(plistlib.load(f).get("CFBundleShortVersionString") or "")
+except Exception:
+    pass
+' || true)"
+fi
+if [ -z "$AV_VERSION" ]; then
+  AV_VERSION="unknown"
+fi
+
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+"$AV_BIN" scan --json > "$TMP"
+
+python3 - "$TMP" "$AV_VERSION" "${AUDIT_PATH:-}" <<'PY'
+import json
+import platform
+import sys
+
+path, ver, login_path = sys.argv[1:4]
+with open(path) as f:
+    doc = json.load(f)
+if not isinstance(doc, dict):
+    raise SystemExit("av-scan: scan JSON is not an object")
+doc["probe_host"] = platform.node()
+doc["probe_av_version"] = ver
+doc["probe_login_path"] = login_path
+json.dump(doc, sys.stdout)
+sys.stdout.write("\n")
+PY

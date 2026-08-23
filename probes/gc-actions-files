@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+# probe: gc-actions-files
+# probe-writes: none
+# probe-output: tar
+# probe-reads: $GC_ACTIONS_DIR (default $HOME/projects/maguyva-marketing/gc-actions)
+"""Tar the gc-actions board files (bare arcnames)."""
+import os
+import sys
+import tarfile
+from pathlib import Path
+
+CAP = 8 * 1024 * 1024
+ROOT = Path(
+    os.environ.get("GC_ACTIONS_DIR")
+    or (Path.home() / "projects" / "maguyva-marketing" / "gc-actions")
+)
+NAMES = ("action-sources.yaml", "action-ticket-map.yaml", "PRODUCT_BACKLOG.md")
+
+
+class CapWriter:
+    def __init__(self, dest, cap):
+        self.dest = dest
+        self.cap = cap
+        self.n = 0
+
+    def write(self, data):
+        self.n += len(data)
+        if self.n > self.cap:
+            print("cap exceeded", file=sys.stderr)
+            sys.exit(1)
+        return self.dest.write(data)
+
+    def flush(self):
+        self.dest.flush()
+
+    def close(self):
+        pass
+
+
+def check():
+    board = ROOT / "PRODUCT_BACKLOG.md"
+    if ROOT.is_dir() and board.is_file() and os.access(board, os.R_OK):
+        print("ok gc-actions-files")
+        return 0
+    return 1
+
+
+def run():
+    writer = CapWriter(sys.stdout.buffer, CAP)
+    with tarfile.open(fileobj=writer, mode="w|") as tar:
+        for name in NAMES:
+            src = ROOT / name
+            if src.is_symlink() or not src.is_file():
+                continue
+            tar.add(src, arcname=name, recursive=False)
+    return 0
+
+
+def main(argv):
+    if argv == ["--check"]:
+        return check()
+    return run()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

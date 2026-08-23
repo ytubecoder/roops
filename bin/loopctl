@@ -30,13 +30,17 @@ authoritative contract):
 """
 import argparse
 import importlib.util
+import io
 import json
 import os
 import plistlib
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -70,6 +74,7 @@ requirements = _load_module_from_path(
 probe_core = _load_module_from_path(
     os.path.join(_HERE, "probe_core.py"), "_loopctl_probe_core"
 )
+lock_mod = _load_module_from_path(os.path.join(_HERE, "lock.py"), "_loopctl_lock")
 
 _DB_BIN = os.path.join(_HERE, "db.py")
 _DASHBOARD_GENERATE = os.path.join(_REPO_ROOT, "dashboard", "generate.py")
@@ -1796,6 +1801,388 @@ def cmd_dashboard(args):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# snapshot / restore (B-25 WP5)
+# ---------------------------------------------------------------------------
+
+_SNAPSHOT_COUNT_KEYS = (
+    "runs",
+    "findings",
+    "dispositions",
+    "loop_events",
+    "run_dirs",
+    "reports",
+)
+_SNAPSHOT_MANAGED_RELS = (
+    "state/loops.sqlite",
+    "state/runs",
+    "state/loop-data",
+    "reports",
+)
+_SNAPSHOT_TREES = ("state/runs", "state/loop-data", "reports")
+
+
+def _live_lock_names(root):
+    locks_dir = os.path.join(root, "state", "locks")
+    live = []
+    if not os.path.isdir(locks_dir):
+        return live
+    try:
+        names = sorted(os.listdir(locks_dir))
+    except OSError:
+        return live
+    for name in names:
+        if not name.endswith(".lock"):
+            continue
+        path = os.path.join(locks_dir, name)
+        if os.path.islink(path) or not os.path.isfile(path):
+            continue
+        pid, _since = lock_mod.read_holder(path)
+        if pid is not None and lock_mod.pid_alive(pid):
+            live.append(name)
+    return live
+
+
+def _count_table(conn, table):
+    try:
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    except sqlite3.Error:
+        return 0
+
+
+def _count_run_dirs(root):
+    d = os.path.join(root, "state", "runs")
+    if not os.path.isdir(d) or os.path.islink(d):
+        return 0
+    n = 0
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return 0
+    for name in names:
+        p = os.path.join(d, name)
+        if os.path.isdir(p) and not os.path.islink(p):
+            n += 1
+    return n
+
+
+def _count_report_files(root):
+    d = os.path.join(root, "reports")
+    if not os.path.isdir(d) or os.path.islink(d):
+        return 0
+    n = 0
+    for dirpath, dirnames, filenames in os.walk(d, followlinks=False):
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if not os.path.islink(os.path.join(dirpath, name))
+        ]
+        for fn in filenames:
+            fp = os.path.join(dirpath, fn)
+            if os.path.isfile(fp) and not os.path.islink(fp):
+                n += 1
+    return n
+
+
+def _counts_from_db_path(db_path):
+    counts = {k: 0 for k in _SNAPSHOT_COUNT_KEYS}
+    if not os.path.isfile(db_path):
+        return counts
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        counts["runs"] = _count_table(conn, "runs")
+        counts["findings"] = _count_table(conn, "findings")
+        counts["dispositions"] = _count_table(conn, "dispositions")
+        counts["loop_events"] = _count_table(conn, "loop_events")
+    finally:
+        conn.close()
+    return counts
+
+
+def _collect_counts(root, db_path=None):
+    counts = _counts_from_db_path(db_path or os.path.join(root, "state", "loops.sqlite"))
+    counts["run_dirs"] = _count_run_dirs(root)
+    counts["reports"] = _count_report_files(root)
+    return counts
+
+
+def _format_count_line(counts):
+    return (
+        f"runs={counts['runs']} findings={counts['findings']} "
+        f"dispositions={counts['dispositions']} loop_events={counts['loop_events']} "
+        f"run_dirs={counts['run_dirs']} reports={counts['reports']}"
+    )
+
+
+def _emit_counts(counts, as_json, archive_bytes=None):
+    if as_json:
+        payload = {k: counts[k] for k in _SNAPSHOT_COUNT_KEYS}
+        if archive_bytes is not None:
+            payload["archive_bytes"] = archive_bytes
+        print(json.dumps(payload))
+        return
+    line = _format_count_line(counts)
+    if archive_bytes is not None:
+        line += f" archive_bytes={archive_bytes}"
+    print(line)
+
+
+def _add_tree_to_tar(tf, abs_path, arcname):
+    if os.path.islink(abs_path):
+        return
+    if os.path.isfile(abs_path):
+        tf.add(abs_path, arcname=arcname, recursive=False)
+        return
+    if not os.path.isdir(abs_path):
+        return
+    tf.add(abs_path, arcname=arcname, recursive=False)
+    try:
+        names = sorted(os.listdir(abs_path))
+    except OSError:
+        return
+    for name in names:
+        _add_tree_to_tar(tf, os.path.join(abs_path, name), f"{arcname}/{name}")
+
+
+def _unlink_sqlite_sidecars(db_path):
+    for suffix in ("-wal", "-shm"):
+        p = db_path + suffix
+        if os.path.lexists(p):
+            os.unlink(p)
+
+
+def _reapply_modes(path):
+    if not os.path.lexists(path) or os.path.islink(path):
+        return
+    if os.path.isdir(path):
+        os.chmod(path, 0o700)
+        try:
+            names = os.listdir(path)
+        except OSError:
+            return
+        for name in names:
+            if name.startswith(".restore-") or ".pre-restore-" in name:
+                continue
+            _reapply_modes(os.path.join(path, name))
+    else:
+        os.chmod(path, 0o600)
+
+
+def _backup_sqlite(src_db, dest_db):
+    src = sqlite3.connect(f"file:{src_db}?mode=ro", uri=True)
+    try:
+        dst = sqlite3.connect(dest_db)
+        try:
+            dst.execute("PRAGMA journal_mode=DELETE")
+            src.backup(dst)
+            dst.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            dst.commit()
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    _unlink_sqlite_sidecars(dest_db)
+
+
+def _target_run_count(root):
+    db_path = os.path.join(root, "state", "loops.sqlite")
+    if not os.path.isfile(db_path):
+        return 0
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        return _count_table(conn, "runs")
+    finally:
+        conn.close()
+
+
+def _remove_path(path):
+    if not os.path.lexists(path):
+        return
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
+
+
+def cmd_snapshot(args):
+    root = args.root
+    force = bool(getattr(args, "force", False))
+    as_json = bool(getattr(args, "json", False))
+    out_path = os.path.abspath(args.archive)
+    live = _live_lock_names(root)
+    if live and not force:
+        print("refusing to snapshot: live lock(s): " + ", ".join(live), file=sys.stderr)
+        return 1
+    if live and force:
+        print(
+            f"WARNING: {len(live)} live lock(s) — in-flight runs will be partial in the snapshot",
+            file=sys.stderr,
+        )
+
+    db_path = os.path.join(root, "state", "loops.sqlite")
+    if not os.path.isfile(db_path):
+        print("refusing to snapshot: missing state/loops.sqlite", file=sys.stderr)
+        return 1
+
+    out_dir = os.path.dirname(out_path) or os.getcwd()
+    if not os.path.isdir(out_dir):
+        print(f"snapshot failed: directory does not exist: {out_dir}", file=sys.stderr)
+        return 1
+
+    fd, tmp_db = tempfile.mkstemp(prefix="loops-snap-db-")
+    os.close(fd)
+    fd, tmp_tar = tempfile.mkstemp(prefix=".snapshot-", suffix=".tgz", dir=out_dir)
+    os.close(fd)
+    try:
+        _backup_sqlite(db_path, tmp_db)
+        counts = _counts_from_db_path(tmp_db)
+        counts["run_dirs"] = _count_run_dirs(root)
+        counts["reports"] = _count_report_files(root)
+        with tarfile.open(tmp_tar, "w:gz") as tf:
+            tf.add(tmp_db, arcname="state/loops.sqlite", recursive=False)
+            blob = json.dumps(counts, sort_keys=True).encode("utf-8")
+            info = tarfile.TarInfo(name="state/.snapshot-counts.json")
+            info.size = len(blob)
+            info.mode = 0o600
+            tf.addfile(info, io.BytesIO(blob))
+            for rel in _SNAPSHOT_TREES:
+                abs_path = os.path.join(root, rel)
+                if os.path.isdir(abs_path) and not os.path.islink(abs_path):
+                    _add_tree_to_tar(tf, abs_path, rel)
+        os.chmod(tmp_tar, 0o600)
+        os.replace(tmp_tar, out_path)
+        tmp_tar = None
+        os.chmod(out_path, 0o600)
+    except Exception as e:
+        print(f"snapshot failed: {e}", file=sys.stderr)
+        return 1
+    finally:
+        if os.path.exists(tmp_db):
+            _unlink_sqlite_sidecars(tmp_db)
+            os.unlink(tmp_db)
+        if tmp_tar and os.path.exists(tmp_tar):
+            os.unlink(tmp_tar)
+
+    _emit_counts(counts, as_json, archive_bytes=os.path.getsize(out_path))
+    return 0
+
+
+def cmd_restore(args):
+    root = args.root
+    force = bool(getattr(args, "force", False))
+    as_json = bool(getattr(args, "json", False))
+    archive = os.path.abspath(args.archive)
+    pid = os.getpid()
+    step = "preflight"
+    restore_dir = os.path.join(root, "state", f".restore-{pid}")
+
+    def fail(msg, code=1):
+        print(f"restore failed at {step}: {msg}", file=sys.stderr)
+        return code
+
+    if not os.path.isfile(archive):
+        return fail(f"archive not found: {archive}")
+
+    step = "refuse-existing"
+    n_runs = _target_run_count(root)
+    if n_runs > 0 and not force:
+        print(
+            f"refusing to restore: target has {n_runs} runs rows (pass --force to replace)",
+            file=sys.stderr,
+        )
+        return 1
+
+    step = "extract"
+    os.makedirs(os.path.join(root, "state"), mode=0o700, exist_ok=True)
+    if os.path.lexists(restore_dir):
+        _remove_path(restore_dir)
+    os.makedirs(restore_dir, mode=0o700)
+    try:
+        with tarfile.open(archive, "r:gz") as tf:
+            tf.extractall(restore_dir, filter="data")
+    except tarfile.FilterError as e:
+        return fail(e)
+    except tarfile.TarError as e:
+        return fail(e)
+    except OSError as e:
+        return fail(e)
+
+    step = "verify"
+    extracted_sqlite = os.path.join(restore_dir, "state", "loops.sqlite")
+    if not os.path.isfile(extracted_sqlite):
+        print("archive missing state/loops.sqlite", file=sys.stderr)
+        return 1
+    counts_path = os.path.join(restore_dir, "state", ".snapshot-counts.json")
+    try:
+        with open(counts_path, "r") as f:
+            expected = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        return fail(f"counts file: {e}")
+    if not isinstance(expected, dict):
+        return fail("counts file is not an object")
+
+    step = "swap"
+    dest_sqlite = os.path.join(root, "state", "loops.sqlite")
+    _unlink_sqlite_sidecars(dest_sqlite)
+    backups = []
+    try:
+        for rel in _SNAPSHOT_MANAGED_RELS:
+            dest = os.path.join(root, rel)
+            if os.path.lexists(dest):
+                backup = dest + f".pre-restore-{pid}"
+                os.rename(dest, backup)
+                backups.append(backup)
+        for rel in _SNAPSHOT_MANAGED_RELS:
+            src = os.path.join(restore_dir, rel)
+            dest = os.path.join(root, rel)
+            if os.path.lexists(src):
+                parent = os.path.dirname(dest)
+                os.makedirs(parent, mode=0o700, exist_ok=True)
+                os.rename(src, dest)
+        _unlink_sqlite_sidecars(dest_sqlite)
+        for backup in backups:
+            _remove_path(backup)
+    except OSError as e:
+        return fail(e)
+
+    _remove_path(restore_dir)
+
+    step = "chmod"
+    _reapply_modes(os.path.join(root, "state"))
+    _reapply_modes(os.path.join(root, "reports"))
+
+    step = "init"
+    init = _db_run(["init"], root)
+    if init.returncode != 0:
+        return fail(init.stderr.strip() or "db.py init failed")
+
+    step = "counts"
+    restored = _collect_counts(root)
+    mismatch = [
+        key
+        for key in _SNAPSHOT_COUNT_KEYS
+        if key in expected and restored.get(key) != expected.get(key)
+    ]
+    if mismatch:
+        print("count mismatch", file=sys.stderr)
+        return 1
+
+    step = "dashboard"
+    try:
+        dash = _dashboard_module()
+        dash.generate(
+            root=root,
+            loopconf_parse=loopconf.parse,
+            schedule_parse=schedule.parse,
+        )
+    except Exception as e:
+        print(f"warning: dashboard regenerate failed: {e}", file=sys.stderr)
+
+    _emit_counts(restored, as_json)
+    return 0
+
+
+
 def cmd_serve(args):
     import console
 
@@ -2451,6 +2838,14 @@ def build_parser():
 
     sub.add_parser("dashboard", parents=[common_sub])
 
+    snapshot_p = sub.add_parser("snapshot", parents=[common_sub])
+    snapshot_p.add_argument("archive")
+    snapshot_p.add_argument("--force", action="store_true")
+
+    restore_p = sub.add_parser("restore", parents=[common_sub])
+    restore_p.add_argument("archive")
+    restore_p.add_argument("--force", action="store_true")
+
     # `serve` takes the no-`--from` flavor (rationale in `_common_parser`).
     # `main()` additionally rejects a PRE-verb `--from` with `serve`: this
     # branch's top-level parser carries a hidden `--from` that main's did
@@ -2540,6 +2935,8 @@ def main(argv=None):
         "set-schedule": cmd_set_schedule,
         "set-owner": cmd_set_owner,
         "dashboard": cmd_dashboard,
+        "snapshot": cmd_snapshot,
+        "restore": cmd_restore,
         "serve": cmd_serve,
         "console": cmd_console,
         "findings": cmd_findings,

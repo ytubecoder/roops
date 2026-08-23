@@ -17,12 +17,16 @@ codes and call log are controllable via environment variables.
 import http.server
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import plistlib
+import re
 import shutil
+import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import unittest
@@ -4048,6 +4052,392 @@ class TestBackendPredicatesAndConsole(LoopsRootTestCase):
         self.assertEqual(un2.returncode, 0, msg=un2.stdout + un2.stderr)
 
 
+# ---------------------------------------------------------------------------
+# WP5: loopctl snapshot / restore (B-25)
+# ---------------------------------------------------------------------------
+
+_SNAPSHOT_MANAGED_EXACT = {
+    "state",
+    "state/loops.sqlite",
+    "state/.snapshot-counts.json",
+    "state/runs",
+    "state/loop-data",
+    "reports",
+}
+
+
+def _snapshot_member_is_managed(name):
+    name = name.lstrip("./")
+    if name in _SNAPSHOT_MANAGED_EXACT:
+        return True
+    return (
+        name.startswith("state/runs/")
+        or name.startswith("state/loop-data/")
+        or name.startswith("reports/")
+    )
+
+
+class TestSnapshotRestore(LoopsRootTestCase):
+    def _archive_path(self, name="out.tgz"):
+        return os.path.join(self.root, name)
+
+    def _seed_finding_and_disposition(self, loop_name, run_id, finding_id="svc:down"):
+        started = "2026-08-23T00:00:00Z"
+        contract = {
+            "schema_version": 1,
+            "run_id": run_id,
+            "status": "alert",
+            "status_reason": "x",
+            "headline": "x",
+            "report_markdown": "x",
+            "metrics": "{}",
+            "findings": [
+                {
+                    "finding_id": finding_id,
+                    "title": "svc down",
+                    "severity": "alert",
+                    "detail": "d",
+                }
+            ],
+        }
+        contract_path = os.path.join(self.root, "state", f"{run_id}.contract.json")
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+        r = run_db(
+            [
+                "upsert-findings",
+                "--root",
+                self.root,
+                "--run-id",
+                run_id,
+                "--loop",
+                loop_name,
+                "--contract-file",
+                contract_path,
+                "--ts",
+                started,
+            ]
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = run_db(
+            [
+                "dispose",
+                "--root",
+                self.root,
+                "--loop",
+                loop_name,
+                "--finding-id",
+                finding_id,
+                "--action",
+                "dismiss",
+                "--note",
+                "settled",
+            ]
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return finding_id
+
+    def _seed_snapshot_world(self, loop_name="snap-loop"):
+        self.fixture.minimal_valid_loop(loop_name)
+        run_ids = [
+            f"20260823T000000Z-{loop_name}-aaaaaa",
+            f"20260823T000001Z-{loop_name}-bbbbbb",
+        ]
+        started = "2026-08-23T00:00:00Z"
+        for rid in run_ids:
+            r = run_db(
+                [
+                    "start-run",
+                    "--root",
+                    self.root,
+                    "--run-id",
+                    rid,
+                    "--loop",
+                    loop_name,
+                    "--engine",
+                    "codex",
+                    "--trigger",
+                    "manual",
+                    "--started-at",
+                    started,
+                ]
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            d = os.path.join(self.root, "state", "runs", rid)
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "note.txt"), "w") as f:
+                f.write("run-dir\n")
+        self._seed_finding_and_disposition(loop_name, run_ids[0])
+        reports_dir = os.path.join(self.root, "reports", "a")
+        os.makedirs(reports_dir, exist_ok=True)
+        with open(os.path.join(reports_dir, "latest.md"), "w") as f:
+            f.write("report\n")
+        excluded = [
+            ("state/locks/foo.lock", "999999 2026-01-01T00:00:00Z\n"),
+            ("state/launchd-logs/x.log", "log\n"),
+            ("state/tmp/x", "tmp\n"),
+            ("state/probe-log/2026-08-23.log", "probe\n"),
+            ("launchd/com.loops.x.plist", "<plist/>\n"),
+            ("state/kagami-fixture/x", "fx\n"),
+        ]
+        for rel, content in excluded:
+            p = os.path.join(self.root, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(content)
+        return loop_name, run_ids
+
+    def _write_lock(self, name, pid):
+        d = os.path.join(self.root, "state", "locks")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f"{name}.lock")
+        with open(path, "w") as f:
+            f.write(f"{pid} 2026-08-23T00:00:00Z\n")
+        return path
+
+    def test_snapshot_refuses_live_lock_unless_force(self):
+        archive = self._archive_path("live.tgz")
+        self._write_lock("x", os.getpid())
+        r = run_cli(["snapshot", archive, "--root", self.root])
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertIn("x.lock", r.stderr)
+        self.assertFalse(os.path.isfile(archive))
+
+        r_force = run_cli(["snapshot", archive, "--root", self.root, "--force"])
+        self.assertEqual(r_force.returncode, 0, msg=r_force.stdout + r_force.stderr)
+        self.assertIn("WARNING: 1 live lock", r_force.stderr)
+        self.assertTrue(os.path.isfile(archive))
+
+        dead_pid = 999999
+        try:
+            os.kill(dead_pid, 0)
+            self.skipTest("dead_pid unexpectedly alive")
+        except OSError:
+            pass
+        other = LoopsRoot()
+        self.addCleanup(other.cleanup)
+        dead_dir = os.path.join(other.root, "state", "locks")
+        os.makedirs(dead_dir, exist_ok=True)
+        with open(os.path.join(dead_dir, "stale.lock"), "w") as f:
+            f.write(f"{dead_pid} 2020-01-01T00:00:00Z\n")
+        dead_archive = os.path.join(other.root, "dead.tgz")
+        r_dead = run_cli(["snapshot", dead_archive, "--root", other.root])
+        self.assertEqual(r_dead.returncode, 0, msg=r_dead.stdout + r_dead.stderr)
+        self.assertNotIn("WARNING:", r_dead.stderr)
+
+    def test_snapshot_contents_and_counts(self):
+        loop_name, run_ids = self._seed_snapshot_world()
+        wal = os.path.join(self.root, "state", "loops.sqlite-wal")
+        if not os.path.exists(wal):
+            with open(wal, "w") as f:
+                f.write("wal-should-not-be-archived\n")
+        archive = self._archive_path("contents.tgz")
+        r = run_cli(["snapshot", archive, "--root", self.root])
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("runs=2 findings=1 dispositions=1", r.stdout)
+        mode = stat.S_IMODE(os.stat(archive).st_mode)
+        self.assertEqual(mode, 0o600)
+        with tarfile.open(archive, "r:gz") as tf:
+            names = [n.lstrip("./") for n in tf.getnames()]
+        self.assertIn("state/.snapshot-counts.json", names)
+        self.assertIn("state/loops.sqlite", names)
+        for rid in run_ids:
+            self.assertTrue(
+                any(n == f"state/runs/{rid}" or n.startswith(f"state/runs/{rid}/") for n in names),
+                msg=names,
+            )
+        self.assertTrue(any(n == "reports/a/latest.md" or n.endswith("latest.md") for n in names), names)
+        excluded_bits = (
+            "state/locks",
+            "state/launchd-logs",
+            "state/tmp",
+            "state/probe-log",
+            "launchd",
+            "state/kagami-fixture",
+        )
+        for name in names:
+            self.assertFalse(name.endswith("-wal"), msg=name)
+            self.assertTrue(_snapshot_member_is_managed(name), msg=name)
+            for bit in excluded_bits:
+                self.assertFalse(
+                    name == bit or name.startswith(bit + "/"),
+                    msg=f"excluded path in archive: {name}",
+                )
+        self.assertFalse(os.path.isfile(os.path.join(self.root, "state", ".snapshot-counts.json")))
+
+    def test_restore_refuses_existing_rows_then_force_replaces(self):
+        _loop_name, run_ids = self._seed_snapshot_world()
+        archive = self._archive_path("force.tgz")
+        snap = run_cli(["snapshot", archive, "--root", self.root])
+        self.assertEqual(snap.returncode, 0, msg=snap.stdout + snap.stderr)
+        snap_line = snap.stdout.strip().splitlines()[0]
+
+        target = LoopsRoot()
+        self.addCleanup(target.cleanup)
+        target.add_run("20260101T000000Z-stale-aaaaaa", "stale-loop", "2026-01-01T00:00:00Z")
+        os.makedirs(os.path.join(target.root, "state", "runs", "stale"), exist_ok=True)
+        with open(os.path.join(target.root, "state", "runs", "stale", "old.txt"), "w") as f:
+            f.write("stale\n")
+        os.makedirs(os.path.join(target.root, "reports", "stale"), exist_ok=True)
+        with open(os.path.join(target.root, "reports", "stale", "old.md"), "w") as f:
+            f.write("stale\n")
+
+        refused = run_cli(["restore", archive, "--root", target.root])
+        self.assertEqual(refused.returncode, 1, msg=refused.stdout + refused.stderr)
+        self.assertTrue(os.path.isdir(os.path.join(target.root, "state", "runs", "stale")))
+
+        forced = run_cli(["restore", archive, "--force", "--root", target.root])
+        self.assertEqual(forced.returncode, 0, msg=forced.stdout + forced.stderr)
+        self.assertFalse(os.path.exists(os.path.join(target.root, "state", "runs", "stale")))
+        self.assertFalse(os.path.exists(os.path.join(target.root, "reports", "stale")))
+        for rid in run_ids:
+            self.assertTrue(
+                os.path.isdir(os.path.join(target.root, "state", "runs", rid)),
+                msg=rid,
+            )
+        self.assertIn(snap_line.split(" archive_bytes=")[0], forced.stdout)
+        leftover = []
+        for dirpath, dirnames, filenames in os.walk(target.root):
+            for n in dirnames + filenames:
+                if ".pre-restore-" in n:
+                    leftover.append(os.path.join(dirpath, n))
+        self.assertEqual(leftover, [])
+        runs_dir = os.path.join(target.root, "state", "runs")
+        self.assertEqual(stat.S_IMODE(os.stat(runs_dir).st_mode), 0o700)
+        note = os.path.join(runs_dir, run_ids[0], "note.txt")
+        self.assertEqual(stat.S_IMODE(os.stat(note).st_mode), 0o600)
+        reports_dir = os.path.join(target.root, "reports")
+        self.assertEqual(stat.S_IMODE(os.stat(reports_dir).st_mode), 0o700)
+        latest = os.path.join(reports_dir, "a", "latest.md")
+        self.assertEqual(stat.S_IMODE(os.stat(latest).st_mode), 0o600)
+        self.assertTrue(os.path.isfile(os.path.join(target.root, "dashboard", "loops.html")))
+
+    def test_restore_rejects_unsafe_archive(self):
+        marker = os.path.join(self.root, "state", "canary.txt")
+        os.makedirs(os.path.join(self.root, "state"), exist_ok=True)
+        with open(marker, "w") as f:
+            f.write("keep-me\n")
+        outside = os.path.join(self.root, "outside-abs")
+        archive = self._archive_path("unsafe.tgz")
+        payload = b"evil"
+        with tarfile.open(archive, "w:gz") as tf:
+            info = tarfile.TarInfo(name="../evil")
+            info.size = len(payload)
+            tf.addfile(info, io.BytesIO(payload))
+            info2 = tarfile.TarInfo(name=outside)
+            if not info2.name.startswith("/"):
+                info2.name = os.path.abspath(outside)
+            info2.size = len(payload)
+            tf.addfile(info2, io.BytesIO(payload))
+        r = run_cli(["restore", archive, "--root", self.root])
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertTrue(os.path.isfile(marker))
+        with open(marker) as f:
+            self.assertEqual(f.read(), "keep-me\n")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "state", "evil")))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "evil")))
+        self.assertFalse(os.path.exists(outside))
+        restore_dirs = [
+            n
+            for n in os.listdir(os.path.join(self.root, "state"))
+            if n.startswith(".restore-")
+        ]
+        for d in restore_dirs:
+            abs_d = os.path.join(self.root, "state", d)
+            self.assertTrue(abs_d.startswith(os.path.join(self.root, "state", ".restore-")))
+
+    def test_restore_count_mismatch_fails(self):
+        self._seed_snapshot_world()
+        src_archive = self._archive_path("ok.tgz")
+        snap = run_cli(["snapshot", src_archive, "--root", self.root])
+        self.assertEqual(snap.returncode, 0, msg=snap.stdout + snap.stderr)
+        tampered = self._archive_path("tampered.tgz")
+        with tarfile.open(src_archive, "r:gz") as src, tarfile.open(tampered, "w:gz") as dst:
+            for member in src.getmembers():
+                if member.name.lstrip("./") == "state/.snapshot-counts.json":
+                    raw = src.extractfile(member).read()
+                    counts = json.loads(raw)
+                    counts["runs"] = counts.get("runs", 0) + 99
+                    blob = json.dumps(counts).encode("utf-8")
+                    member.size = len(blob)
+                    dst.addfile(member, io.BytesIO(blob))
+                else:
+                    fileobj = src.extractfile(member) if member.isreg() else None
+                    dst.addfile(member, fileobj)
+        target = LoopsRoot()
+        self.addCleanup(target.cleanup)
+        r = run_cli(["restore", tampered, "--root", target.root])
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertIn("count mismatch", (r.stderr + r.stdout).lower())
+
+    def test_snapshot_restore_roundtrip_preserves_dispositions(self):
+        loop_name, _run_ids = self._seed_snapshot_world()
+        archive = self._archive_path("roundtrip.tgz")
+        snap = run_cli(["snapshot", archive, "--root", self.root])
+        self.assertEqual(snap.returncode, 0, msg=snap.stdout + snap.stderr)
+        ts = iso(datetime.now(timezone.utc))
+        before = run_db(
+            ["suppressed", "--root", self.root, "--loop", loop_name, "--ts", ts]
+        )
+        self.assertEqual(before.returncode, 0, before.stderr)
+        before_rows = json.loads(before.stdout)
+        self.assertTrue(before_rows)
+
+        target = LoopsRoot()
+        self.addCleanup(target.cleanup)
+        restored = run_cli(["restore", archive, "--root", target.root])
+        self.assertEqual(restored.returncode, 0, msg=restored.stdout + restored.stderr)
+        after = run_db(
+            ["suppressed", "--root", target.root, "--loop", loop_name, "--ts", ts]
+        )
+        self.assertEqual(after.returncode, 0, after.stderr)
+        self.assertEqual(json.loads(after.stdout), before_rows)
+
+    def test_snapshot_and_restore_are_known_verbs(self):
+        decoy = tempfile.mkdtemp(prefix="loopctl-decoy-")
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        for verb in ("snapshot", "restore"):
+            r = run_cli(["--actor", verb], env_overrides={"LOOPS_ROOT": decoy})
+            self.assertEqual(r.returncode, 2, msg=verb)
+            self.assertIn("ambiguous invocation", r.stderr)
+
+    def test_cutover_runbook_exists_and_names_every_loop(self):
+        path = REPO_ROOT / "workflows" / "firstparty-cutover.txt"
+        self.assertTrue(path.is_file(), msg="missing workflows/firstparty-cutover.txt")
+        text = path.read_text()
+        for n in range(1, 7):
+            self.assertRegex(text, rf"Step\s+{n}")
+        found_no_header = False
+        for line in text.splitlines():
+            if "header_up Host" not in line:
+                continue
+            idx_h = line.index("header_up Host")
+            if re.search(r"\bno\b", line[:idx_h]):
+                found_no_header = True
+                break
+        self.assertTrue(
+            found_no_header,
+            "need 'no' preceding 'header_up Host' on the same line",
+        )
+        step3_m = re.search(r"Step\s+3.*?(?=Step\s+4)", text, re.S)
+        self.assertIsNotNone(step3_m)
+        step3 = step3_m.group(0)
+        parse = _real_loopconf_parse()
+        loops_d = REPO_ROOT / "loops.d"
+        for name in sorted(os.listdir(loops_d)):
+            if name.startswith("flickki-") or name == "phoneapp-cost-sync":
+                continue
+            conf_path = loops_d / name / "loop.conf"
+            if not conf_path.is_file():
+                continue
+            conf, _err = parse(str(conf_path))
+            schedule = conf.get("schedule") or ""
+            if schedule == "manual":
+                continue
+            self.assertIn(name, step3, msg=f"{name} missing from step 3")
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

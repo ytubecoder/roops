@@ -1,0 +1,222 @@
+# Firstparty Cutover (llm launchd → firstparty systemd)
+# Project: loops
+# Frequency: once
+# Description: move the fleet from llm (macOS/launchd) to firstparty (Debian/systemd) as one unit — one db, one console. This runbook is the operator procedure; it does not execute the cutover by itself.
+
+## Prerequisites
+
+Each item is a command plus the output that means "go". Record the three operator answers (phoneapp-cost-sync move-or-uninstall, kagami auth path, tailnet name) before running anything.
+
+1. Operator answers recorded
+   - Run: test -n "$CUTOVER_PHONEAPP" && test -n "$CUTOVER_KAGAMI_AUTH" && test -n "$CUTOVER_TAILNET" && echo answers-ok
+   - Expected outcome: `answers-ok`. `$CUTOVER_PHONEAPP` is `move` or `uninstall`; `$CUTOVER_KAGAMI_AUTH` is `gh-auth` or `pat-file`; `$CUTOVER_TAILNET` is the tailnet name (the `loops.<tailnet>.ts.net` label).
+   - If fails: stop. Design §12 holds the flip until these three are answered.
+
+2. Guest requirements clean for the install set
+   - Run: ssh firstparty-svc 'cd ~/projects/loops && ./bin/loopctl requirements hello-watchdog hello-loop loop-sensei ads-google ads-intl ads-reddit ads-x ads-program gc-actions kagi-ban tailnet-zones kagami'
+   - Expected outcome: exit 0 (every in-scope loop met on this host).
+   - If fails: unmet `requires=` items print as `UNMET`; fix `.env`, credentials, `bin:gh`, probe drift, then re-run. Do not snapshot yet.
+
+3. Ads x-cache reachable from the guest
+   - Run: ssh firstparty-svc 'curl -s -o /dev/null -w "%{http_code}\n" "$GC_BASE/api/ads/x-cache"'
+   - Expected outcome: `200`.
+   - If fails: llm:8787 is down or `GC_BASE` is unset on the guest `.env`. The ads loops will report inputs missing.
+
+4. Probe channel has no drift
+   - Run: ssh firstparty-svc 'cd ~/projects/loops && ./bin/loopctl probe status'
+   - Expected outcome: exit 0; mode remote; ping ok; no `probe drift` lines.
+   - If fails: pull `probes/` / `bin/probe*` on the data host to the same commit as the guest, or `loopctl probe keygen` + `probe-server --authorize --write` on llm.
+
+5. Kagami leak-terms file on the guest
+   - Run: ssh firstparty-svc 'test -f ~/projects/loops/loops.d/kagami/leak-terms.local.txt && echo present'
+   - Expected outcome: `present`.
+   - If fails: copy `loops.d/kagami/leak-terms.local.txt` from llm (gitignored). Kagami install will refuse or leak-check wrongly without it.
+
+6. Both checkouts clean and on the same commit
+   - Run: git -C ~/projects/loops status --porcelain && git -C ~/projects/loops rev-parse HEAD && ssh firstparty-svc 'git -C ~/projects/loops status --porcelain && git -C ~/projects/loops rev-parse HEAD'
+   - Expected outcome: both status outputs empty; both SHAs identical.
+   - If fails: commit or stash on llm, `git pull` on the guest, re-check.
+
+## Steps
+
+### Step 1 — Freeze llm
+
+Stop the console and pause every installed loop, then wait until nothing is in-flight.
+
+- Run: cd ~/projects/loops && ./bin/loopctl console uninstall
+- Expected outcome: console unit gone (`./bin/loopctl console status` exits non-zero).
+- If fails: read stderr; a missing unit is already uninstalled (exit 0). Do not continue while `loopctl serve` is still bound.
+
+- Run: cd ~/projects/loops && for l in $(./bin/loopctl list --json | python3 -c 'import json,sys; print("\n".join(r["name"] for r in json.load(sys.stdin) if r.get("installed")))'); do ./bin/loopctl pause "$l"; done
+- Expected outcome: each installed loop paused (`enabled=false`); no timer still armed.
+- If fails: a pause error names the loop; fix that loop and re-run the loop. A never-installed loop is not in this list.
+
+- Run: cd ~/projects/loops && python3 - <<'PY'
+import os, sys
+sys.path.insert(0, "bin")
+import lock
+root = os.environ.get("LOOPS_ROOT", os.path.expanduser("~/projects/loops"))
+locks = os.path.join(root, "state", "locks")
+live = []
+if os.path.isdir(locks):
+    for name in sorted(os.listdir(locks)):
+        if not name.endswith(".lock"):
+            continue
+        path = os.path.join(locks, name)
+        pid, since = lock.read_holder(path)
+        if pid is not None and lock.pid_alive(pid):
+            live.append(f"{name} pid={pid} since={since}")
+if live:
+    print("LIVE", *live, sep="\n")
+    sys.exit(1)
+print("no live locks")
+PY
+- Expected outcome: `no live locks`.
+- If fails: a run is still holding a lock. Wait and re-run this block. Do not snapshot with live pids (no `--force` on the flip).
+
+- Run: launchctl list | grep com.loops || true
+- Expected outcome: no running pid for a `com.loops.*` job (empty grep, or every remaining row has pid `-`).
+- If fails: wait for the job to exit; `launchctl print gui/$(id -u)/com.loops.<name>` names it.
+
+### Step 2 — Move state
+
+Cold copy on llm, pipe over ssh (the guest has no rsync), wipe guest scratch state, restore, compare counts.
+
+- Run: cd ~/projects/loops && ./bin/loopctl snapshot /tmp/loops-state.tgz
+- Expected outcome: exit 0; one counts line `runs=<n> findings=<n> dispositions=<n> loop_events=<n> run_dirs=<n> reports=<n>` plus `archive_bytes=…`. No `WARNING:` (that means `--force` was used — not for the flip). Save the counts line.
+- If fails: live locks (step 1 incomplete) or missing `state/loops.sqlite`. Do not continue.
+
+- Run: cat /tmp/loops-state.tgz | ssh firstparty-svc 'cat > /tmp/loops-state.tgz'
+- Expected outcome: the guest file exists and `wc -c` matches llm's archive_bytes. No rsync.
+- If fails: ssh to firstparty-svc; retry the pipe. Do not restore a truncated archive.
+
+- Run: ssh firstparty-svc 'cd ~/projects/loops && (./bin/loopctl uninstall hello-loop || true) && rm -rf state/loops.sqlite* state/runs state/loop-data reports && ./bin/loopctl restore /tmp/loops-state.tgz'
+- Expected outcome: hello-loop uninstalled if it was the scratch install; scratch sqlite/runs/loop-data/reports gone; restore exit 0; guest prints the same counts line as llm's snapshot.
+- If fails: restore names the step reached (`extract` / `verify` / `swap` / `counts`). A count mismatch is a bad copy — do not arm the guest. The llm state is still intact.
+
+- Run: compare the two count lines (llm snapshot stdout vs guest restore stdout) by eye or `diff`.
+- Expected outcome: `runs` / `findings` / `dispositions` / `loop_events` / `run_dirs` / `reports` equal.
+- If fails: stop. Re-copy the archive and restore again (guest still has no production state).
+
+### Step 3 — Arm the guest
+
+Install in this order. Each `install` runs a real self-verify engine run (~10 sequential runs). Kagami last: its verify run may open or update the mirror PR, which is its job. Use a 600s poll so a codex verify cannot time out the install and orphan the engine.
+
+- Run: ssh firstparty-svc 'cd ~/projects/loops && for n in hello-watchdog hello-loop loop-sensei ads-google ads-intl ads-reddit ads-x ads-program gc-actions kagi-ban tailnet-zones kagami; do LOOPCTL_INSTALL_POLL_TIMEOUT_S=600 ./bin/loopctl install "$n" || exit 1; done'
+- Expected outcome: each name prints a successful install; guest `./bin/loopctl list` shows them installed.
+- If fails: the named loop's install stderr. Do not skip ahead; a failed install boots the unit back out. Fix requirements / probe / credential, then re-run from the failed name.
+
+- Run: ssh firstparty-svc 'cd ~/projects/loops && ./bin/loopctl console install'
+- Expected outcome: `loops-console.service` enabled and `/api/state` 200 on the guest loopback.
+- If fails: linger / tz / XDG host-check messages; `loginctl enable-linger`, set `XDG_RUNTIME_DIR=/run/user/$(id -u)`, then retry.
+
+### Step 4 — Ingress
+
+Free the `loops` tailnet name on llm, then bind it on the guest Caddy. The browser Host must pass through untouched.
+
+On llm:
+
+- Run: edit `~/.config/dev-tailnet/bin/register-tailscaled.sh` and remove `loops` from `PROJECTS`.
+- Expected outcome: `loops` is no longer in that list.
+- If fails: the userspace tailscaled will reclaim the name on next start. Do not bind on the guest until this is gone.
+
+- Run: launchctl bootout gui/$(id -u)/com.generalissimo.dev-tailnet.tailscaled-loops
+- Expected outcome: the loops userspace tailscaled is gone (`launchctl print` fails).
+- If fails: the label may already be unloaded; confirm with `launchctl list | grep tailscaled-loops`.
+
+- Run: (OPERATOR) delete the `loops` device in the tailnet admin console so the name is free.
+- Expected outcome: `loops.<tailnet>.ts.net` is not assigned to llm.
+- If fails: the guest `bind tailscale/loops` will not mint the node.
+
+- Run: remove the `@loops` route and the `@loopsdown` fallback from `~/.config/dev-tailnet/Caddyfile`, then `launchctl kickstart -k` the dev-tailnet caddy (procedure: `~/.config/dev-tailnet/WARMSTART_CADDY_CLEANUP.md`).
+- Expected outcome: llm Caddy no longer answers `loops.<tailnet>.ts.net`.
+- If fails: do not reload blindly; read the cleanup doc. Never use the admin API.
+
+On the guest, add this vhost to `/etc/caddy/Caddyfile` (substitute the real tailnet name). `reverse_proxy` with no header_up Host — Host is the §13.1 credential; forging it 403s every request or blinds the gate. `handle_errors` serves the static garden at 502, never 200.
+
+```
+loops.<tailnet>.ts.net {
+	bind tailscale/loops
+	tls {
+		get_certificate tailscale
+	}
+	reverse_proxy 127.0.0.1:8929
+	handle_errors {
+		handle /reports/* {
+			root * /home/svc/projects/loops/reports
+			file_server {
+				status {err.status_code}
+			}
+		}
+		handle {
+			root * /home/svc/projects/loops/dashboard
+			try_files {path} /loops.html
+			file_server {
+				status {err.status_code}
+			}
+		}
+	}
+}
+```
+
+- Run: ssh firstparty-svc 'sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl reload caddy-ts'
+- Expected outcome: validate ok; reload (never `systemctl restart caddy-ts`).
+- If fails: validate names the line. Do not restart Caddy — a restart drops other vhosts.
+
+- Run: from a tailnet device: curl -sk -o /dev/null -w '%{http_code}\n' https://loops.<tailnet>.ts.net/api/state
+- Expected outcome: `200`.
+- If fails: console down (expect 502 + static garden), wrong Host rewrite, or the name still held by llm. `curl` on `http://` proves nothing (ts.net is HSTS-preloaded).
+
+### Step 5 — Dual-fleet check, then retire llm
+
+Confirm both sides, then uninstall on llm. Precondition: zero loops remain installed on llm after this step.
+
+- Run: cd ~/projects/loops && ./bin/loopctl list
+- Expected outcome: every loop paused / not running (no launchd pid). Still installed until the uninstall loop below.
+- If fails: a loop is still firing — return to step 1. Do not uninstall yet.
+
+- Run: ssh firstparty-svc 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user list-timers'
+- Expected outcome: timers for the install set (`loops-hello-watchdog.timer` … `loops-kagami.timer`).
+- If fails: an install in step 3 did not stick. Do not uninstall llm.
+
+Only then:
+
+- Run: cd ~/projects/loops && for l in $(./bin/loopctl list --json | python3 -c 'import json,sys; print("\n".join(r["name"] for r in json.load(sys.stdin) if r.get("installed")))'); do ./bin/loopctl uninstall "$l"; done
+- Expected outcome: every previously-installed loop uninstalled.
+- If fails: name the loop; do not claim llm is the data host until the next check is 0.
+
+- Run: launchctl list | grep -c com.loops; echo "(expect 0)"
+- Expected outcome: `0`. Precondition for the flip: zero installed on llm.
+- If fails: an untracked loop (phoneapp-cost-sync or similar) is still loaded. Uninstall or bootout that label before treating llm as data-host-only.
+
+### Step 6 — Verify
+
+- Run: from a tailnet device, open https://loops.<tailnet>.ts.net/ — garden shows 巡 for the install set (hello-watchdog hello-loop loop-sensei ads-google ads-intl ads-reddit ads-x ads-program gc-actions kagi-ban tailnet-zones kagami).
+- Expected outcome: 巡 on each of those twelve; no 休 for an installed loop.
+- If fails: unit files missing on the guest (`loopctl list` installed column) or dashboard generated against the wrong backend.
+
+- Run: ssh firstparty-svc 'cd ~/projects/loops && ./bin/loopctl run loop-sensei'
+- Expected outcome: run completed (`runner_status=completed`).
+- If fails: read `state/runs/<id>/` on the guest; probe or requirements gap.
+
+- Run: edit `~/.claude/workflows/loops-reboot-recovery.txt` (OUTSIDE this repo) header to: `RETIRED for the fleet 2026-xx-xx — llm is data host only; keep only if a loop is ever re-installed on llm`.
+- Expected outcome: the file's first lines say RETIRED with the date of this flip.
+- If fails: the next reboot on llm will still look like a fleet-recovery problem. This file is not in the loops repo.
+
+- Run: update `CLAUDE.md` fleet-state line to the post-cutover host (firstparty / systemd).
+- Expected outcome: the dated fleet-state sentence names firstparty, not "cutover pending".
+- If fails: the next session will follow the pre-flip recovery recipe.
+
+## Rollback
+
+Before step 5 the llm state was never deleted, so rollback is free.
+
+- Run (llm): cd ~/projects/loops && for l in hello-watchdog hello-loop loop-sensei ads-google ads-intl ads-reddit ads-x ads-program gc-actions kagi-ban tailnet-zones kagami; do ./bin/loopctl resume "$l"; done && ./bin/loopctl console install
+- Expected outcome: llm loops resumed and console up. Re-add the `@loops` Caddy route on llm if step 4 already ran; `launchctl kickstart -k` the dev-tailnet caddy.
+- If fails: re-install any loop that was paused-but-uninstalled only if you already started step 5 — that is not this section.
+
+- Run (guest): ssh firstparty-svc 'cd ~/projects/loops && for l in hello-watchdog hello-loop loop-sensei ads-google ads-intl ads-reddit ads-x ads-program gc-actions kagi-ban tailnet-zones kagami; do ./bin/loopctl uninstall "$l"; done; ./bin/loopctl console uninstall'
+- Expected outcome: guest timers gone; console unit gone. Remove the `loops.<tailnet>.ts.net` vhost from `/etc/caddy/Caddyfile` and `sudo systemctl reload caddy-ts`.
+- If fails: a timer still listed under `systemctl --user list-timers` — uninstall that name again.
+
+Caddy routes back to llm's `@loops` + `@loopsdown` fallback. Do not delete llm `state/` as part of rollback.

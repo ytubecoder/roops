@@ -32,8 +32,16 @@ checklist rather than a stop). Lead with the figure and the campaign count.
 acquisition is stopped until a human resumes it. Say what is now off, and say
 that resume is human-only.
 
-**A cut was attempted and failed or was refused.** Worst case in the file:
-spend is over the breaker and campaigns are still serving. Say so first.
+**A dry run.** Every result reads `dry_run` and `paused` is `0`. The breaker
+was armed but `ads.hard_cut_dry_run` is true, so it deliberately journalled
+nothing and sent nothing. **This is a working rehearsal, not a failure** — say
+what it *would* have paused and that the campaigns are still serving on purpose.
+Do not report it as `hard-cut-failed`.
+
+**A cut was attempted and failed or was refused.** Results carry `error` or
+`rejected`, or the probe refused. Worst case in the file: spend is over the
+breaker, the breaker genuinely tried, and campaigns are still serving. Say so
+first.
 
 **Breach, but the breaker is disarmed.** Nothing was paused. Report the figure,
 the campaigns a cut would have stopped, and that arming is a human act.
@@ -94,8 +102,14 @@ this later needs the exact figures and ids.
 Use these ids exactly, and no others:
 
 - `hard-cut-fired` — the breaker cut. Campaigns are paused.
-- `hard-cut-failed` — a cut was attempted and did not settle. Spend is over the
-  breaker and something is still serving.
+- `hard-cut-dry-run` — armed, over the threshold, and deliberately journalling
+  nothing because `ads.hard_cut_dry_run` is true. Every result reads `dry_run`.
+  This is the rehearsal working as designed. **Never call this
+  `hard-cut-failed`** — nothing was attempted, so nothing failed, and a false P1
+  every morning is exactly what the id scheme exists to prevent.
+- `hard-cut-failed` — a real cut was attempted and did not settle: a result
+  carries `error` or `rejected`, or the probe refused. Spend is over the breaker
+  and something is still serving. Reserve this for that case alone.
 - `hard-cut-breach-disarmed` — over the threshold with the breaker off.
 - `spend-read-disagreement` — the two totals disagreed beyond tolerance.
 - `spend-read-gap` — a network read errored, was single-source and material, or

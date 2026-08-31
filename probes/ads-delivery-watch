@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+# probe: ads-delivery-watch
+# probe-timeout-s: 180
+# probe-writes: none
+# probe-output: json
+# probe-reads: Google Ads API (read-only GAQL) via GOOGLE_ADS_* from the maguyva-marketing .env; scheduler/config.json ads caps
+"""Deterministic delivery + spend watch for Google Ads.
+
+Exists because the account has now gone dark TWICE on a declined billing
+threshold charge (2026-07-30, dark 9 days; 2026-08-28, found 3 days late) and
+neither outage was caught by anything. The five ads loops all reported normally
+through both: a dead account has zero spend (which passes every cap check) and
+zero impressions (so no CTR verdict is ever produced). It scores perfectly on
+everything they watch.
+
+This probe answers the two questions none of them ask:
+
+  1. Did a day pass with campaigns ENABLED and no spend at all?
+     That is the outage signature — an account-wide, same-day halt with every
+     entity still green. The API never reports the cause (it does not model
+     payment failure), so the absence of spend IS the signal.
+
+  2. Has actual month-to-date spend crossed the hard network cap?
+     Worth alarming on separately because our budget guard only refuses orders
+     WE place; it has never been able to stop delivery. A cap breach is
+     therefore silent by construction until someone looks.
+
+Read-only: one GAQL SELECT over `customer`, one over `campaign`. Places no
+order and edits nothing.
+"""
+import json
+import os
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+REPO = Path(os.environ.get("MAGUYVA_REPO") or (Path.home() / "projects" / "maguyva-marketing"))
+ENV_FILE = REPO / ".env"
+CONFIG = REPO / "scheduler" / "config.json"
+GC_VENV = REPO / "growth-console" / ".venv" / "lib"
+
+# How many complete days back to examine. 3 keeps the signal tight: a single
+# zero day can be a genuine pause, three in a row cannot.
+LOOKBACK_DAYS = 5
+
+
+def _load_env() -> None:
+    """Source GOOGLE_ADS_* from the repo .env the dashboard uses.
+
+    Deliberately does not overwrite anything already exported, so a caller can
+    point this at another account without editing the file.
+    """
+    if not ENV_FILE.is_file():
+        return
+    for line in ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
+
+
+def _site_packages() -> str | None:
+    if not GC_VENV.is_dir():
+        return None
+    for p in sorted(GC_VENV.glob("python3.*/site-packages")):
+        return str(p)
+    return None
+
+
+def check() -> int:
+    """--check: can we reach the credentials and the client library at all."""
+    _load_env()
+    missing = [k for k in ("GOOGLE_ADS_DEVELOPER_TOKEN", "GOOGLE_ADS_CLIENT_ID",
+                           "GOOGLE_ADS_REFRESH_TOKEN", "GOOGLE_ADS_CUSTOMER_ID")
+               if not os.environ.get(k)]
+    if missing:
+        print(f"missing env: {', '.join(missing)}")
+        return 1
+    if _site_packages() is None:
+        print("growth-console venv not found")
+        return 1
+    print("ok ads-delivery-watch")
+    return 0
+
+
+def _caps() -> dict:
+    try:
+        cfg = json.loads(CONFIG.read_text())
+    except Exception:
+        return {}
+    return (cfg.get("ads") or {})
+
+
+def main() -> int:
+    if "--check" in sys.argv:
+        return check()
+
+    _load_env()
+    sp = _site_packages()
+    if sp:
+        sys.path.insert(0, sp)
+
+    try:
+        from google.ads.googleads.client import GoogleAdsClient
+    except Exception as e:  # library missing is a probe fault, not a finding
+        print(json.dumps({"error": f"google-ads library unavailable: {e}"}))
+        return 1
+
+    cid = os.environ["GOOGLE_ADS_CUSTOMER_ID"].replace("-", "")
+    cfg = {
+        "developer_token": os.environ["GOOGLE_ADS_DEVELOPER_TOKEN"],
+        "client_id": os.environ["GOOGLE_ADS_CLIENT_ID"],
+        "client_secret": os.environ["GOOGLE_ADS_CLIENT_SECRET"],
+        "refresh_token": os.environ["GOOGLE_ADS_REFRESH_TOKEN"],
+        "use_proto_plus": True,
+    }
+    if os.environ.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID"):
+        cfg["login_customer_id"] = os.environ["GOOGLE_ADS_LOGIN_CUSTOMER_ID"].replace("-", "")
+
+    try:
+        client = GoogleAdsClient.load_from_dict(cfg, version="v24")
+        svc = client.get_service("GoogleAdsService")
+    except Exception as e:
+        print(json.dumps({"error": f"client init failed: {e}"}))
+        return 1
+
+    out: dict = {"customer_id": cid}
+
+    # --- daily spend, most recent complete days -------------------------------
+    # segments.date only in WHERE (no segment in SELECT) so zero-metric days
+    # still return rows where they exist; a day that served nothing has no row
+    # at all, which is exactly what we are looking for.
+    served: dict[str, dict] = {}
+    q = ("SELECT segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks "
+         f"FROM customer WHERE segments.date DURING LAST_{LOOKBACK_DAYS + 2}_DAYS")
+    try:
+        for batch in svc.search_stream(customer_id=cid, query=q, timeout=90):
+            for r in batch.results:
+                served[str(r.segments.date)] = {
+                    "spend_usd": round(r.metrics.cost_micros / 1e6, 2),
+                    "impressions": int(r.metrics.impressions),
+                    "clicks": int(r.metrics.clicks),
+                }
+    except Exception as e:
+        print(json.dumps({"error": f"daily spend query failed: {e}"}))
+        return 1
+
+    # --- campaign serving state ----------------------------------------------
+    enabled = []
+    try:
+        cq = ("SELECT campaign.id, campaign.name, campaign.status, campaign.primary_status "
+              "FROM campaign WHERE campaign.status = 'ENABLED'")
+        for batch in svc.search_stream(customer_id=cid, query=cq, timeout=60):
+            for r in batch.results:
+                enabled.append({"id": str(r.campaign.id), "name": r.campaign.name,
+                                "primary_status": r.campaign.primary_status.name})
+    except Exception as e:
+        print(json.dumps({"error": f"campaign query failed: {e}"}))
+        return 1
+
+    # --- month-to-date actual -------------------------------------------------
+    mtd = 0.0
+    try:
+        mq = "SELECT metrics.cost_micros FROM customer WHERE segments.date DURING THIS_MONTH"
+        for batch in svc.search_stream(customer_id=cid, query=mq, timeout=60):
+            for r in batch.results:
+                mtd += r.metrics.cost_micros / 1e6
+    except Exception as e:
+        print(json.dumps({"error": f"mtd query failed: {e}"}))
+        return 1
+
+    # --- findings -------------------------------------------------------------
+    # Yesterday is the newest COMPLETE day; today is excluded because a partial
+    # day legitimately reads near zero early on and would alarm every morning.
+    today = date.today()
+    complete_days = [(today - timedelta(days=n)).isoformat()
+                     for n in range(1, LOOKBACK_DAYS + 1)]
+    dark = [d for d in complete_days if served.get(d, {}).get("spend_usd", 0.0) <= 0.0]
+    consecutive = 0
+    for d in complete_days:                      # newest first
+        if d in dark:
+            consecutive += 1
+        else:
+            break
+
+    caps = _caps()
+    net_cap = float((caps.get("network_caps_usd") or {}).get("google") or 0.0)
+    monthly_cap = float(caps.get("monthly_cap_usd") or 0.0)
+
+    findings = []
+    if enabled and consecutive >= 1:
+        findings.append({
+            "id": "delivery-stopped",
+            "severity": "alert" if consecutive >= 2 else "warn",
+            "detail": (f"{consecutive} complete day(s) with $0.00 spend while "
+                       f"{len(enabled)} campaign(s) are ENABLED. Every API-visible "
+                       "status stays green through a payments stop — check Billing "
+                       "& payments in the Ads UI."),
+            "consecutive_dark_days": consecutive,
+        })
+    if net_cap and mtd >= net_cap:
+        findings.append({
+            "id": "network-cap-exceeded",
+            "severity": "alert",
+            "detail": (f"Google actual MTD ${mtd:,.2f} is at/over the ${net_cap:,.0f} "
+                       "network cap. The budget guard refuses new orders but has "
+                       "never been able to stop delivery — nothing cuts on its own."),
+            "mtd_usd": round(mtd, 2), "cap_usd": net_cap,
+        })
+
+    out.update({
+        "lookback_days": LOOKBACK_DAYS,
+        "daily": {d: served.get(d) for d in complete_days},
+        "consecutive_dark_days": consecutive,
+        "enabled_campaigns": enabled,
+        "mtd_usd": round(mtd, 2),
+        "google_network_cap_usd": net_cap,
+        "monthly_cap_usd": monthly_cap,
+        "findings": findings,
+        "status": ("alert" if any(f["severity"] == "alert" for f in findings)
+                   else "warn" if findings else "ok"),
+    })
+    print(json.dumps(out, indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

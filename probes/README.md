@@ -2,7 +2,13 @@
 
 A probe is trusted unsandboxed code on the host it runs on, same class as
 `precheck.sh`. The narrowing is WHICH scripts exist, reviewed in git.
-`ticket-add` (a later package) is the only probe that writes.
+
+Two probes write: `ticket-add` (one ticket) and `ads-emergency-pause` (pauses
+ad campaigns). Both take a single base64url JSON argv, both are bounded by an
+`.allow` file beside them, and neither ever builds a shell string.
+`ads-emergency-pause` adds a third bound: it acts only on a fresh nonce that
+`ads-spend-read` minted on the same host, so it can only execute a decision
+this host itself derived.
 
 Built-ins `ping`, `list`, and `check` are not files. Those three names are
 reserved: a file by one of those names is refused by the server and omitted
@@ -16,6 +22,9 @@ Shipped probes (plus test-only `echo-test`):
 | `av-scan` | `$AV_BIN`, `/bin/zsh -l`, Automic Vault Info.plist | none |
 | `opentwins-lock-signal` | `~/.opentwins/workspaces/agent-twitter/memory/` | none |
 | `ads-x-ledger` | `~/.growth-console/ads.db` (`ADS_DB` override) | none |
+| `ads-delivery-watch` | Google Ads API (read-only GAQL), `scheduler/config.json` | none |
+| `ads-spend-read` | Google + Reddit Ads APIs, `ads.db` x_cache, `scheduler/config.json` | one nonce + one high-water file under `state/ads-hard-cut/` |
+| `ads-emergency-pause` | `ads-emergency-pause.allow`, `state/ads-hard-cut/nonce.json`, `scheduler/config.json` | **pauses ad campaigns** via `service.record_and_apply`; one `order_journal` row each |
 | `dmp-actions` | `$DMP_OUTPUT_DIR` (newest 30 run dirs) | none |
 | `gc-actions-files` | `$GC_ACTIONS_DIR` board files | none |
 | `sysadmin-tailnet` | `$TAILNET_SETUP_DIR` policy + zones-meta | none |

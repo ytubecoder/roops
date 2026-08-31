@@ -32,11 +32,19 @@ orders *we* place through Growth Console; it has never been able to stop
 delivery. Campaigns keep serving at their daily budgets regardless, so a cap
 breach is silent by construction until someone looks.
 
+Since 2026-08-31 one mechanism *can* stop spending: the `ads-hard-cut` loop,
+which pauses every enabled campaign at `ads.hard_cut_usd` ($4,000). It sits far
+above these network caps by design — it is a circuit breaker, not a budget. So
+between a cap breach and $4,000 nothing intervenes, and this finding is still
+the only thing that will tell anyone.
+
 ## What NOT to do
 
 - Do not recommend pausing campaigns yourself, and do not describe any action
-  as taken. This loop alerts; it never acts. No scheduled job places ad orders
-  at any trust level.
+  as taken. **This loop alerts; it never acts.** The one scheduled job permitted
+  to place an order is `ads-hard-cut`, and only to pause, only at its own much
+  higher threshold. Nothing here may act, and you may not report that anything
+  was paused.
 - Do not report the account as healthy on the strength of a failed probe. A
   transport failure is an input gap and must be reported as one.
 - Do not attribute a cause you cannot see. You may say the signature matches

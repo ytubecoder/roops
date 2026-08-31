@@ -55,9 +55,11 @@ for the same question.
 
 6. Guardrails
 
-- **Alerts, never acts.** Pausing a campaign is an order, and no scheduled job
-  places ad orders at any trust level (docs/ads-campaign-view-warmstart.md).
-  That gate is the point, not an obstacle to route around.
+- **Alerts, never acts.** Pausing a campaign is an order, and this loop places
+  none. The standing rule was amended narrowly on 2026-08-31 to let exactly one
+  scheduled job (`ads-hard-cut`) pause at a $4,000 circuit-breaker threshold —
+  a permission this loop deliberately does not take. The human gate in front of
+  ordinary spend changes is the point, not an obstacle to route around.
 - **A failed probe is an input gap, never an all-clear.** Reporting a dark
   account as healthy because the probe could not be reached would be worse than
   not running at all.
@@ -73,7 +75,11 @@ for the same question.
 This detects that delivery stopped; it cannot tell you why, and it cannot tell
 the difference between a payments stop and any other cause that zeroes an
 account while leaving every entity ENABLED. It also cannot cut spend when the
-cap is breached — nothing on our side can, which is itself the finding. The
-hard cap in `scheduler/config.json` refuses orders we place through Growth
-Console and has never governed delivery. Making a hard cap actually bite would
-require a platform-side limit set in Google, and that remains an open decision.
+cap is breached, which is itself the finding. The network caps in
+`scheduler/config.json` refuse orders we place through Growth Console and have
+never governed delivery. As of 2026-08-31 one thing does cut — the
+`ads-hard-cut` loop — but it trips at `ads.hard_cut_usd` ($4,000), far above
+these caps, so the gap this finding reports is real and unguarded. A
+platform-side limit set inside Google would still be the better answer;
+consumer-billing accounts expose no API-settable account cap, so it remains
+unavailable rather than merely undecided.

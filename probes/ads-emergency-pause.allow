@@ -1,0 +1,10 @@
+# Networks the hard-cut breaker may pause. One per line.
+# Removing a line is how you take a network out of the breaker's reach.
+# Adding one is a reviewed change: the probe can only ever PAUSE, but it will
+# pause every ENABLED campaign on any network listed here.
+#
+# x is listed for completeness only. X has no ads API, so its driver returns a
+# human checklist (journalled `manual_pending`) rather than stopping anything.
+google
+reddit
+x

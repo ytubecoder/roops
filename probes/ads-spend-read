@@ -1,0 +1,420 @@
+#!/usr/bin/env python3
+# probe: ads-spend-read
+# probe-timeout-s: 300
+# probe-writes: one nonce + one month high-water mark under state/ads-hard-cut/
+# probe-output: json
+# probe-reads: Google Ads API, Reddit Ads API, ~/.growth-console/ads.db x_cache, scheduler/config.json ads block
+"""Program-wide ACTUAL month-to-date ad spend, read two independent ways.
+
+This is the reading half of the hard-cut circuit breaker
+(docs/superpowers/specs/2026-08-31-budget-reconcile-and-hard-cut-design.md).
+It decides nothing and changes nothing on any ad network. It reports numbers,
+the campaigns a cut would act on, and every reason NOT to cut that it can see.
+
+Why two reads. A cut pauses all paid acquisition until a human resumes it,
+which is a worse day than the overspend it prevents. One bad number must never
+be able to cause that. So each network is read twice from genuinely different
+resources, and the two totals must agree before anything downstream may act:
+
+  google  A: account aggregate     (GAQL `FROM customer`)
+          B: sum of campaign rows  (GAQL `FROM campaign`)
+  reddit  A: report by AD_GROUP_ID
+          B: report by CAMPAIGN_ID
+  x       A: the x_cache snapshot  (no API exists; single read, flagged)
+
+Args: none normally. The single positional `no-record` reads without minting a
+nonce or moving the high-water mark — for looking, not for arming a cut.
+
+The nonce. A run mints a nonce and records it, with the figure and the exact
+campaign list, under state/ads-hard-cut/. probes/ads-emergency-pause refuses to
+act without a fresh matching one. That makes the write path reachable only by
+executing a decision this host itself derived minutes earlier — a hand-made
+payload cannot pause the program.
+
+Read-only against every ad network. The only writes are the two small local
+state files named in the header.
+"""
+import json
+import os
+import secrets
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+REPO = Path(os.environ.get("MAGUYVA_REPO") or (Path.home() / "projects" / "maguyva-marketing"))
+ENV_FILE = REPO / ".env"
+CONFIG = REPO / "scheduler" / "config.json"
+VENV_PY = REPO / "growth-console" / ".venv" / "bin" / "python"
+
+STATE_DIR = Path(os.environ.get("ADS_HARD_CUT_STATE")
+                 or (Path(os.environ.get("LOOPS_ROOT") or Path.home() / "projects" / "loops")
+                     / "state" / "ads-hard-cut"))
+NONCE_PATH = STATE_DIR / "nonce.json"
+HIGHWATER_PATH = STATE_DIR / "highwater.json"
+
+# A network read at or above this contributes enough to change the verdict, so
+# it must be two-source and current. Below it, a single or stale read is noted
+# and tolerated: it can only make the total too LOW, which risks missing a
+# breach (safe) rather than inventing one (not safe).
+MATERIAL_USD = 200.0
+
+# Agreement tolerance between the two totals, whichever is larger (spec 3.6.1).
+AGREE_ABS_USD = 50.0
+AGREE_FRAC = 0.05
+
+# A reading below the month's recorded high-water mark by more than this is a
+# data fault, not a refund. MTD is monotonic inside a month.
+FALL_TOLERANCE_USD = 1.0
+
+NONCE_TTL_S = 900
+
+
+def _load_env() -> None:
+    """Source the repo .env the dashboard uses, without overwriting anything
+    already exported (so a caller can point this at another account)."""
+    if not ENV_FILE.is_file():
+        return
+    for line in ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
+
+
+def _reexec_under_venv() -> None:
+    """Run the body under growth-console's venv so `console.ads` is importable.
+
+    The drivers, the budget guard and the order journal are all that layer; the
+    writing probe has to use it (record_and_apply is the only sanctioned write
+    path), and the read that triggers a decision must come from the same place
+    as the write that executes it. No shell: argv is a list, execv replaces the
+    image in-process so the probe timeout still governs.
+    """
+    if os.environ.get("ADS_PROBE_REEXEC") == "1":
+        return
+    if not VENV_PY.is_file():
+        return
+    os.environ["ADS_PROBE_REEXEC"] = "1"
+    os.execv(str(VENV_PY), [str(VENV_PY), os.path.realpath(__file__), *sys.argv[1:]])
+
+
+def check() -> int:
+    missing = [k for k in ("GOOGLE_ADS_DEVELOPER_TOKEN", "GOOGLE_ADS_CLIENT_ID",
+                           "GOOGLE_ADS_REFRESH_TOKEN", "GOOGLE_ADS_CUSTOMER_ID")
+               if not os.environ.get(k)]
+    if missing:
+        print(f"missing env: {', '.join(missing)}")
+        return 1
+    if not VENV_PY.is_file():
+        print(f"growth-console venv not found at {VENV_PY}")
+        return 1
+    if not CONFIG.is_file():
+        print(f"scheduler config not found at {CONFIG}")
+        return 1
+    print("ok ads-spend-read")
+    return 0
+
+
+def _ads_config() -> dict:
+    try:
+        return json.loads(CONFIG.read_text()).get("ads") or {}
+    except Exception:
+        return {}
+
+
+# ---------------------------------------------------------------- networks --
+
+def _google() -> dict:
+    """A: `FROM customer` aggregate. B: sum over `FROM campaign` rows.
+
+    Both use `DURING THIS_MONTH`, so both sit in the account timezone and mean
+    the same window. Zero-metric campaign rows still come back because
+    segments.date appears only in WHERE (verified live, CLAUDE.md GAQL note),
+    so B is a complete sum and not a survivor's sum.
+    """
+    from console.ads import service
+    out = {"read_a_source": "GAQL customer aggregate",
+           "read_b_source": "GAQL sum of per-campaign rows",
+           "reads_independent": True, "campaigns": [], "error": None}
+    drv = service._driver("google")
+    if getattr(drv, "cfg", None) is None:
+        out["error"] = "google driver not configured (GOOGLE_ADS_* unset)"
+        return out
+    try:
+        out["read_a_usd"] = round(float(drv.month_to_date_spend_usd() or 0.0), 2)
+    except Exception as e:  # noqa: BLE001 — an errored read is an input gap
+        out["error"] = f"read A failed: {type(e).__name__}: {e}"
+        return out
+
+    from console.ads.drivers.google import _load_client
+    client = _load_client(drv.cfg)
+    svc = client.get_service("GoogleAdsService")
+    cid = drv.cfg.customer_id
+    try:
+        total = 0
+        q = ("SELECT campaign.id, campaign.name, campaign.status, metrics.cost_micros "
+             "FROM campaign WHERE segments.date DURING THIS_MONTH "
+             "AND campaign.status != 'REMOVED'")
+        for batch in svc.search_stream(customer_id=cid, query=q, timeout=90):
+            for r in batch.results:
+                total += int(r.metrics.cost_micros)
+        out["read_b_usd"] = round(total / 1e6, 2)
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"read B failed: {type(e).__name__}: {e}"
+        return out
+
+    try:
+        # The pause acts on THIS list, produced by the same read that produced
+        # the figure — never a second, later fetch that could have drifted.
+        q = ("SELECT campaign.id, campaign.name, campaign.status, "
+             "campaign_budget.amount_micros FROM campaign "
+             "WHERE campaign.status = 'ENABLED'")
+        for batch in svc.search_stream(customer_id=cid, query=q, timeout=60):
+            for r in batch.results:
+                out["campaigns"].append({
+                    "campaign_external_id": str(r.campaign.id),
+                    "name": r.campaign.name or "",
+                    "status": r.campaign.status.name,
+                    "daily_budget_usd": round(r.campaign_budget.amount_micros / 1e6, 2),
+                })
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"enabled-campaign query failed: {type(e).__name__}: {e}"
+    return out
+
+
+def _reddit() -> dict:
+    """A: the driver's own MTD (report broken down by AD_GROUP_ID).
+    B: the same window broken down by CAMPAIGN_ID."""
+    from console.ads import service
+    out = {"read_a_source": "reddit report by AD_GROUP_ID",
+           "read_b_source": "reddit report by CAMPAIGN_ID",
+           "reads_independent": True, "campaigns": [], "error": None}
+    drv = service._driver("reddit")
+    if getattr(drv, "cfg", None) is None:
+        out["error"] = "reddit driver not configured (REDDIT_ADS_* unset)"
+        return out
+    try:
+        out["read_a_usd"] = round(float(drv.month_to_date_spend_usd() or 0.0), 2)
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"read A failed: {type(e).__name__}: {e}"
+        return out
+    try:
+        from console.ads.drivers.reddit import MICROS, _client
+        now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        start = now.replace(day=1, hour=0)
+        with _client(drv.cfg) as c:
+            rows = drv._report(c, start, now, "CAMPAIGN_ID")
+            out["read_b_usd"] = round(
+                sum(float(m.get("spend") or 0) for m in rows) / MICROS, 2)
+            resp = c.get(f"/ad_accounts/{drv.cfg.account_id}/campaigns",
+                         params={"page.size": 200})
+            resp.raise_for_status()
+            for camp in (resp.json().get("data") or []):
+                status = (camp.get("effective_status")
+                          or camp.get("configured_status") or "")
+                if str(status).upper() != "ACTIVE":
+                    continue
+                out["campaigns"].append({
+                    "campaign_external_id": str(camp.get("id") or ""),
+                    "name": camp.get("name") or "",
+                    "status": status,
+                    "daily_budget_usd": (float(camp["goal_value"]) / MICROS
+                                         if camp.get("goal_type") == "DAILY_SPEND"
+                                         and camp.get("goal_value") else None),
+                })
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"read B failed: {type(e).__name__}: {e}"
+    return out
+
+
+def _x() -> dict:
+    """One read only, and it is a snapshot: X has no ads API, so the figure is
+    the last Ads Manager import. Reported honestly rather than dressed up — a
+    stale X number can only understate the total, and understating risks
+    missing a breach, never inventing one."""
+    from console.ads import store
+    out = {"read_a_source": "x_cache snapshot (last Ads Manager import)",
+           "read_b_source": None, "reads_independent": False,
+           "campaigns": [], "error": None}
+    try:
+        rows = store.latest_x_metrics()
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"x_cache read failed: {type(e).__name__}: {e}"
+        return out
+    spend = round(sum(float(r.get("spend_usd") or 0) for r in rows), 2)
+    out["read_a_usd"] = spend
+    out["read_b_usd"] = spend          # same source; reads_independent says so
+    stamps = [r.get("imported_at") or r.get("captured_at") for r in rows]
+    out["snapshot_at"] = next((s for s in stamps if s), None)
+    if rows:
+        from console.ads import catalog
+        variants = catalog.load().by_network("x")
+        cid = next((v.campaign_external_id for v in variants
+                    if v.campaign_external_id), "")
+        if cid and spend > 0:
+            out["campaigns"].append({
+                "campaign_external_id": cid, "name": "x campaign",
+                "status": "SNAPSHOT", "daily_budget_usd": None})
+    return out
+
+
+# ------------------------------------------------------------------ verdict --
+
+def _highwater(month_key: str, total: float, record: bool) -> dict:
+    """Month high-water mark, so a FALLING reading can be recognised as the
+    data fault it is. Keyed by month because MTD legitimately resets at the
+    boundary. A false 'fell' verdict only ever prevents a cut."""
+    prev = {}
+    try:
+        prev = json.loads(HIGHWATER_PATH.read_text())
+    except Exception:
+        prev = {}
+    seen = float((prev.get("months") or {}).get(month_key) or 0.0)
+    fell = total < (seen - FALL_TOLERANCE_USD)
+    if record and not fell:
+        months = dict(prev.get("months") or {})
+        months[month_key] = max(seen, round(total, 2))
+        # Keep the file small; a month older than the last three is history.
+        months = dict(sorted(months.items())[-3:])
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        HIGHWATER_PATH.write_text(json.dumps(
+            {"months": months, "updated_at": datetime.now(timezone.utc)
+             .strftime("%Y-%m-%dT%H:%M:%SZ")}, indent=1) + "\n")
+    return {"month": month_key, "previous_high_usd": round(seen, 2), "fell": fell}
+
+
+def main() -> int:
+    if "--check" in sys.argv:
+        _load_env()
+        return check()
+    # Positional, not a flag: bin/probe rejects unrecognised leading-dash args.
+    # `bin/probe ads-spend-read no-record` inspects without touching state.
+    record = "no-record" not in sys.argv[1:]
+
+    _load_env()
+    _reexec_under_venv()
+
+    now = datetime.now(timezone.utc)
+    cfg = _ads_config()
+    out: dict = {
+        "probe": "ads-spend-read",
+        "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "config": {
+            "ads_enabled": bool(cfg.get("enabled", True)),
+            "hard_cut_usd": cfg.get("hard_cut_usd"),
+            "hard_cut_enabled": bool(cfg.get("hard_cut_enabled", False)),
+            "hard_cut_dry_run": bool(cfg.get("hard_cut_dry_run", True)),
+            "monthly_cap_usd": cfg.get("monthly_cap_usd"),
+            "network_caps_usd": cfg.get("network_caps_usd") or {},
+        },
+        "networks": {},
+    }
+
+    try:
+        readers = {"google": _google, "reddit": _reddit, "x": _x}
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"error": f"import failed: {e}"}))
+        return 1
+
+    for net, fn in readers.items():
+        try:
+            row = fn()
+        except Exception as e:  # noqa: BLE001 — one network must not sink the probe
+            row = {"error": f"{type(e).__name__}: {e}", "campaigns": [],
+                   "reads_independent": False}
+        row.setdefault("read_a_usd", 0.0)
+        row.setdefault("read_b_usd", 0.0)
+        row["diff_usd"] = round(abs(float(row["read_a_usd"]) - float(row["read_b_usd"])), 2)
+        row["material"] = float(row["read_a_usd"]) >= MATERIAL_USD
+        out["networks"][net] = row
+
+    nets = out["networks"]
+    total_a = round(sum(float(r["read_a_usd"]) for r in nets.values()), 2)
+    total_b = round(sum(float(r["read_b_usd"]) for r in nets.values()), 2)
+    diff = round(abs(total_a - total_b), 2)
+    tol = max(AGREE_ABS_USD, AGREE_FRAC * max(total_a, total_b))
+
+    month_key = now.strftime("%Y-%m")
+    hw = _highwater(month_key, total_a, record)
+
+    threshold = cfg.get("hard_cut_usd")
+    threshold = float(threshold) if threshold not in (None, "") else None
+    breach = bool(threshold and threshold > 0 and total_a >= threshold)
+
+    campaigns = [dict(c, network=net)
+                 for net, r in nets.items() for c in (r.get("campaigns") or [])]
+
+    # Every reason NOT to cut. Each maps to a numbered requirement in spec 3.6.
+    blockers: list[dict] = []
+    for net, r in nets.items():
+        if r.get("error"):
+            blockers.append({"id": "read-error", "detail":
+                             f"{net}: {r['error']} — an input gap is not a breach"})
+    if diff > tol:
+        blockers.append({"id": "spend-read-disagreement", "detail":
+                         f"the two program totals differ by ${diff:,.2f} "
+                         f"(${total_a:,.2f} vs ${total_b:,.2f}), over the "
+                         f"${tol:,.2f} tolerance"})
+    for net, r in nets.items():
+        if r.get("material") and not r.get("reads_independent"):
+            blockers.append({"id": "single-source-material-read", "detail":
+                             f"{net} contributes ${float(r['read_a_usd']):,.2f} from a "
+                             "single, unconfirmable source"})
+    if hw["fell"]:
+        blockers.append({"id": "mtd-fell", "detail":
+                         f"program MTD ${total_a:,.2f} is below this month's recorded high "
+                         f"of ${hw['previous_high_usd']:,.2f} — month-to-date does not fall, "
+                         "so this is a data fault"})
+    if threshold is None or threshold <= 0:
+        blockers.append({"id": "no-threshold", "detail":
+                         "ads.hard_cut_usd is unset or not positive in scheduler/config.json"})
+    if not out["config"]["ads_enabled"]:
+        blockers.append({"id": "ads-kill-switch-off", "detail":
+                         "ads.enabled is false — no order of any kind can be placed"})
+    if breach and not campaigns:
+        blockers.append({"id": "nothing-to-pause", "detail":
+                         "threshold crossed but no enabled campaign was found to pause"})
+
+    nonce = secrets.token_hex(16)
+    out.update({
+        "program": {
+            "mtd_a_usd": total_a, "mtd_b_usd": total_b, "diff_usd": diff,
+            "tolerance_usd": round(tol, 2), "reads_agree": diff <= tol,
+            "highwater": hw,
+        },
+        "threshold_usd": threshold,
+        "breach": breach,
+        "armed": bool(out["config"]["hard_cut_enabled"]),
+        "dry_run": bool(out["config"]["hard_cut_dry_run"]),
+        "enabled_campaigns": campaigns,
+        "blockers": blockers,
+        "nonce": nonce,
+        "nonce_ttl_s": NONCE_TTL_S,
+        "status": ("error" if any(b["id"] == "read-error" for b in blockers)
+                   else "breach" if breach and not blockers
+                   else "blocked" if blockers
+                   else "ok"),
+    })
+
+    if record:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        NONCE_PATH.write_text(json.dumps({
+            "nonce": nonce,
+            "issued_at": out["generated_at"],
+            "mtd_usd": total_a,
+            "threshold_usd": threshold,
+            "breach": breach,
+            "blockers": [b["id"] for b in blockers],
+            "campaigns": campaigns,
+        }, indent=1) + "\n")
+        os.chmod(NONCE_PATH, 0o600)
+
+    print(json.dumps(out, indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

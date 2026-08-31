@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+# probe: ads-emergency-pause
+# probe-timeout-s: 600
+# probe-writes: pauses ENABLED ad campaigns via console.ads service.record_and_apply; one order_journal row per campaign in ~/.growth-console/ads.db
+# probe-output: json
+# probe-reads: probes/ads-emergency-pause.allow, state/ads-hard-cut/nonce.json, scheduler/config.json ads block
+"""The circuit breaker's writing half. It pauses campaigns. It does nothing else.
+
+🚨 THIS PROBE DELIBERATELY AMENDS A STANDING PROGRAM RULE.
+
+The rule, carried in CLAUDE.md and docs/ads-campaign-view-warmstart.md, was
+absolute: "no scheduled job calls record_and_apply() at any trust level."
+Generalissimo amended it narrowly on 2026-08-31:
+
+    A scheduled job may place orders ONLY to stop spending, ONLY at the
+    hard-cut threshold, and ONLY in the pausing direction. No scheduled job
+    may ever start, resume, raise, or create anything.
+
+The original rule exists so a robot cannot make SPENDING decisions. A circuit
+breaker only ever spends less, so it does not engage the risk the rule was
+written to prevent. Spec:
+docs/superpowers/specs/2026-08-31-budget-reconcile-and-hard-cut-design.md 3.2.
+
+Campaign-level pausing is CORRECT here, and the warning elsewhere in CLAUDE.md
+against it does not apply. That warning is about eliminating one VARIANT, where
+pausing google-search-jul26 would take out seven other variants nobody asked
+about. Here stopping everything is the entire goal. Do not "fix" this into
+ad-group granularity; it would make the breaker useless.
+
+What it refuses to do, every time, before touching anything:
+  - act while ads.hard_cut_enabled is false, or ads.enabled is false
+  - act on a figure below ads.hard_cut_usd — it re-reads the threshold from
+    config and re-checks the caller's number against it, never trusting it
+  - act without a fresh nonce that probes/ads-spend-read minted on this host,
+    whose recorded figure matches the caller's and whose read had no blockers
+  - act on any campaign that nonce did not observe as ENABLED
+  - act on a network absent from probes/ads-emergency-pause.allow
+  - resume, start, raise or create anything at all — "pause" is the only verb
+
+Modelled on probes/ticket-add: one base64url argv, an .allow file, and argv is
+never a shell.
+"""
+import base64
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+REPO = Path(os.environ.get("MAGUYVA_REPO") or (Path.home() / "projects" / "maguyva-marketing"))
+ENV_FILE = REPO / ".env"
+CONFIG = REPO / "scheduler" / "config.json"
+VENV_PY = REPO / "growth-console" / ".venv" / "bin" / "python"
+
+ALLOW_PATH = Path(os.path.realpath(__file__)).parent / "ads-emergency-pause.allow"
+STATE_DIR = Path(os.environ.get("ADS_HARD_CUT_STATE")
+                 or (Path(os.environ.get("LOOPS_ROOT") or Path.home() / "projects" / "loops")
+                     / "state" / "ads-hard-cut"))
+NONCE_PATH = STATE_DIR / "nonce.json"
+
+REQUIRED_KEYS = {"nonce", "mtd_usd", "campaigns"}
+OPTIONAL_KEYS = {"dry_run", "reason"}
+MAX_DECODED = 8192
+MAX_CAMPAIGNS = 40
+NONCE_TTL_S = 900
+MTD_MATCH_TOLERANCE_USD = 1.0
+EXIT_REFUSED = 64
+
+# The ONLY verb. Named as a constant so a future edit that adds "resume" here
+# is a visible, reviewable change to the amendment above rather than a typo.
+ACTION = "pause"
+
+# Campaign-level scope is spelled differently per network; both mean the same
+# thing — act on the campaign, not on one ad group inside it.
+CAMPAIGN_LEVEL_PARAMS = {
+    "google": {"level": "campaign"},
+    "reddit": {"campaign": True},
+    "x": {},                      # no API; the driver returns a human checklist
+}
+
+
+def refuse(reason: str) -> int:
+    print(json.dumps({"status": "refused", "reason": reason}, indent=1))
+    print(f"refused: {reason}", file=sys.stderr)
+    return EXIT_REFUSED
+
+
+def _load_env() -> None:
+    if not ENV_FILE.is_file():
+        return
+    for line in ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
+
+
+def _reexec_under_venv() -> None:
+    """service.record_and_apply is the only sanctioned write path and it lives
+    in growth-console's venv. execv keeps the pid, so the probe timeout still
+    governs; argv is a list, never a shell string."""
+    if os.environ.get("ADS_PROBE_REEXEC") == "1":
+        return
+    if not VENV_PY.is_file():
+        return
+    os.environ["ADS_PROBE_REEXEC"] = "1"
+    os.execv(str(VENV_PY), [str(VENV_PY), os.path.realpath(__file__), *sys.argv[1:]])
+
+
+def check() -> int:
+    if not ALLOW_PATH.is_file():
+        print(f"allow file missing: {ALLOW_PATH}")
+        return 1
+    if not VENV_PY.is_file():
+        print(f"growth-console venv not found at {VENV_PY}")
+        return 1
+    if not CONFIG.is_file():
+        print(f"scheduler config not found at {CONFIG}")
+        return 1
+    print("ok ads-emergency-pause")
+    return 0
+
+
+def allowed_networks() -> set[str]:
+    try:
+        lines = ALLOW_PATH.read_text().splitlines()
+    except OSError:
+        return set()
+    return {ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("#")}
+
+
+def pad_b64(s: str) -> str:
+    return s + ("=" * ((4 - len(s) % 4) % 4))
+
+
+def _ads_config() -> dict:
+    try:
+        return json.loads(CONFIG.read_text()).get("ads") or {}
+    except Exception:
+        return {}
+
+
+def _parse(argv: list[str]) -> dict | int:
+    if len(argv) != 1:
+        return refuse("exactly one argv required (base64url JSON payload)")
+    try:
+        raw = base64.urlsafe_b64decode(pad_b64(argv[0]))
+    except Exception:
+        return refuse("payload is not base64url")
+    if len(raw) > MAX_DECODED:
+        return refuse("decoded payload too large")
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return refuse("payload is not JSON")
+    if not isinstance(obj, dict):
+        return refuse("payload is not an object")
+    keys = set(obj.keys())
+    if not REQUIRED_KEYS <= keys or not keys <= (REQUIRED_KEYS | OPTIONAL_KEYS):
+        return refuse(f"keys must be {sorted(REQUIRED_KEYS)} "
+                      f"(optional {sorted(OPTIONAL_KEYS)})")
+    return obj
+
+
+def run(argv: list[str]) -> int:
+    obj = _parse(argv)
+    if isinstance(obj, int):
+        return obj
+
+    cfg = _ads_config()
+
+    # --- gate 1: armed at all -------------------------------------------------
+    if not bool(cfg.get("enabled", True)):
+        return refuse("ads.enabled is false — the kill switch refuses every order")
+    if not bool(cfg.get("hard_cut_enabled", False)):
+        return refuse("ads.hard_cut_enabled is false — the breaker is disarmed")
+
+    threshold = cfg.get("hard_cut_usd")
+    if threshold in (None, "") or float(threshold) <= 0:
+        return refuse("ads.hard_cut_usd is unset or not positive")
+    threshold = float(threshold)
+
+    # --- gate 2: the caller's figure, re-checked against config ---------------
+    try:
+        mtd = float(obj["mtd_usd"])
+    except (TypeError, ValueError):
+        return refuse("mtd_usd is not a number")
+    if mtd < threshold:
+        return refuse(f"mtd_usd ${mtd:,.2f} is below ads.hard_cut_usd "
+                      f"${threshold:,.2f} — not a breach")
+
+    # --- gate 3: a fresh nonce this host minted -------------------------------
+    try:
+        rec = json.loads(NONCE_PATH.read_text())
+    except Exception as e:  # noqa: BLE001
+        return refuse(f"no readable nonce at {NONCE_PATH}: {e}")
+    if not isinstance(obj["nonce"], str) or obj["nonce"] != rec.get("nonce"):
+        return refuse("nonce does not match the last ads-spend-read run")
+    try:
+        issued = datetime.strptime(rec["issued_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)
+    except Exception:
+        return refuse("nonce record has no readable issued_at")
+    age = (datetime.now(timezone.utc) - issued).total_seconds()
+    if age > NONCE_TTL_S or age < -60:
+        return refuse(f"nonce is {age:.0f}s old (limit {NONCE_TTL_S}s) — "
+                      "re-read before acting")
+    if not rec.get("breach"):
+        return refuse("the nonce's own read did not find a breach")
+    if rec.get("blockers"):
+        return refuse(f"the nonce's own read was blocked: {rec['blockers']}")
+    if abs(float(rec.get("mtd_usd") or 0.0) - mtd) > MTD_MATCH_TOLERANCE_USD:
+        return refuse(f"mtd_usd ${mtd:,.2f} does not match the nonce's recorded "
+                      f"${float(rec.get('mtd_usd') or 0):,.2f}")
+
+    # --- gate 4: the campaign list ------------------------------------------
+    campaigns = obj["campaigns"]
+    if not isinstance(campaigns, list) or not campaigns:
+        return refuse("campaigns must be a non-empty list")
+    if len(campaigns) > MAX_CAMPAIGNS:
+        return refuse(f"more than {MAX_CAMPAIGNS} campaigns")
+    seen = {(str(c.get("network")), str(c.get("campaign_external_id")))
+            for c in (rec.get("campaigns") or [])}
+    allow = allowed_networks()
+    targets = []
+    for c in campaigns:
+        if not isinstance(c, dict):
+            return refuse("each campaign must be an object")
+        net = str(c.get("network") or "")
+        cid = str(c.get("campaign_external_id") or "")
+        if net not in allow:
+            return refuse(f"network {net!r} is not in ads-emergency-pause.allow")
+        if net not in CAMPAIGN_LEVEL_PARAMS:
+            return refuse(f"no campaign-level pause is defined for network {net!r}")
+        if not cid or not cid.replace("-", "").replace("_", "").isalnum():
+            return refuse(f"campaign_external_id {cid!r} is not a plain id")
+        if (net, cid) not in seen:
+            return refuse(f"{net}:{cid} was not ENABLED in the nonce's own read")
+        targets.append((net, cid, str(c.get("name") or "")))
+
+    # Config may force dry run; a caller may only make it MORE conservative.
+    dry_run = bool(cfg.get("hard_cut_dry_run", True)) or bool(obj.get("dry_run"))
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    _load_env()
+    _reexec_under_venv()
+    from console.ads import service
+    from console.ads.drivers.base import Order
+
+    out = {
+        "probe": "ads-emergency-pause",
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "dry_run": dry_run,
+        "threshold_usd": threshold,
+        "mtd_usd": mtd,
+        "month": month,
+        "reason": str(obj.get("reason") or "")[:500],
+        "results": [],
+    }
+
+    for net, cid, name in targets:
+        order = Order(
+            network=net,
+            action=ACTION,
+            external_id=cid,
+            amount_usd=0.0,          # a stop commits no spend; the guard always permits it
+            params=dict(CAMPAIGN_LEVEL_PARAMS[net]),
+            # One key per (month, campaign): the month's cut is idempotent, so a
+            # second run inside the same month re-journals as a duplicate no-op
+            # instead of re-pausing. Distinct prefix so these rows are greppable.
+            dedupe_key=f"hardcut:{month}:{net}:{cid}",
+        )
+        if dry_run:
+            out["results"].append({
+                "network": net, "campaign_external_id": cid, "name": name,
+                "status": "dry_run", "dedupe_key": order.dedupe_key,
+                "detail": "WOULD pause this campaign; nothing was sent or journalled",
+            })
+            continue
+        try:
+            res = service.record_and_apply(order, requested_by="loop:ads-hard-cut")
+        except Exception as e:  # noqa: BLE001 — one failure must not hide the rest
+            res = {"status": "error", "detail": f"{type(e).__name__}: {e}"}
+        out["results"].append({
+            "network": net, "campaign_external_id": cid, "name": name,
+            "status": res.get("status"), "detail": res.get("detail", ""),
+            "dedupe_key": order.dedupe_key,
+        })
+
+    settled = {"applied", "manual_pending", "duplicate"}
+    ok = [r for r in out["results"] if r["status"] in settled or r["status"] == "dry_run"]
+    out["paused"] = 0 if dry_run else len(ok)
+    out["failed"] = [r for r in out["results"] if r["status"] not in settled
+                     and r["status"] != "dry_run"]
+    out["status"] = ("dry_run" if dry_run
+                     else "partial" if out["failed"]
+                     else "cut")
+
+    if not dry_run:
+        # Burn the nonce: one read authorises one cut, never a replay.
+        try:
+            NONCE_PATH.unlink()
+        except OSError:
+            pass
+
+    # Resume is human-only, always — the loop never un-pauses, not when the
+    # month rolls and not when spend resets. Recovery is a deliberate act.
+    out["recovery"] = ("Human-only. Resume each campaign from GC /ads (or "
+                       "service.record_and_apply with action=resume) after the "
+                       "cause is understood. No scheduled job may resume anything.")
+    print(json.dumps(out, indent=1))
+    return 0 if out["status"] in ("dry_run", "cut") else 1
+
+
+def main(argv: list[str]) -> int:
+    if argv == ["--check"]:
+        return check()
+    return run(argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

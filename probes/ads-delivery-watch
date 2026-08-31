@@ -23,7 +23,11 @@ This probe answers the two questions none of them ask:
   2. Has actual month-to-date spend crossed the hard network cap?
      Worth alarming on separately because our budget guard only refuses orders
      WE place; it has never been able to stop delivery. A cap breach is
-     therefore silent by construction until someone looks.
+     therefore silent by construction until someone looks. Since 2026-08-31 one
+     mechanism does cut — the ads-hard-cut loop — but it trips at
+     ads.hard_cut_usd ($4,000), far above these caps, and only in the pausing
+     direction. Between the two figures nothing intervenes, which is the point
+     of this finding.
 
 Read-only: one GAQL SELECT over `customer`, one over `campaign`. Places no
 order and edits nothing.
@@ -207,7 +211,10 @@ def main() -> int:
             "severity": "alert",
             "detail": (f"Google actual MTD ${mtd:,.2f} is at/over the ${net_cap:,.0f} "
                        "network cap. The budget guard refuses new orders but has "
-                       "never been able to stop delivery — nothing cuts on its own."),
+                       "never been able to stop delivery. The only thing that cuts "
+                       "is the ads-hard-cut breaker, and it sits far higher "
+                       "(ads.hard_cut_usd) — this cap is a bookkeeping line, not a "
+                       "brake."),
             "mtd_usd": round(mtd, 2), "cap_usd": net_cap,
         })
 

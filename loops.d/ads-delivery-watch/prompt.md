@@ -20,11 +20,42 @@ account-wide halt partway through a day, followed by flat zero.
 
 The critical thing to say plainly: **the Google Ads API does not model payment
 failure.** Account status, billing setup, account budget, campaign primary
-status and ad approval all stay green throughout an outage. So the absence of
-spend is the only signal that exists, and a healthy-looking API read is not
-evidence against it. Confirming the cause needs a human to open Billing &
-payments in the Ads UI — those pages are passkey-walled behind cross-origin
-payment iframes and cannot be driven.
+status and ad approval all stay green throughout an outage. So within the API
+the absence of spend is the only signal that exists, and a healthy-looking API
+read is not evidence against it.
+
+## The billing block
+
+Since 2026-08-31 the precheck also carries a **billing** section, scraped daily
+from the Ads UI on the data host and served by `ads-billing-read`. This is
+where a cause can actually be named, and where the warning arrives early:
+on 2026-08-22 the threshold charge declined and the balance sat above the
+threshold for **six days** while ads kept serving normally. The delivery block
+above cannot fire until the money has already stopped; this one can.
+
+Report the billing findings alongside the delivery ones, and lead with the
+billing cause when there is one — "delivery stopped, and here is the declined
+charge that explains it" is a far more useful headline than either half alone.
+
+- **`billing-balance-over-threshold`** — Google charges at the threshold, so a
+  balance above it means a charge is overdue or has already failed. Treat this
+  as the leading indicator it is, even while delivery still looks fine.
+- **`billing-charge-declined`** — the ledger names the amount, the card and a
+  reference id. Quote them; they are what a human takes to the bank.
+- **`billing-card-declined`** — the primary method is flagged refused right now.
+- **`billing-no-backup-method`** — there is no backup card, which is the
+  mechanism behind both outages: one refused charge and everything stops. This
+  one is chronic rather than urgent, so keep re-emitting it, but do not let it
+  crowd out an acute finding.
+- **`advertiser-verification-due`** — an independent clock. Missing it pauses
+  the account, and the review alone takes 1 to 10 days, so the effective
+  deadline is earlier than the stated one. Say how many days are left.
+- **`account-notice`** — whatever banner Google is showing on every Ads page.
+  Quote it verbatim; it is Google's own words about the account.
+- **`billing-session-expired`**, **`billing-snapshot-stale`**,
+  **`billing-read-failed`** — the billing view is missing or old. These are
+  input gaps: say the channel is dark and that a human must sign the data host
+  back into Google. Never report billing as clean on the strength of one.
 
 **`network-cap-exceeded`** — actual month-to-date spend has reached the hard
 google network cap. Worth its own alarm because our budget guard only refuses
@@ -47,9 +78,11 @@ the only thing that will tell anyone.
   was paused.
 - Do not report the account as healthy on the strength of a failed probe. A
   transport failure is an input gap and must be reported as one.
-- Do not attribute a cause you cannot see. You may say the signature matches
-  the two prior payment stops — that is a comparison, and it is useful. You may
-  not state that a payment was declined, because nothing you can read says so.
+- Do not attribute a cause you cannot see. If the billing block names a
+  declined charge, you may and should state it, quoting the date, amount, card
+  and reference — that is a direct reading. If the billing block is absent,
+  stale or failed, you may only say the signature matches the two prior payment
+  stops, which is a comparison, not a diagnosis.
 
 ## Output contract
 
@@ -85,8 +118,9 @@ outage ran will want the dates.
 
 ## Finding identity
 
-`finding_id` is the probe's own finding `id`, unchanged: `delivery-stopped` or
-`network-cap-exceeded`. These are durable conditions, not per-run events — the
+`finding_id` is the probe's own finding `id`, unchanged — `delivery-stopped`,
+`network-cap-exceeded`, or any of the `billing-*` / `advertiser-verification-due`
+/ `account-notice` ids from the billing block. These are durable conditions, not per-run events — the
 same outage re-raises the same id every run until it clears, which is what lets
 a human dismiss or snooze it once rather than every day. **Never encode the
 date, the day count, or the spend figure into the id**; those change every run

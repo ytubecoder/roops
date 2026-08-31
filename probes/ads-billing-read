@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+# probe: ads-billing-read
+# probe-timeout-s: 30
+# probe-writes: none
+# probe-output: json
+# probe-reads: ~/.growth-console/googleads_billing/billing.json (GOOGLEADS_BILLING_JSON override)
+"""The Google Ads billing state the Ads API structurally cannot report.
+
+Delivery has stopped account-wide twice on a declined threshold charge
+(2026-07-30, dark nine days; 2026-08-28, found three days late). The API stays
+green through both — it does not model payment failure at all — so the only
+machine-readable source is the billing UI itself. A separate scraper on the
+data host reads four pages daily under its own LaunchAgent and writes the JSON
+this probe serves. This probe opens no browser and touches no network: it
+reads one file, ages it, and derives the flags a watcher should act on.
+
+The point is EARLY warning. In the second outage the charge declined on Aug 22
+and delivery did not stop until Aug 28 — six days during which the balance sat
+visibly above the threshold. `ads-delivery-watch` sees only the aftermath,
+because the absence of spend is the only thing the API ever shows.
+
+Staleness is a finding, not a technicality: the two ways this goes quiet are a
+scraper that stopped running and a Google session that expired, and both mean
+the early-warning channel is dark while looking healthy.
+"""
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+DEFAULT = Path.home() / ".growth-console" / "googleads_billing" / "billing.json"
+STALE_AFTER_H = 36          # daily scraper + margin for one missed run
+DECLINE_WINDOW_D = 21       # how far back a decline still counts as live news
+
+
+def _age_hours(stamp):
+    if not stamp:
+        return None
+    try:
+        then = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return round((datetime.now(timezone.utc) - then).total_seconds() / 3600.0, 2)
+
+
+def _days_until(datestr):
+    """'Sep 6, 2026' -> whole days from today, negative once it has passed."""
+    if not datestr:
+        return None
+    for fmt in ("%b %d, %Y", "%B %d, %Y"):
+        try:
+            due = datetime.strptime(datestr, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        return (due - datetime.now(timezone.utc)).days
+    return None
+
+
+def main():
+    path = Path(os.environ.get("GOOGLEADS_BILLING_JSON", DEFAULT))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print(json.dumps({
+            "ok": False,
+            "reason": "no billing snapshot on the data host — the "
+                      "ai.maguyva.googleads-billing LaunchAgent has never "
+                      "produced one",
+            "path": str(path),
+        }, indent=2))
+        return 0
+    except (OSError, json.JSONDecodeError) as e:
+        print(json.dumps({"ok": False, "reason": f"unreadable snapshot: {e}",
+                          "path": str(path)}, indent=2))
+        return 0
+
+    age_h = _age_hours(data.get("scraped_at"))
+    stale = age_h is None or age_h > STALE_AFTER_H
+    balance = data.get("balance_usd")
+    threshold = data.get("threshold_usd")
+    pm = data.get("payment_method") or {}
+    ver = data.get("verification") or {}
+
+    declines = []
+    for d in data.get("recent_declines") or []:
+        days = _days_until(d.get("date"))
+        d = dict(d, days_ago=(-days if days is not None else None))
+        if d["days_ago"] is None or d["days_ago"] <= DECLINE_WINDOW_D:
+            declines.append(d)
+
+    over = (balance is not None and threshold is not None and balance > threshold)
+    ver_days = _days_until(ver.get("deadline"))
+
+    findings = []
+
+    def add(fid, severity, detail):
+        findings.append({"id": fid, "severity": severity, "detail": detail})
+
+    # Input-gap conditions first: a watcher must never read "no findings" as
+    # "healthy" when it could not actually see anything.
+    if not data.get("session_ok", False):
+        add("billing-session-expired", "alert",
+            "The Google session on the data host has expired, so billing is "
+            "unreadable until a human signs in again. Re-auth is passkey or "
+            "password and cannot be automated. Until then this whole "
+            "early-warning channel is dark.")
+    if data.get("error"):
+        add("billing-read-failed", "warn",
+            f"The last billing scrape failed: {data['error']}. Treat as an "
+            "input gap, not an all-clear.")
+    if stale:
+        add("billing-snapshot-stale", "warn",
+            f"The billing snapshot is {age_h}h old (limit {STALE_AFTER_H}h). "
+            "The scraper runs daily under ai.maguyva.googleads-billing on the "
+            "data host; if it has stopped, nothing is watching the balance.")
+
+    if over:
+        add("billing-balance-over-threshold", "alert",
+            f"Balance ${balance} is ABOVE the ${threshold} payment threshold. "
+            "Google charges at the threshold, so a balance above it means a "
+            "charge is overdue or has already failed. This is the signal that "
+            "arrives DAYS before delivery stops — on 2026-08-22 the charge "
+            "declined and ads kept serving until 08-28.")
+    if pm.get("primary_declined"):
+        add("billing-card-declined", "alert",
+            f"The primary payment method is flagged declined "
+            f"({pm.get('primary') or 'card unknown'}). Delivery stops when "
+            "Google gives up retrying.")
+    for d in declines:
+        add("billing-charge-declined", "alert",
+            f"A charge was declined on {d.get('date')} — ${d.get('amount_usd')} "
+            f"on card ...{d.get('card_last4')} (ref {d.get('reference')}). "
+            f"{d.get('text')}")
+    if pm.get("has_backup") is False:
+        add("billing-no-backup-method", "warn",
+            "There is no backup payment method, so a single refused charge "
+            "stops all delivery — the mechanism behind both outages. Google's "
+            "own settings page flags this: Billing > Settings > Payment "
+            "methods > Backup.")
+    if ver_days is not None and not ver.get("complete", False):
+        outstanding = ", ".join(ver.get("outstanding_tasks") or []) or "unknown"
+        add("advertiser-verification-due",
+            "alert" if ver_days <= 10 else "warn",
+            f"Advertiser verification is due in {ver_days} days "
+            f"({ver.get('deadline')}) and the account is paused if it is "
+            f"missed. Outstanding: {outstanding}. Review alone takes 1-10 "
+            "days, so the effective deadline is sooner than the stated one.")
+    for n in data.get("notices") or []:
+        add("account-notice", "warn",
+            f"Account notice on every Ads page: {n.get('title')} — "
+            f"{n.get('body')}")
+
+    total = data.get("notices_total")
+    seen = len(data.get("notices") or [])
+    if total and total > seen:
+        add("account-notice-partial", "warn",
+            f"Only {seen} of {total} account notices were captured — the "
+            "notice bar is a carousel and may render one at a time. Check the "
+            "Ads UI for the rest.")
+
+    print(json.dumps({
+        "ok": True,
+        "scraped_at": data.get("scraped_at"),
+        "age_hours": age_h,
+        "stale": stale,
+        "session_ok": data.get("session_ok"),
+        "scrape_error": data.get("error"),
+        "balance_usd": balance,
+        "threshold_usd": threshold,
+        "balance_over_threshold": over,
+        "headroom_usd": (None if (balance is None or threshold is None)
+                         else round(threshold - balance, 2)),
+        "last_payment": data.get("last_payment"),
+        "month_net_cost_usd": data.get("month_net_cost_usd"),
+        "payment_method": pm,
+        "recent_declines": declines,
+        "activity_pages_read": data.get("activity_pages_read"),
+        "verification": {**ver, "days_left": ver_days},
+        "notices": data.get("notices"),
+        "notices_total": total,
+        "findings": findings,
+        "status": ("alert" if any(f["severity"] == "alert" for f in findings)
+                   else "warn" if findings else "ok"),
+    }, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

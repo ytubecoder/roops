@@ -28,7 +28,8 @@ if ! "$LOOPS_ROOT/bin/probe" ads-delivery-watch --out "$INPUTS/delivery.json" 2>
   exit 1
 fi
 
-python3 - "$INPUTS/delivery.json" <<'PY'
+DELIVERY_RC=0
+python3 - "$INPUTS/delivery.json" <<'PY' || DELIVERY_RC=$?
 import json, sys
 
 with open(sys.argv[1]) as fh:
@@ -69,10 +70,81 @@ for f in d["findings"]:
     print()
 
 print("Known cause for delivery-stopped, both prior occurrences: a declined")
-print("billing threshold charge (2026-07-30 was Mastercard ****0144, $350.00).")
-print("The Google Ads API does not model payment failure, so every entity stays")
-print("ENABLED/APPROVED/ELIGIBLE throughout — absence of spend is the only signal")
-print("available. Confirming it requires a human to open Billing & payments for")
-print("the account; the billing pages are passkey-walled and cannot be driven.")
+print("billing threshold charge (2026-07-30 Mastercard ****0144 $350.00;")
+print("2026-08-22 the same card, $500.00). The Google Ads API does not model")
+print("payment failure, so every entity stays ENABLED/APPROVED/ELIGIBLE")
+print("throughout — in the API, absence of spend is the only signal there is.")
+print("The billing section below is read from the UI and may name the cause.")
 raise SystemExit(1)
 PY
+
+# --- billing, read from the Ads UI --------------------------------------
+# The API cannot see payments at all, so a second probe serves a daily
+# snapshot of the billing pages scraped on the data host. Its value is
+# EARLINESS: on 2026-08-22 the threshold charge declined and the balance sat
+# visibly above the threshold for six days while ads kept serving. The block
+# above can only ever fire once the money has already stopped.
+#
+# A failure here never cancels a delivery finding and never turns one into an
+# all-clear — worst case the billing view is missing and says so.
+echo
+echo "## billing (scraped from the Ads UI on the data host)"
+BILLING_RC=0
+if ! "$LOOPS_ROOT/bin/probe" ads-billing-read --out "$INPUTS/billing.json" 2>"$INPUTS/billing.err"; then
+  echo "BILLING PROBE TRANSPORT FAILED — the billing view is missing from this"
+  echo "run. That is an input gap, not an all-clear: report it as one."
+  sed -n '1,10p' "$INPUTS/billing.err" 2>/dev/null || true
+  BILLING_RC=1
+else
+  python3 - "$INPUTS/billing.json" <<'PY' || BILLING_RC=$?
+import json, sys
+
+with open(sys.argv[1]) as fh:
+    b = json.load(fh)
+
+if not b.get("ok"):
+    print(f"BILLING SNAPSHOT UNAVAILABLE: {b.get('reason')}")
+    print("Input gap — do not read it as healthy.")
+    raise SystemExit(1)
+
+bal, thr = b.get("balance_usd"), b.get("threshold_usd")
+print(f"snapshot {b.get('scraped_at')} ({b.get('age_hours')}h old)"
+      f"{' — STALE' if b.get('stale') else ''}")
+if bal is not None and thr is not None:
+    print(f"balance ${bal:,.2f} against a ${thr:,.2f} payment threshold "
+          f"(headroom ${b.get('headroom_usd'):,.2f})")
+lp = b.get("last_payment") or {}
+if lp:
+    print(f"last payment: {lp.get('date')} ${lp.get('amount_usd')} "
+          f"({lp.get('type')}, {lp.get('card')})")
+pm = b.get("payment_method") or {}
+print(f"primary {pm.get('primary')} · declined={pm.get('primary_declined')} · "
+      f"backup={'yes' if pm.get('has_backup') else 'NONE'}")
+ver = b.get("verification") or {}
+if ver.get("deadline"):
+    print(f"advertiser verification due {ver.get('deadline')} "
+          f"({ver.get('days_left')}d) · outstanding: "
+          f"{', '.join(ver.get('outstanding_tasks') or []) or 'none'}")
+print(f"ledger pages scanned: {b.get('activity_pages_read')}")
+print()
+
+if not b.get("findings"):
+    print("BILLING RESULT: ok — balance under threshold, no declines in the")
+    print("scanned ledger, no account notices.")
+    raise SystemExit(0)
+
+for f in b["findings"]:
+    print(f"[{f['severity'].upper()}] {f['id']}")
+    print(f"  {f['detail']}")
+    print()
+raise SystemExit(1)
+PY
+fi
+
+if [ "$DELIVERY_RC" -ne 0 ] || [ "$BILLING_RC" -ne 0 ]; then
+  exit 1
+fi
+
+echo
+echo "RESULT: ok — delivery served on the most recent complete day, spend is"
+echo "inside its cap, and billing shows nothing outstanding."

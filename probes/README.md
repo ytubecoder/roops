@@ -23,6 +23,7 @@ Shipped probes (plus test-only `echo-test`):
 | `opentwins-lock-signal` | `~/.opentwins/workspaces/agent-twitter/memory/` | none |
 | `ads-x-ledger` | `~/.growth-console/ads.db` (`ADS_DB` override) | none |
 | `ads-delivery-watch` | Google Ads API (read-only GAQL), `scheduler/config.json` | none |
+| `ads-billing-read` | `~/.growth-console/googleads_billing/billing.json` (`GOOGLEADS_BILLING_JSON` override) | none |
 | `ads-spend-read` | Google + Reddit Ads APIs, `ads.db` x_cache, `scheduler/config.json` | one nonce + one high-water file under `state/ads-hard-cut/` |
 | `ads-emergency-pause` | `ads-emergency-pause.allow`, `state/ads-hard-cut/nonce.json`, `scheduler/config.json` | **pauses ad campaigns** via `service.record_and_apply`; one `order_journal` row each |
 | `dmp-actions` | `$DMP_OUTPUT_DIR` (newest 30 run dirs) | none |

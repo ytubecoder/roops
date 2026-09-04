@@ -13,7 +13,10 @@
 # verdict — it scores perfectly on everything they watch.
 set -euo pipefail
 
-INPUTS="${LOOP_RUN_DIR:-/tmp}/inputs"
+# The runner exports OUT_DIR (the run dir, INTERFACES.md §4.1); it never set
+# LOOP_RUN_DIR, so the old fallback silently wrote every probe input to
+# /tmp/inputs. Fail loudly instead of guessing a path.
+INPUTS="${OUT_DIR:?OUT_DIR required (set by the runner)}/inputs"
 mkdir -p "$INPUTS"
 
 echo "# ads-delivery-watch precheck — $(date -u +%Y-%m-%dT%H:%M:%SZ)"

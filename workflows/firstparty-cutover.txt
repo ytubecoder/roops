@@ -13,7 +13,7 @@ Each item is a command plus the output that means "go". Record the three operato
    - If fails: stop. Design §12 holds the flip until these three are answered.
 
 2. Guest requirements clean for the install set
-   - Run: ssh firstparty-svc 'cd ~/projects/loops && ./bin/loopctl requirements hello-watchdog hello-loop loop-sensei ads-google ads-intl ads-reddit ads-x ads-program gc-actions kagi-ban tailnet-zones kagami'
+   - Run: ssh firstparty-svc 'cd ~/projects/loops && ./bin/loopctl requirements hello-watchdog hello-loop loop-sensei ads-google ads-intl ads-reddit ads-x ads-program ads-delivery-watch ads-hard-cut gc-health-watch gc-actions kagi-ban tailnet-zones kagami'
    - Expected outcome: exit 0 (every in-scope loop met on this host).
    - If fails: unmet `requires=` items print as `UNMET`; fix `.env`, credentials, `bin:gh`, probe drift, then re-run. Do not snapshot yet.
 
@@ -107,7 +107,7 @@ Cold copy on llm, pipe over ssh (the guest has no rsync), wipe guest scratch sta
 
 Install in this order. Each `install` runs a real self-verify engine run (~10 sequential runs). Kagami last: its verify run may open or update the mirror PR, which is its job. Use a 600s poll so a codex verify cannot time out the install and orphan the engine.
 
-- Run: ssh firstparty-svc 'cd ~/projects/loops && for n in hello-watchdog hello-loop loop-sensei ads-google ads-intl ads-reddit ads-x ads-program gc-actions kagi-ban tailnet-zones kagami; do LOOPCTL_INSTALL_POLL_TIMEOUT_S=600 ./bin/loopctl install "$n" || exit 1; done'
+- Run: ssh firstparty-svc 'cd ~/projects/loops && for n in hello-watchdog hello-loop loop-sensei ads-google ads-intl ads-reddit ads-x ads-program ads-delivery-watch ads-hard-cut gc-health-watch gc-actions kagi-ban tailnet-zones kagami; do LOOPCTL_INSTALL_POLL_TIMEOUT_S=600 ./bin/loopctl install "$n" || exit 1; done'
 - Expected outcome: each name prints a successful install; guest `./bin/loopctl list` shows them installed.
 - If fails: the named loop's install stderr. Do not skip ahead; a failed install boots the unit back out. Fix requirements / probe / credential, then re-run from the failed name.
 
@@ -196,7 +196,7 @@ Only then:
 
 ### Step 6 — Verify
 
-- Run: from a tailnet device, open https://loops.<tailnet>.ts.net/ — garden shows 巡 for the install set (hello-watchdog hello-loop loop-sensei ads-google ads-intl ads-reddit ads-x ads-program gc-actions kagi-ban tailnet-zones kagami).
+- Run: from a tailnet device, open https://loops.<tailnet>.ts.net/ — garden shows 巡 for the install set (hello-watchdog hello-loop loop-sensei ads-google ads-intl ads-reddit ads-x ads-program ads-delivery-watch ads-hard-cut gc-health-watch gc-actions kagi-ban tailnet-zones kagami).
 - Expected outcome: 巡 on each of those twelve; no 休 for an installed loop.
 - If fails: unit files missing on the guest (`loopctl list` installed column) or dashboard generated against the wrong backend.
 

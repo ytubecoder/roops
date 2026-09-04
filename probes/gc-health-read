@@ -3,7 +3,7 @@
 # probe-timeout-s: 180
 # probe-writes: none
 # probe-output: json
-# probe-reads: growth-console venv + schedules ledger under MAGUYVA_REPO (default ~/projects/maguyva-marketing); ~/.opentwins (env OT_HOME override); Postiz public API using POSTIZ_API_KEY from growth-console/.env
+# probe-reads: growth-console venv + schedules ledger under MAGUYVA_REPO (default ~/projects/maguyva-marketing); ~/.opentwins (env OT_HOME override); Postiz public API using POSTIZ_API_KEY from the repo-root .env (fallback growth-console/.env)
 """Read-only GC-stack health: schedules ledger, OpenTwins twitter agent, Postiz.
 
 Always exits 0 on a normal run; failures are in-band section errors plus
@@ -28,7 +28,7 @@ MAGUYVA_REPO = Path(
 )
 GC_DIR = MAGUYVA_REPO / "growth-console"
 GC_PY = GC_DIR / ".venv" / "bin" / "python"
-ENV_FILE = GC_DIR / ".env"
+ENV_FILES = (MAGUYVA_REPO / ".env", GC_DIR / ".env")
 OT_HOME = Path(os.environ.get("OT_HOME") or (Path.home() / ".opentwins"))
 TWITTER_WS = OT_HOME / "workspaces" / "agent-twitter"
 DEFAULT_POSTIZ_BASE = "https://api.postiz.com/public/v1"
@@ -147,14 +147,15 @@ def section_rank(fid):
     return 4
 
 
-def load_postiz_keys():
-    wanted = ("POSTIZ_API_KEY", "POSTIZ_API_BASE")
-    if not ENV_FILE.is_file():
-        return
+def _parse_env_file(path):
+    """KEY=VALUE lines; missing file → {}. First definition in the file wins."""
+    out = {}
+    if not path.is_file():
+        return out
     try:
-        lines = ENV_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return
+        return out
     for line in lines:
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or "=" not in stripped:
@@ -163,8 +164,18 @@ def load_postiz_keys():
         k, v = k.strip(), v.strip()
         if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
             v = v[1:-1]
-        if k in wanted and k not in os.environ:
-            os.environ[k] = v
+        if k and k not in out:
+            out[k] = v
+    return out
+
+
+def load_postiz_keys():
+    wanted = ("POSTIZ_API_KEY", "POSTIZ_API_BASE")
+    for path in ENV_FILES:
+        parsed = _parse_env_file(path)
+        for k in wanted:
+            if k not in os.environ and k in parsed:
+                os.environ[k] = parsed[k]
 
 
 def check():
@@ -176,7 +187,8 @@ def check():
         print(f"agent-twitter workspace not found at {TWITTER_WS}")
         return 1
     if not os.environ.get("POSTIZ_API_KEY"):
-        print(f"POSTIZ_API_KEY not set (env or {ENV_FILE})")
+        named = " or ".join(str(p) for p in ENV_FILES)
+        print(f"POSTIZ_API_KEY not set (env or {named})")
         return 1
     print("ok gc-health-read")
     return 0

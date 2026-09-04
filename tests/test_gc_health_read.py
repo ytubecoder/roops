@@ -165,6 +165,14 @@ def _make_handler(store):
             return
 
         def do_GET(self):
+            if self.headers.get("Authorization") != SECRET:
+                raw = b'{"error":"unauthorized"}'
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
             path = self.path.split("?", 1)[0]
             if path == "/integrations":
                 body = store.integrations
@@ -280,6 +288,14 @@ class ProbeFixture:
         with open(path, "w") as f:
             json.dump(obj, f)
         return path
+
+    def use_repo_root_postiz_key_only(self):
+        """Key lives only in MAGUYVA_REPO/.env; no growth-console/.env."""
+        gc_env = os.path.join(self.gc_dir, ".env")
+        if os.path.isfile(gc_env):
+            os.remove(gc_env)
+        with open(os.path.join(self.maguyva, ".env"), "w") as f:
+            f.write(f"POSTIZ_API_KEY={SECRET}\n")
 
     def write_log(self, day, lines):
         path = os.path.join(self.ot_home, "logs", f"opentwins-{day}.log")
@@ -712,6 +728,16 @@ class GcHealthReadTests(unittest.TestCase):
             blob2 += Path(out_path2).read_text()
         blob2 += proc2.stdout + proc2.stderr
         self.assertNotIn(SECRET, blob2)
+
+    def test_postiz_key_from_repo_root_env(self):
+        fx = self._fx()
+        fx.use_repo_root_postiz_key_only()
+        proc, _out, data = fx.run_probe()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIsNotNone(data)
+        self.assertIsNone(data["sections"]["postiz"]["error"])
+        ids = [f["id"] for f in data["findings"]]
+        self.assertNotIn("probe:postiz-read-failed", ids)
 
     def test_findings_are_deterministically_ordered(self):
         schedules = {

@@ -50,8 +50,10 @@ conditions into its memory files every hour. Nobody read them.
   of the keys `posts|data|items|results` holding the list; each post has
   `state` (`QUEUE|PUBLISHED|ERROR|DRAFT`, upper-case it defensively),
   `publishDate` (ISO Z), `integration: {id, providerIdentifier, name, …}`,
-  `id`, `releaseURL`. The key lives in `growth-console/.env` as
-  `POSTIZ_API_KEY=…` (optional `POSTIZ_API_BASE=…`).
+  `id`, `releaseURL`. The key lives in the **repo-root** `.env`
+  (`$MAGUYVA_REPO/.env`, mode 600, the same file `probes/ads-delivery-watch`
+  reads) as `POSTIZ_API_KEY=…` (optional `POSTIZ_API_BASE=…`).
+  `growth-console/.env` does not exist on the data host (verified 2026-09-05).
 
 ## 2. Probe: `probes/gc-health-read`
 
@@ -66,17 +68,18 @@ Header (must be exactly this block at lines 2–6):
 # probe-timeout-s: 180
 # probe-writes: none
 # probe-output: json
-# probe-reads: growth-console venv + schedules ledger under MAGUYVA_REPO (default ~/projects/maguyva-marketing); ~/.opentwins (env OT_HOME override); Postiz public API using POSTIZ_API_KEY from growth-console/.env
+# probe-reads: growth-console venv + schedules ledger under MAGUYVA_REPO (default ~/projects/maguyva-marketing); ~/.opentwins (env OT_HOME override); Postiz public API using POSTIZ_API_KEY from the repo-root .env (fallback growth-console/.env)
 ```
 
 ### 2.1 Overrides (the testability seam)
 
 - `MAGUYVA_REPO` — repo root; default `~/projects/maguyva-marketing`.
-  `GC_DIR = $MAGUYVA_REPO/growth-console`, `GC_PY = $GC_DIR/.venv/bin/python`,
-  `ENV_FILE = $GC_DIR/.env`.
+  `GC_DIR = $MAGUYVA_REPO/growth-console`, `GC_PY = $GC_DIR/.venv/bin/python`.
+  `ENV_FILES = [$MAGUYVA_REPO/.env, $GC_DIR/.env]` — read in that order, first
+  file that defines the key wins; a missing file is skipped silently.
 - `OT_HOME` — default `~/.opentwins`.
 - `POSTIZ_API_KEY`, `POSTIZ_API_BASE` — taken from the environment if set,
-  otherwise parsed from `ENV_FILE` (lines `KEY=VALUE`, optional surrounding
+  otherwise parsed from the first of `ENV_FILES` that defines them (lines `KEY=VALUE`, optional surrounding
   single/double quotes, `#` comment lines ignored; **never overwrite a key
   already in the environment**). Key values are never printed anywhere.
 - `GC_HEALTH_NOW` — ISO-8601 UTC instant (e.g. `2026-09-04T21:00:00Z`) used
@@ -86,7 +89,7 @@ Header (must be exactly this block at lines 2–6):
 ### 2.2 `--check`
 
 Verifies: `GC_PY` is an executable file; `$OT_HOME/workspaces/agent-twitter`
-is a directory; a Postiz key is resolvable (env or `ENV_FILE`). All met →
+is a directory; a Postiz key is resolvable (env or one of `ENV_FILES`). All met →
 print `ok gc-health-read`, exit 0. Otherwise print one line naming the first
 unmet input, exit 1. Touches nothing.
 

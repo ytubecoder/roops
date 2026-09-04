@@ -1,0 +1,829 @@
+#!/usr/bin/env python3
+# probe: gc-health-read
+# probe-timeout-s: 180
+# probe-writes: none
+# probe-output: json
+# probe-reads: growth-console venv + schedules ledger under MAGUYVA_REPO (default ~/projects/maguyva-marketing); ~/.opentwins (env OT_HOME override); Postiz public API using POSTIZ_API_KEY from the repo-root .env (fallback growth-console/.env)
+"""Read-only GC-stack health: schedules ledger, OpenTwins twitter agent, Postiz.
+
+Always exits 0 on a normal run; failures are in-band section errors plus
+probe:<section>-read-failed findings. Never prints key values.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+MAGUYVA_REPO = Path(
+    os.environ.get("MAGUYVA_REPO")
+    or (Path.home() / "projects" / "maguyva-marketing")
+)
+GC_DIR = MAGUYVA_REPO / "growth-console"
+GC_PY = GC_DIR / ".venv" / "bin" / "python"
+ENV_FILES = (MAGUYVA_REPO / ".env", GC_DIR / ".env")
+OT_HOME = Path(os.environ.get("OT_HOME") or (Path.home() / ".opentwins"))
+TWITTER_WS = OT_HOME / "workspaces" / "agent-twitter"
+DEFAULT_POSTIZ_BASE = "https://api.postiz.com/public/v1"
+NY_TZ = ZoneInfo("America/New_York")
+
+COLLECT_ARGV = (
+    "import json; from console import brands; "
+    "from console.dashboard.schedules import collect_schedules; "
+    "print(json.dumps(collect_schedules(brands.resolve(None)), default=str))"
+)
+
+HEADER_RE = re.compile(
+    r"^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC\b.*Heartbeat"
+)
+ADS_LOOP_RE = re.compile(r"^ads-[a-z]+ loop$")
+LOCKED_RE = re.compile(
+    r"account has been locked|account/access", re.IGNORECASE
+)
+LOGGED_OUT_RE = re.compile(
+    r"mode=login|no twid|hasTwid[^,;)\n]{0,15}false|"
+    r"\[\[twitter_session_logout\]\][^\n]{0,40}"
+    r"(STILL DOWN|RELAPSED|LOGGED OUT|LOGIN WALL)",
+    re.IGNORECASE,
+)
+LOGGED_IN_RE = re.compile(
+    r"hasTwid[^,;)\n]{0,15}true|hasCt0/hasTwid all true|"
+    r"\[\[twitter_session_logout\]\][^\n]{0,40}"
+    r"(healthy|RESOLVED|RECOVERED|stable)",
+    re.IGNORECASE,
+)
+SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+LAUNCH_MSGS = {
+    "runs": "Run started",
+    "completed": "Run completed",
+    "launched": "Chrome launched",
+    "quit": "Chrome quit",
+    "deferred": "Deferred (browser leased)",
+}
+CDP_MSGS = ("navigate failed", "evaluate failed")
+
+
+def iso_z(dt):
+    dt = dt.astimezone(timezone.utc).replace(microsecond=0)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_now():
+    raw = (os.environ.get("GC_HEALTH_NOW") or "").strip()
+    if not raw:
+        return datetime.now(timezone.utc)
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    dt = datetime.fromisoformat(raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def parse_stamp(stamp):
+    try:
+        return datetime.strptime(stamp, "%Y-%m-%d %H:%M").replace(
+            tzinfo=timezone.utc
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_iso(value):
+    if not value:
+        return None
+    raw = str(value).strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def redact(text):
+    text = "" if text is None else str(text)
+    key = os.environ.get("POSTIZ_API_KEY") or ""
+    if key and key in text:
+        text = text.replace(key, "<redacted>")
+    return text
+
+
+def clip(text, n=200):
+    text = "" if text is None else str(text)
+    if len(text) <= n:
+        return text
+    return text[:n]
+
+
+def slug(name):
+    return SLUG_RE.sub("-", (name or "").lower()).strip("-")
+
+
+def finding(fid, severity, detail):
+    return {"id": fid, "severity": severity, "detail": redact(detail)}
+
+
+def section_rank(fid):
+    if fid.startswith("gc:"):
+        return 0
+    if fid.startswith("opentwins:"):
+        return 1
+    if fid.startswith("postiz:"):
+        return 2
+    if fid.startswith("probe:"):
+        return 3
+    return 4
+
+
+def _parse_env_file(path):
+    """KEY=VALUE lines; missing file → {}. First definition in the file wins."""
+    out = {}
+    if not path.is_file():
+        return out
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        k, _, v = stripped.partition("=")
+        k, v = k.strip(), v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+            v = v[1:-1]
+        if k and k not in out:
+            out[k] = v
+    return out
+
+
+def load_postiz_keys():
+    wanted = ("POSTIZ_API_KEY", "POSTIZ_API_BASE")
+    for path in ENV_FILES:
+        parsed = _parse_env_file(path)
+        for k in wanted:
+            if k not in os.environ and k in parsed:
+                os.environ[k] = parsed[k]
+
+
+def check():
+    load_postiz_keys()
+    if not (GC_PY.is_file() and os.access(GC_PY, os.X_OK)):
+        print(f"growth-console venv not found at {GC_PY}")
+        return 1
+    if not TWITTER_WS.is_dir():
+        print(f"agent-twitter workspace not found at {TWITTER_WS}")
+        return 1
+    if not os.environ.get("POSTIZ_API_KEY"):
+        named = " or ".join(str(p) for p in ENV_FILES)
+        print(f"POSTIZ_API_KEY not set (env or {named})")
+        return 1
+    print("ok gc-health-read")
+    return 0
+
+
+def reduce_row(row):
+    return {
+        "name": row.get("name"),
+        "status": row.get("status"),
+        "last_ok": row.get("last_ok"),
+        "error": row.get("error"),
+        "last_error_at": row.get("last_error_at"),
+        "schedule": row.get("schedule"),
+    }
+
+
+def exclusion_reason(name):
+    if name == "gc cache warmer":
+        return "in-process only"
+    if ADS_LOOP_RE.match(name or ""):
+        return "fleet state lives on firstparty"
+    return None
+
+
+def collect_schedules(findings):
+    out = {"error": None, "rows": [], "excluded": [], "manual": []}
+    try:
+        proc = subprocess.run(
+            [str(GC_PY), "-c", COLLECT_ARGV],
+            cwd=str(GC_DIR),
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        err = clip(redact(exc.stderr or "timeout"))
+        out["error"] = f"timeout after 90s {err}".strip()
+        findings.append(
+            finding("probe:schedules-read-failed", "warn", out["error"])
+        )
+        return out
+    except OSError as exc:
+        out["error"] = redact(f"{type(exc).__name__}: {exc}")
+        findings.append(
+            finding("probe:schedules-read-failed", "warn", out["error"])
+        )
+        return out
+    if proc.returncode != 0:
+        out["error"] = clip(redact(proc.stderr or f"exit {proc.returncode}"))
+        findings.append(
+            finding("probe:schedules-read-failed", "warn", out["error"])
+        )
+        return out
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        err = clip(redact(proc.stderr or proc.stdout or "unparseable stdout"))
+        out["error"] = f"unparseable stdout {err}".strip()
+        findings.append(
+            finding("probe:schedules-read-failed", "warn", out["error"])
+        )
+        return out
+    if not isinstance(payload, dict):
+        out["error"] = "schedules payload is not an object"
+        findings.append(
+            finding("probe:schedules-read-failed", "warn", out["error"])
+        )
+        return out
+
+    for row in payload.get("automated") or []:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name") or ""
+        reason = exclusion_reason(name)
+        reduced = reduce_row(row)
+        if reason:
+            out["excluded"].append({"name": name, "reason": reason})
+            continue
+        out["rows"].append(reduced)
+        status = reduced.get("status")
+        if status == "error":
+            findings.append(
+                finding(
+                    f"gc:{slug(name)}:error",
+                    "alert",
+                    f"{name}: {clip(reduced.get('error'))} "
+                    f"(last error {reduced.get('last_error_at')}, "
+                    f"last ok {reduced.get('last_ok')})",
+                )
+            )
+        elif status == "overdue":
+            findings.append(
+                finding(
+                    f"gc:{slug(name)}:overdue",
+                    "warn",
+                    f"{name}: last ok {reduced.get('last_ok')}, "
+                    f"expected {reduced.get('schedule')}",
+                )
+            )
+    for row in payload.get("manual") or []:
+        if isinstance(row, dict):
+            out["manual"].append(reduce_row(row))
+    return out
+
+
+def classify_entry(body):
+    if LOCKED_RE.search(body or ""):
+        return "locked"
+    out_hits = list(LOGGED_OUT_RE.finditer(body or ""))
+    in_hits = list(LOGGED_IN_RE.finditer(body or ""))
+    if out_hits and in_hits:
+        if out_hits[-1].start() > in_hits[-1].start():
+            return "logged_out"
+        return "logged_in"
+    if out_hits:
+        return "logged_out"
+    if in_hits:
+        return "logged_in"
+    return "unknown"
+
+
+def parse_memory_file(path):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    entries = []
+    stamp = None
+    chunks = []
+    for line in text.splitlines():
+        m = HEADER_RE.match(line)
+        if m:
+            if stamp is not None:
+                entries.append((stamp, "\n".join(chunks)))
+            stamp = m.group(1)
+            chunks = []
+            continue
+        if stamp is not None:
+            chunks.append(line)
+    if stamp is not None:
+        entries.append((stamp, "\n".join(chunks)))
+    return entries
+
+
+def collect_session():
+    memdir = TWITTER_WS / "memory"
+    if not memdir.is_dir():
+        return None, "no memory files"
+    names = sorted(
+        p.name for p in memdir.glob("20??-??-??.md") if p.is_file()
+    )
+    if not names:
+        return None, "no memory files"
+    files = names[-2:]
+    examined = []
+    for name in files:
+        for stamp, body in parse_memory_file(memdir / name):
+            examined.append((stamp, classify_entry(body)))
+    evidence = [(s, st) for s, st in examined if st != "unknown"]
+    last_logged_in = None
+    for stamp, state in examined:
+        if state == "logged_in":
+            last_logged_in = stamp
+    if not evidence:
+        session = {
+            "state": "unknown",
+            "as_of": None,
+            "since": None,
+            "consecutive": 0,
+            "entries_examined": len(examined),
+            "files": files,
+            "last_logged_in_at": last_logged_in,
+            "login_did_not_stick": False,
+        }
+        return session, None
+    state = evidence[-1][1]
+    i = len(evidence) - 1
+    while i > 0 and evidence[i - 1][1] == state:
+        i -= 1
+    since = evidence[i][0]
+    as_of = evidence[-1][0]
+    consecutive = len(evidence) - i
+    stick = False
+    if state == "logged_out":
+        since_dt = parse_stamp(since)
+        if since_dt is not None:
+            window = since_dt - timedelta(hours=6)
+            for stamp, st in examined:
+                if st != "logged_in":
+                    continue
+                dt = parse_stamp(stamp)
+                if dt is not None and window <= dt < since_dt:
+                    stick = True
+                    break
+    session = {
+        "state": state,
+        "as_of": as_of,
+        "since": since,
+        "consecutive": consecutive,
+        "entries_examined": len(examined),
+        "files": files,
+        "last_logged_in_at": last_logged_in,
+        "login_did_not_stick": stick,
+    }
+    return session, None
+
+
+def twitter_line(obj):
+    if not isinstance(obj, dict):
+        return False
+    data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+    return data.get("profile") == "ot-twitter" or data.get("platform") == "twitter"
+
+
+def count_log(path, day):
+    counts = {
+        "day": day,
+        "runs": 0,
+        "completed": 0,
+        "launched": 0,
+        "quit": 0,
+        "deferred": 0,
+        "cdp_errors": 0,
+    }
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return counts
+    inverse = {v: k for k, v in LAUNCH_MSGS.items()}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not twitter_line(obj):
+            continue
+        msg = obj.get("msg")
+        if msg in inverse:
+            counts[inverse[msg]] += 1
+        if msg in CDP_MSGS:
+            counts["cdp_errors"] += 1
+    return counts
+
+
+def collect_launches(now):
+    utc_day = now.astimezone(timezone.utc).date()
+    out = []
+    logdir = OT_HOME / "logs"
+    for offset in (0, 1):
+        day = utc_day - timedelta(days=offset)
+        path = logdir / f"opentwins-{day.isoformat()}.log"
+        if path.is_file():
+            out.append(count_log(path, day.isoformat()))
+    return out
+
+
+def collect_tasks():
+    path = TWITTER_WS / "schedule.json"
+    if not path.is_file():
+        return None, f"missing schedule.json at {path}"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, f"unparseable schedule.json: {type(exc).__name__}: {exc}"
+    if not isinstance(payload, dict):
+        return None, "unparseable schedule.json: not an object"
+    meta = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    tasks = payload.get("tasks") if isinstance(payload.get("tasks"), list) else []
+    counts = Counter()
+    failed = []
+    typed_len_zero = 0
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        status = task.get("status") or "unknown"
+        counts[status] += 1
+        if status == "failed":
+            notes = "" if task.get("notes") is None else str(task.get("notes"))
+            failed.append({
+                "id": task.get("id"),
+                "action": task.get("action"),
+                "time": task.get("time"),
+                "notes": notes[:160],
+            })
+            if "typedLen:0" in notes:
+                typed_len_zero += 1
+    return {
+        "for_date": meta.get("for_date"),
+        "counts": dict(counts),
+        "failed": failed,
+        "typed_len_zero": typed_len_zero,
+    }, None
+
+
+def collect_opentwins(now, findings):
+    errors = []
+    session, sess_err = collect_session()
+    if sess_err:
+        errors.append(sess_err)
+        if session is None:
+            session = {
+                "state": "unknown",
+                "as_of": None,
+                "since": None,
+                "consecutive": 0,
+                "entries_examined": 0,
+                "files": [],
+                "last_logged_in_at": None,
+                "login_did_not_stick": False,
+            }
+    launches = collect_launches(now)
+    tasks, tasks_err = collect_tasks()
+    if tasks_err:
+        errors.append(tasks_err)
+        if tasks is None:
+            tasks = {
+                "for_date": None,
+                "counts": {},
+                "failed": [],
+                "typed_len_zero": 0,
+            }
+
+    if session and session.get("state") == "logged_out":
+        n = session.get("consecutive") or 0
+        detail = (
+            f"X agent (@maguyvaai) logged out since {session.get('since')} UTC "
+            f"(as of {session.get('as_of')}, {n} consecutive heartbeats); "
+            f"last healthy {session.get('last_logged_in_at')}. Re-login is "
+            "human-only: the ot-twitter Chrome via "
+            "x-ads-tools/ot-chrome-start.sh, never a raw launch."
+        )
+        if session.get("login_did_not_stick"):
+            detail += (
+                f" A login was recorded at {session.get('last_logged_in_at')} "
+                "and did not stick."
+            )
+        findings.append(finding("opentwins:twitter:logged-out", "alert", detail))
+    elif session and session.get("state") == "locked":
+        n = session.get("consecutive") or 0
+        findings.append(
+            finding(
+                "opentwins:twitter:locked",
+                "alert",
+                f"X agent (@maguyvaai) account locked since {session.get('since')} "
+                f"UTC (as of {session.get('as_of')}, {n} consecutive heartbeats). "
+                "Unlock is human-only.",
+            )
+        )
+
+    judge = None
+    for day in launches:
+        if (day.get("runs") or 0) >= 3:
+            judge = day
+            break
+    if judge is not None:
+        day = judge.get("day")
+        runs = judge.get("runs") or 0
+        launched = judge.get("launched") or 0
+        cdp = judge.get("cdp_errors") or 0
+        if launched == 0:
+            findings.append(
+                finding(
+                    "opentwins:twitter:launch-cycle-stalled",
+                    "alert",
+                    f"{day} UTC: {runs} heartbeats ran but Chrome was launched "
+                    "0 times — the daemon is attaching to a stale window it does "
+                    "not own, so every write fails silently (typedLen:0). Usually "
+                    "a deleted ~/.opentwins/locks/chrome-ot-twitter.pid; repair: "
+                    "OT_OWNER=<owner> x-ads-tools/ot-chrome-start.sh --finish "
+                    "(see CLAUDE.md).",
+                )
+            )
+        if cdp >= 10:
+            findings.append(
+                finding(
+                    "opentwins:twitter:cdp-errors",
+                    "warn",
+                    f"{day} UTC: {cdp} CDP errors (navigate failed + evaluate "
+                    "failed) across heartbeats",
+                )
+            )
+
+    if not tasks_err and tasks:
+        ny = now.astimezone(NY_TZ).date()
+        ok_dates = {ny.isoformat(), (ny - timedelta(days=1)).isoformat()}
+        for_date = tasks.get("for_date")
+        if for_date in ok_dates:
+            counts = tasks.get("counts") or {}
+            done = int(counts.get("done") or 0)
+            failed_n = int(counts.get("failed") or 0)
+            pending = int(counts.get("pending") or 0)
+            typed = int(tasks.get("typed_len_zero") or 0)
+            if done == 0 and failed_n >= 3:
+                bits = []
+                for item in (tasks.get("failed") or [])[:3]:
+                    bits.append(
+                        f"{item.get('action')}: {clip(item.get('notes'), 80)}"
+                    )
+                extra = ("; " + "; ".join(bits)) if bits else ""
+                findings.append(
+                    finding(
+                        "opentwins:twitter:writes-failing",
+                        "alert",
+                        f"{for_date}: 0 tasks done, {failed_n} failed "
+                        f"({typed} with typedLen:0), {pending} pending{extra}",
+                    )
+                )
+            elif typed >= 3:
+                findings.append(
+                    finding(
+                        "opentwins:twitter:paste-failures",
+                        "warn",
+                        f"{for_date}: {typed} failed tasks with typedLen:0 "
+                        f"({failed_n} failed, {done} done, {pending} pending)",
+                    )
+                )
+
+    error = "; ".join(errors) if errors else None
+    if error:
+        findings.append(
+            finding("probe:opentwins-read-failed", "warn", error)
+        )
+    return {
+        "error": error,
+        "session": session,
+        "launches": launches,
+        "tasks": tasks,
+    }
+
+
+def http_json(url, key, timeout=20):
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": key,
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            code = resp.getcode()
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        reason = exc.reason
+        if isinstance(reason, BaseException):
+            msg = f"{type(reason).__name__}: {reason}"
+        else:
+            msg = f"URLError: {reason}"
+        raise RuntimeError(redact(msg)) from exc
+    except (TimeoutError, OSError, ValueError) as exc:
+        raise RuntimeError(redact(f"{type(exc).__name__}: {exc}")) from exc
+    if code is None or code < 200 or code >= 300:
+        raise RuntimeError(f"HTTP {code}")
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        raise RuntimeError(f"unparseable JSON: {type(exc).__name__}") from exc
+
+
+def post_list(payload):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("posts", "data", "items", "results"):
+            val = payload.get(key)
+            if isinstance(val, list):
+                return val
+    return []
+
+
+def post_integration(post):
+    integ = post.get("integration") if isinstance(post.get("integration"), dict) else {}
+    return integ.get("providerIdentifier") or integ.get("identifier") or "unknown"
+
+
+def collect_postiz(now, findings):
+    out = {
+        "error": None,
+        "integrations": [],
+        "posts": {
+            "window_days": 14,
+            "total": 0,
+            "by_state": {},
+            "error": [],
+            "missed": [],
+        },
+    }
+    key = os.environ.get("POSTIZ_API_KEY") or ""
+    base = (os.environ.get("POSTIZ_API_BASE") or DEFAULT_POSTIZ_BASE).rstrip("/")
+    start = iso_z(now - timedelta(days=14))
+    end = iso_z(now + timedelta(days=1))
+    qs = urllib.parse.urlencode({"startDate": start, "endDate": end})
+    try:
+        integ_payload = http_json(base + "/integrations", key)
+        posts_payload = http_json(base + "/posts?" + qs, key)
+    except RuntimeError as exc:
+        out["error"] = redact(str(exc))
+        findings.append(
+            finding("probe:postiz-read-failed", "warn", out["error"])
+        )
+        return out
+
+    integrations = integ_payload if isinstance(integ_payload, list) else (
+        integ_payload.get("integrations")
+        if isinstance(integ_payload, dict) and isinstance(
+            integ_payload.get("integrations"), list
+        )
+        else []
+    )
+    for integ in integrations:
+        if not isinstance(integ, dict):
+            continue
+        ident = integ.get("identifier") or "unknown"
+        disabled = integ.get("disabled") is True
+        out["integrations"].append({
+            "identifier": ident,
+            "name": integ.get("name"),
+            "disabled": disabled,
+        })
+        if disabled:
+            findings.append(
+                finding(
+                    f"postiz:{ident}:disabled",
+                    "alert",
+                    f"{ident} integration disabled ({integ.get('name')})",
+                )
+            )
+
+    posts = post_list(posts_payload)
+    by_state = Counter()
+    errors_by = defaultdict(list)
+    missed_by = defaultdict(list)
+    cutoff = now - timedelta(minutes=30)
+    for post in posts:
+        if not isinstance(post, dict):
+            continue
+        state = str(post.get("state") or "").upper()
+        ident = post_integration(post)
+        by_state[state] += 1
+        rec = {
+            "id": post.get("id"),
+            "publishDate": post.get("publishDate"),
+            "integration": ident,
+        }
+        if state == "ERROR":
+            out["posts"]["error"].append(rec)
+            errors_by[ident].append(rec)
+        if state == "QUEUE":
+            pub = parse_iso(post.get("publishDate"))
+            if pub is not None and pub < cutoff:
+                out["posts"]["missed"].append(rec)
+                missed_by[ident].append(rec)
+    out["posts"]["total"] = len(posts)
+    out["posts"]["by_state"] = dict(by_state)
+
+    for ident, items in errors_by.items():
+        bits = [f"{i.get('publishDate')} {i.get('id')}" for i in items[:5]]
+        findings.append(
+            finding(
+                f"postiz:{ident}:post-error",
+                "warn",
+                f"{ident}: {len(items)} ERROR posts: " + ", ".join(bits),
+            )
+        )
+    for ident, items in missed_by.items():
+        bits = [f"{i.get('publishDate')} {i.get('id')}" for i in items[:5]]
+        findings.append(
+            finding(
+                f"postiz:{ident}:post-missed",
+                "warn",
+                f"{ident}: {len(items)} missed QUEUE posts: " + ", ".join(bits),
+            )
+        )
+    return out
+
+
+def run():
+    load_postiz_keys()
+    now = parse_now()
+    findings = []
+    sections = {}
+    try:
+        sections["schedules"] = collect_schedules(findings)
+    except Exception as exc:  # noqa: BLE001 — one section must not blank another
+        err = redact(f"{type(exc).__name__}: {exc}")
+        sections["schedules"] = {
+            "error": err, "rows": [], "excluded": [], "manual": [],
+        }
+        findings.append(finding("probe:schedules-read-failed", "warn", err))
+    try:
+        sections["opentwins"] = collect_opentwins(now, findings)
+    except Exception as exc:  # noqa: BLE001 — one section must not blank another
+        err = redact(f"{type(exc).__name__}: {exc}")
+        sections["opentwins"] = {
+            "error": err, "session": None, "launches": [], "tasks": None,
+        }
+        findings.append(finding("probe:opentwins-read-failed", "warn", err))
+    try:
+        sections["postiz"] = collect_postiz(now, findings)
+    except Exception as exc:  # noqa: BLE001 — one section must not blank another
+        err = redact(f"{type(exc).__name__}: {exc}")
+        sections["postiz"] = {
+            "error": err,
+            "integrations": [],
+            "posts": {
+                "window_days": 14, "total": 0, "by_state": {},
+                "error": [], "missed": [],
+            },
+        }
+        findings.append(finding("probe:postiz-read-failed", "warn", err))
+    findings.sort(key=lambda f: (section_rank(f["id"]), f["id"]))
+    payload = {
+        "probe": "gc-health-read",
+        "generated_at": iso_z(now),
+        "now": iso_z(now),
+        "sections": sections,
+        "findings": findings,
+    }
+    json.dump(payload, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+def main(argv):
+    if argv == ["--check"]:
+        return check()
+    return run()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

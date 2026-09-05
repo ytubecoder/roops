@@ -1,7 +1,7 @@
 # gc-health-watch — design spec (black-box acceptance)
 
 Date: 2026-09-05. Repo: `~/projects/loops` (this repo). Owner: maguyva-marketing.
-Status: approved by Generalissimo in chat 2026-09-05; implementation farmed out.
+Status: **shipped 2026-09-05, live on firstparty** (`loops-gc-health-watch.timer`, daily 09:15). As built: §7.
 
 ## 0. Summary
 
@@ -514,3 +514,33 @@ Verify command: `bash tests/run-tests.sh` (full suite; must pass).
 The foreman (not the peon) will: run `bin/loopctl validate gc-health-watch`,
 run the real probe on llm against live data, push llm → pull firstparty
 (two-checkout rule), do the supervised first run, and install.
+
+## 7. Shipped (as built)
+
+Merged `6ec03c7` (grok peon `gc-health-watch`, black-box acceptance; poke 1 =
+`01cf59d`). Installed on firstparty 2026-09-05 after `loopctl validate`,
+`loopctl requirements`, a supervised `loopctl run` (silent green, inputs under
+the run dir) and `loopctl install`; probe hashes match on both checkouts.
+
+Deltas from the spec as first written:
+- **`POSTIZ_API_KEY` is read from the repo-root `$MAGUYVA_REPO/.env` first**,
+  `growth-console/.env` second (§2.1 was corrected: the latter does not exist
+  on the data host; the live run surfaced it as `probe:postiz-read-failed` /
+  HTTP 401 rather than a green read). One extra test:
+  `test_postiz_key_from_repo_root_env` (27 mandated tests total).
+- No `tests/fixtures/gc-health/` — fixtures are generated in-test.
+- `--check` exits 1 in-probe; through `bin/probe` that surfaces as client exit 3
+  (`EXIT_UNMET`), which is what `loopctl validate` reports.
+
+Verified beyond the tests: the session classifier run over the real memory
+files and daemon logs for 2026-08-29 → 09-04 reproduced the known history
+(08-31/09-01 `logged_out` since 11:18Z; 09-02 `logged_in` from 16:26Z with
+`launch-cycle-stalled` on the same day; 09-03 `cdp-errors` 32; 09-04 silent);
+a live run on 2026-09-04 data read all three sections with no findings and no
+key material in stdout/stderr.
+
+Still open (out of scope here): GC's own `/schedules` page shows the five
+ads-loop rows as overdue forever (llm-local state, dead by design since the
+fleet move) — a GC-side fix; the Postiz queue has had no timer since April,
+so that section stays quiet until posting resumes.
+

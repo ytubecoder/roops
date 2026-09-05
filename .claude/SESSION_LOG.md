@@ -1,5 +1,22 @@
 # Session Log
 
+## 2026-09-05 — gc-health-watch shipped (grok peon); OUT_DIR fix in two prechecks; runbook test un-redded
+
+### Summary
+- New watchdog `gc-health-watch` + probe `gc-health-read` (spec `docs/superpowers/specs/2026-09-05-gc-health-watch-design.md`, as built §7). Surfaces the OpenTwins X agent logged out / launch cycle stalled, Postiz errors, and GC ledger error/overdue rows. Live on firstparty daily 09:15.
+- `ads-delivery-watch` and `ads-hard-cut` prechecks used `${LOOP_RUN_DIR:-/tmp}/inputs`; the runner never sets `LOOP_RUN_DIR`, so probe inputs (incl. the hard-cut pause payload + nonce) went to a shared `/tmp/inputs`. Now `${OUT_DIR:?}`; `tests/test_precheck_out_dir.py` guards every precheck. `/tmp/inputs` cleared on firstparty.
+- `test_cutover_runbook_exists_and_names_every_loop` had been red since 2026-08-31 (the two ads watchdogs were never added to `workflows/firstparty-cutover.txt` step 3). Fixed on the forward-path lists; rollback lists left as the cutover-time record.
+
+### Lessons Learned
+- **Gotcha:** `bash tests/run-tests.sh | tail` hides the suite's exit code — the one red test went unnoticed until captured properly. `run-tests.sh` does propagate; the pipe was the problem.
+- **Accepted:** black-box peon dispatch with all decisions pre-made (26 named tests, allowlist, `--verify`) — grok delivered in one round plus one poke, and the foreman never read the implementation; the two independent probes (real-history replay, live run + secret grep) caught the only real defect, which was in the spec.
+- **Gotcha (peon):** foreman-merging `main` into the peon branch makes `peon check` scope-fail on main's own files (it diffs from the dispatch base); `git diff --stat main` is the honest scope check, then `peon merge --unchecked` stating that. `peon merge` refuses untracked-only dirt with no force flag — `git stash push -u` shield.
+- **Gotcha:** a probe that prints an error and exits non-zero leaves NO `--out` file (commit only on rc 0) — `ads-delivery-watch`'s in-band `error` branch is unreachable for that reason. `gc-health-read` always exits 0 with per-section `error` fields instead.
+
+### Decisions
+- Watchdog shape (precheck decides, engine only writes up) reused verbatim from `ads-delivery-watch`; findings ids stable per condition so dismiss/snooze work across days.
+- GC ledger rows excluded by name (`gc cache warmer`, `^ads-[a-z]+ loop$`) rather than fixed GC-side — that is a separate GC ticket.
+
 ## 2026-08-23 — B-25 Linux port: app/loop separation, `requires=`, probe channel, guest staged + rehearsed; flip held
 
 ### Summary

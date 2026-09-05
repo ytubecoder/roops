@@ -15,7 +15,7 @@ Verified facts:
 - DMP plugin already has the actions/execution layer (`execute-action.md`: dry-run → `--execute` → `--execute --confirm`, audit log under `~/.claude-marketing/brands/{brand}/executions/`). **BUT Google Ads is OAuth-only there** — `execute_blocked_reason: "use MCP path"`; `connector_executor.py` cannot fire it. The first action loop would need the Claude+MCP path.
 - **Two id spaces, no mapping**: ADG-NN (loop-local, per-run) vs DMP's named registry actions (via `connector_resolver`). This is the missing bridge.
 - Guardrails still in force (verbatim): *"No scheduled process ever calls `service.record_and_apply()` (or any network write API…)"*; CDP is never cron'd; ad-kill proposals need an explicit go; loops never git-write maguyva-marketing or edit runbooks. An action loop that auto-applies approvals would violate these — widening is generalissimo's explicit amendment, never inherited.
-- **Before designing the bridge, read `docs/ads-actions-loops-warmstart.md` in `~/projects/maguyva-marketing`** (it is NOT in loops/docs) — authoritative build-order for the five per-network ads loops (google → intl → reddit → x → program); may already specify the handoff.
+- **Before designing the bridge, read the ACTIONATOR bullet in `~/projects/maguyva-marketing/CLAUDE.md`** — authoritative build-order for the five per-network ads loops (google → intl → reddit → x → program); may already specify the handoff.
 
 **Open question put to him, unanswered:** should approval live in the loops harness (new disposition verb, e.g. `approve`) or in GC, where ads-google's SPEC already says decisions get recorded ("applies/declines via `record_and_apply` + runbook")? If GC, the harness only needs the ack≠approval distinction made explicit.
 

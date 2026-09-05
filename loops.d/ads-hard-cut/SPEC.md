@@ -110,7 +110,7 @@ overspend.
 
 ## 7. The standing rule this amends
 
-`CLAUDE.md` and `docs/ads-campaign-view-warmstart.md` carried an absolute rule:
+`maguyva-marketing/CLAUDE.md` carried an absolute rule:
 *no scheduled job calls `record_and_apply()` at any trust level.* Generalissimo
 amended it narrowly on 2026-08-31:
 

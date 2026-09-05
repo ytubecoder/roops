@@ -1,7 +1,7 @@
 # SPEC — gc-actions
 
 Twelve-question intake per `docs/LOOP_AUTHORING.md` §2. Origin: Generalissimo's
-approved Q2 design, 2026-08-12 (maguyva-marketing/docs/gc-actions-tickets-warmstart.md
+approved Q2 design, 2026-08-12 (spec maguyva-marketing/docs/superpowers/specs/2026-07-25-dmp-actions-pipeline-design.md
 + the lavish approval artifact `.lavish/action-ticket-approval.html`). This loop
 automates the 2026-08-11/12 manual collation of the DMP (/dmp) + CRO (/cro)
 action registers into ticket-takeaway tickets.

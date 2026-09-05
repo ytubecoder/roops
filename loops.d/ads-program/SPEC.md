@@ -1,7 +1,7 @@
 # ads-program — intake spec
 
-Build-order STEP 2 of `docs/ads-actions-loops-warmstart.md` (in the
-maguyva-marketing repo). One of five planned per-network ads check loops; this
+Build-order STEP 2 of the ads-loops build (contract: the ACTIONATOR bullet in
+`maguyva-marketing/CLAUDE.md`). One of five planned per-network ads check loops; this
 is the first, built end-to-end before cloning to intl/reddit/x/program.
 
 1. Purpose & stop condition
@@ -74,7 +74,7 @@ their orders); any WRITE (record_and_apply, ads API, git, CDP/browser); any
 GAQL/device-state read (phase-1 inputs cannot see it — the loop recommends
 `mobile-off.py` / `mobile-off.mjs --verify` as manual checks instead).
 
-6. Guardrails (verbatim, from the warmstart + repo memory)
+6. Guardrails (verbatim, from the ads-loops design + repo memory)
 - "Write policy: strictly read-only. No scheduled process ever calls
   `service.record_and_apply()` (or any network write API, or Postiz, or git on
   this repo)."
@@ -112,7 +112,7 @@ These are embedded in `prompt.md` AND enforced by the permission axes (§7).
   command would be blocked by the read-only sandbox — so **codex cannot express
   this loop and claude is forced** ("harness default codex unless dangerous-
   combo/adapter rules force otherwise"). This is a documented deviation from the
-  warmstart's "allowlist = validator only" wording (the warmstart assumed
+  design's "allowlist = validator only" wording (it assumed
   report_only let the engine write the md files; neither adapter does). It stays
   within the harness contract — only documented axes are used, and network +
   remote mutation remain at the floor.
@@ -140,7 +140,7 @@ finding under its id every run while it is still true. (Documented in prompt.md
 `## Finding identity`.)
 
 **Register + brief conventions (ads-local — state them here so nobody closes an
-action from the wrong side).** Required by the warmstart's "Action register +
+action from the wrong side).** Required by the design's "Action register +
 brief contract"; enforced by `bin/validate_action_set.py`:
 - **ID pattern `^ADP-(?:(?:PRG|BUD|INP)-)?\d{2,}$`** — new ids are
   two-part `ADP-<SRC>-NN` (source = provenance designator; the number is ONE
@@ -173,7 +173,7 @@ key in the contract, and the schema is `additionalProperties: false`, so emittin
 one would be a `contract-violation`. `loop_status` is the *sqlite column* that
 stores the emitted `status` verbatim (`bin/run-loop.sh:824`, `bin/db.py:30`); it
 is a storage name, not a wire name. The enum is exactly `ok | warn | alert` —
-**there is no `error` status.** (The warmstart plan doc's "the engine reports
+**there is no `error` status.** (The original design's "the engine reports
 loop_status=error" wording is wrong on both counts; do not copy it into the
 sibling loops.)
 

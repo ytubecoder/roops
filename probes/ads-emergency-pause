@@ -8,7 +8,7 @@
 
 🚨 THIS PROBE DELIBERATELY AMENDS A STANDING PROGRAM RULE.
 
-The rule, carried in CLAUDE.md and docs/ads-campaign-view-warmstart.md, was
+The rule, carried in maguyva-marketing/CLAUDE.md, was
 absolute: "no scheduled job calls record_and_apply() at any trust level."
 Generalissimo amended it narrowly on 2026-08-31:
 

@@ -162,7 +162,7 @@ repo has no remote configured. Review before assuming any of it was reviewed.
 
 ## Pointers
 
-- Build order + the original design: `~/projects/maguyva-marketing/docs/ads-actions-loops-warmstart.md`
+- Build order + the original design: the ACTIONATOR bullet in `~/projects/maguyva-marketing/CLAUDE.md`
 - Other open design threads: `docs/OPEN_THREADS_WARMSTART.md`
 - Harness contract (frozen): `docs/INTERFACES.md` · loop authoring: `docs/LOOP_AUTHORING.md`
 

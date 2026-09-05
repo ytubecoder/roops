@@ -40,8 +40,8 @@ from pathlib import Path
 
 LOOP = "ads-google"
 PREFIX = "ADG"
-# Provenance designators this loop may mint (docs/actionator-warmstart.md in
-# the marketing repo): EV evaluator · CMP campaign/delivery · JRN journal/
+# Provenance designators this loop may mint (ACTIONATOR bullet in
+# maguyva-marketing/CLAUDE.md): EV evaluator · CMP campaign/delivery · JRN journal/
 # guard · BUD budget/caps · INP input gap. ads-program instead mints
 # PRG · BUD · INP. New ids are two-part `PREFIX-SRC-NN`; single-part legacy
 # ids remain valid ONLY while carried forward — never minted anew.

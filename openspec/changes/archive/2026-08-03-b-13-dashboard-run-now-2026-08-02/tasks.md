@@ -51,7 +51,7 @@
       §13.3 defining the worker contract and the rule that this is the ONLY console
       path that fires a run (set-schedule "NEVER kickstart" unchanged). Same commit
       as the code.
-- [x] 4.2 Note the new surface in `docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md` (phase-1
+- [x] 4.2 Note the new surface in `docs/_archive/warmstarts/ADS_LOOPS_FOLLOWUP_WARMSTART.md` (phase-1
       trigger now exists in the roops console) — and that the growth-console
       "run everything" button remains a separate, unbuilt thing.
 

@@ -43,7 +43,7 @@ illustrative only; verification runs it manually / via `loopctl run`.
 In scope: the fixture files inside `examples/hello-loop/world/` only.
 Explicitly excluded: anything outside this loop's own directory — no real
 project repos, no `~/projects/*` scanning (that's a different, real loop
-candidate in `docs/LOOPS_WARMSTART.md`, out of scope here). maguyva and any
+candidate in `docs/LOOP_SELECTION.md`, out of scope here). maguyva and any
 other project-analysis tool are hard-excluded, consistent with the
 project-wide guardrail; this loop never invokes an external tool at all.
 

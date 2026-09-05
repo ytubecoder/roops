@@ -7,7 +7,7 @@ commit as its code.
 
 ## 0. Where we are, and the decisions this spec makes
 
-The pve1 migration already proved the harness runs on Debian 13 (`WARMSTART_SYSTEMD.md`):
+The pve1 migration already proved the harness runs on Debian 13 (`docs/_archive/warmstarts/WARMSTART_SYSTEMD.md`):
 B-24 gave `loopctl` a systemd install backend, the suite is green on both hosts, and a timer
 survived `qm reboot 101`. The cutover stalled on two things: the fleet is not host-portable
 loop by loop, and `state/loops.sqlite` has no host dimension. This session's audit (three

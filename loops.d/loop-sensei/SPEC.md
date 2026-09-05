@@ -21,7 +21,7 @@ the single invocation: plain interpretation — the precheck gathered all
 evidence; the engine classifies cause and formulates the fix. V2 aspiration,
 recorded honestly: a bridge where an APPROVED diagnosis becomes an executable
 order on the audited dry-run→execute→confirm path (the approve→action thread,
-docs/OPEN_THREADS_WARMSTART.md §1) — explicitly not built here.
+docs/OPEN_THREADS.md §1) — explicitly not built here.
 
 3. Type & data flow (precheck gathers vs engine interprets)
 type=agent. precheck.sh deterministically (read-only, zero network, zero

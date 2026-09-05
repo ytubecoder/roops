@@ -1776,7 +1776,7 @@ def _render_finding_handoff(
 
 # Disposition → hanko kanji, matching the section-04 mock's stamp vocabulary:
 # 認 acknowledge · 休 snooze · 済 settle (dismiss). 承 approve exists in the mock but has
-# no CLI verb — ack ≠ approval is settled doctrine (docs/OPEN_THREADS_WARMSTART.md §1).
+# no CLI verb — ack ≠ approval is settled doctrine (docs/OPEN_THREADS.md §1).
 _DISP_KANJI = {"ack": "認", "snooze": "休", "dismiss": "済"}
 
 

@@ -36,7 +36,7 @@ board is the one concrete proposal; everything else here is inventory.
   thresholds (INTERFACES §9.3) can alert on it without engine changes.
 - **Probe channel liveness is a two-host property.** `loopctl probe status` exit code on the guest
   is the single check; the server log on llm is the audit trail, not the alarm.
-- **The open design thread still applies:** `docs/OPEN_THREADS_WARMSTART.md` §4 — "P1 dead-man's
+- **The open design thread still applies:** `docs/LOOP_SELECTION.md` Open items — "P1 dead-man's
   switch prerequisite: agree the push-not-pull heartbeat change across services first." The audit
   is the place to settle that.
 

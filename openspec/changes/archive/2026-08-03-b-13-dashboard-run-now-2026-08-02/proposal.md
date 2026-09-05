@@ -7,7 +7,7 @@ but there is no way to *fire* a run from the page. For the five ads loops this i
 blocking gap: they cannot be installed to launchd at all until the claude-engine
 launchd-auth issue is fixed, so today the only way to get fresh output is
 `loopctl run <name>` in a terminal. The accepted phase-1 bar for the ads fleet
-(docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md, generalissimo 2026-07-28) is exactly this:
+(docs/_archive/warmstarts/ADS_LOOPS_FOLLOWUP_WARMSTART.md, generalissimo 2026-07-28) is exactly this:
 *"i press a button to run everything … the runs work and produce the output."*
 A per-loop run-now trigger on the dashboard closes that gap without touching
 scheduling (phase 2, explicitly out of scope).

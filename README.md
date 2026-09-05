@@ -225,9 +225,9 @@ tests/run-tests.sh       # 1028 hermetic tests — no network, no real engines
 | [`docs/HARNESS_PLAN.md`](docs/HARNESS_PLAN.md) | Finalized harness design (plan-checked 3× with codex) |
 | [`docs/HARNESS_PLAN_AMENDMENT_1.md`](docs/HARNESS_PLAN_AMENDMENT_1.md) | Findings memory / human-in-the-loop amendment |
 | [`docs/ENGINE_PROBES.md`](docs/ENGINE_PROBES.md) | Verified live CLI behavior of codex + claude |
-| [`docs/LOOPS_WARMSTART.md`](docs/LOOPS_WARMSTART.md) | Loop candidate selection state |
-| [`docs/OPEN_THREADS_WARMSTART.md`](docs/OPEN_THREADS_WARMSTART.md) | Unfinished design threads — read before assuming something is settled |
-| [`docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md`](docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md) | The five ads loops: current state, open issues with re-check commands, acceptance bar |
+| [`docs/LOOP_SELECTION.md`](docs/LOOP_SELECTION.md) | Approved loop themes — and what each still owes |
+| [`docs/OPEN_THREADS.md`](docs/OPEN_THREADS.md) | Unfinished design threads — read before assuming something is settled |
+| [`docs/KAGAMI_SETUP.md`](docs/KAGAMI_SETUP.md) | kagami's one manual credential step (GitHub PAT), and why |
 | [`site/CLAUDE.md`](site/CLAUDE.md) | The roops design system — tokens, seal-font rule, concept vocabulary |
 | [`CLAUDE.md`](CLAUDE.md) | Cold-start pointers + non-negotiables for agents |
 

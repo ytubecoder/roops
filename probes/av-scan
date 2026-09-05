@@ -16,6 +16,14 @@ if [ "${1:-}" = "--check" ]; then
   exit 1
 fi
 
+# Pin the LOGIN-shell PATH before scanning. av's bash/zsh detectors flag
+# user-writable directories that PRECEDE system paths, so the finding count is a
+# function of PATH ordering: in a real login shell /opt/homebrew/{bin,sbin}
+# precede /usr/bin (flagged) while ~/.grok/bin sits after them (correctly not
+# flagged). Steady state through this pin is 16 exposures. 🚨 Do NOT "fix" that
+# back to the 20 in ~/projects/av-audit/ — that baseline was measured in a
+# Claude-Code-like process with different PATH ordering and is simply stale
+# (av-audit is not ours to edit). 16 is the canonical user's-shell view.
 AUDIT_PATH=""
 if [ -x /bin/zsh ]; then
   AUDIT_PATH="$(/bin/zsh -l -c 'printf %s "$PATH"' 2>/dev/null | tail -n 1 || true)"

@@ -813,7 +813,7 @@ CLEAN_ANSWERS = {
 
 - [ ] **Step 1:** `bash tests/run-tests.sh` full green; note the new test count.
 - [ ] **Step 2:** Re-read `docs/SKILL_IMPORT_AND_AGENT_SURFACE_PLAN.md` §§3–6 against the shipped code; fix any doc/code drift IN THE DOCS (the design doc is rationale, INTERFACES is contract — both must match reality).
-- [ ] **Step 3:** Update `CLAUDE.md` (loops) test count + one line under "Start here" pointing at `docs/SKILL_IMPORT.md`; update `docs/OPEN_THREADS_WARMSTART.md` if the paste-block work changes the approve→action framing (it should only reference it).
+- [ ] **Step 3:** Update `CLAUDE.md` (loops) test count + one line under "Start here" pointing at `docs/SKILL_IMPORT.md`; update `docs/OPEN_THREADS.md` if the paste-block work changes the approve→action framing (it should only reference it).
 - [ ] **Step 4:** Final commit + push: `"chore: skill-import/agent-surface closeout — docs sync"`
 
 ---

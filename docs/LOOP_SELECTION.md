@@ -1,4 +1,8 @@
-# Loops — selection state
+# Loop selection — approved themes and what is still owed
+
+**Static register.** Generalissimo approved the THEMES below; individual loop
+definitions are NOT approved and each still needs its own design pass. Add a
+theme when he approves one; move a theme out when its loop ships.
 
 **Scope:** choosing and specifying the LOOPS themselves. Harness internals live in
 `docs/HARNESS_PLAN.md` + `docs/INTERFACES.md`; the amendment that added cross-run memory is
@@ -107,27 +111,13 @@ Notes carried forward for that session (OpenSpec deliberately **not** explored f
 | #13 Meta loop-opportunity scanner | A type-4 system loop — fits generalissimo's model, but has no data to reason about until the fleet has run for months. Revisit ~6 months after first install. |
 | maguyva broken working state (19,874 staged deletions) | Not a loop — a one-off manual todo. Hard-exclude `~/projects/maguyva` from any sweep meanwhile. |
 
-## Environment facts (measured 2026-07-21)
+## Why P1 exists
 
-- 68 dirs in `~/projects`; 38 git repos; 24 dirty; 10 with unpushed commits; **6 repos have unpushed
-  commits and NO remote** (calorie-counter-simple 43, claude-quality 76, cookingapp 23,
-  hermes-email-triage 16, hermes-withmem 6, stuntsclone 4) — single-machine data-loss risk.
-- `~/projects/maguyva` is a broken working state (19,874 staged deletions) — **hard-exclude from any
-  sweep**.
-- Ticket-takeaway SQLite (`~/.claude/ticket-takeaway/`): 69 tickets `for-review` (21 stale >30d —
-  ticket-takeaway itself: 21 stuck since 2026-05-17); `scheduled_events` empty.
-- maguyva-marketing `workflows/*.txt` carry explicit `# Frequency:` headers (google/reddit/intl ads
-  check-ins: "every 1-2 days"; stack-health check: "fine as a periodic sweep"), run by hand today.
-- flickki suffered a multi-day **silent** pg_cron outage: the sweep 401'd every tick while
-  `cron.job_run_details` reported "succeeded". Truth lived in `internal_job_heartbeats` +
-  `net._http_response.status_code`. **This is the origin of P1.**
-- Public sites: taskform.pro, flickki.com, maguyva.ai, openclaw.ai/docs.openclaw.ai,
-  openbrick.vercel.app, wiki.stunts.hu (+ tailnet-only: translate/househelp/vane/openbrick —
-  exclude from public probes).
-- 8 repos have GitHub Actions (stocky, Vane, GoodForm, openclaw, syndicate-clone, phoneapp, flickki,
-  andrzejsiedlecki.pl); ~23 have package.json; phoneapp's git log is dominated by Dependabot merges.
-- GoodForm constraint: Vercel Hobby = crons at most daily (sub-daily in `vercel.json` fails every
-  prod build).
+flickki suffered a multi-day **silent** pg_cron outage: the sweep 401'd on every
+tick while `cron.job_run_details` reported "succeeded". The truth lived in
+`internal_job_heartbeats` and `net._http_response.status_code`. A dead scheduler
+cannot report its own death, so absence-of-signal is the only observable failure.
+That is the origin of theme P1 and the reason it is push-not-pull.
 
 ## Hard guardrails (embed verbatim in loop prompts AND enforce via `loop.conf` permission axes)
 
@@ -159,7 +149,14 @@ status/headline/metrics/findings) mandatory; tier-2 custom panels + metric metad
 3. **P1 prerequisite** — agree the push-not-pull heartbeat change across the services.
 4. **P2 scope** — build the probe half, or consume a monitoring service and keep only the diagnosis?
 5. **Per-loop design passes** — every row above still needs one; themes are approved, specs are not.
-6. **Defects in `docs/INTERFACES.md`** (found 2026-07-22): §4.5 (suppression) and §4.6 (transient
-   retries) are referenced from §3, §4.1, §4.3 and §10 but were never written; §9.1's tier-1 shape
-   omits the `findings` field that §3/§4.1 depend on.
-7. Claude's broken `feedbacks` MCP (hardcoded `/home/user/...` path) — fix or remove when touched.
+6. **Ticket-consolidation loop** (he asked for it) — cross-project triage where
+   *killing* tickets is half the output; ticket ids give finding identity for
+   free, which makes it the best pilot candidate. The lead question was never
+   answered: is the report "what do I work on next" or "what should I stop
+   pretending I'll do"?
+7. **Project-specific coding loops** — a generic loop plus a per-repo
+   `.loops/checks.md` overlay (push-not-pull). Proposed, not accepted.
+8. Claude's broken `feedbacks` MCP (hardcoded `/home/user/...` path) — fix or remove when touched.
+
+Design threads that are not about *which* loops to build live in
+`docs/OPEN_THREADS.md`.

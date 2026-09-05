@@ -69,7 +69,7 @@ Two features, one foundation:
 4. **Report/propose-only doctrine unchanged.** A skill that *acts* (deploys, sends, pushes)
    is reshaped to propose-only: the loop emits the action it would take as a finding. The
    approve→action bridge stays the separate open thread it already is
-   (`docs/OPEN_THREADS_WARMSTART.md`). Local-write maintenance loops (the
+   (`docs/OPEN_THREADS.md`). Local-write maintenance loops (the
    "regenerate a dashboard" class) use the existing `perm_fs_write=workdir` axis + justification.
 5. **The import trust model follows the house invariant** (README "What Can Actually Change
    Things"): deterministic code the *human* trusts gets full power; the model gets a sandbox.

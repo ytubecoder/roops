@@ -264,7 +264,7 @@
 ## 2026-07-30 — Report-pages follow-up wave: KV single-sourcing, kit.css becomes the real kit, self-containment by reference
 
 ### Summary
-- **`docs/REPORT_PAGES_FOLLOWUP_WARMSTART.md` cleared end to end**: the three decisions parked for
+- **`docs/_archive/warmstarts/REPORT_PAGES_FOLLOWUP_WARMSTART.md` cleared end to end**: the three decisions parked for
   the owner, all eight backlog items, and both trailing leftovers. The doc now carries only live
   state, the "16 not 20" PATH explanation, and the settled/do-not-relitigate list.
 - **A filed maintainability nit was a live bug.** The renderer's KV-neutralization regex used `\b`
@@ -421,7 +421,7 @@
   resolved keeping both texts, and its ~11 unpushed commits were left alone.
 - **Deferred to generalissimo:** normalizing two plan-mandated cosmetics (`## 12.` SPEC heading,
   `q12.` label — reviewer-verified safe), cleaning up the stale corrupt finding-id row, and acking the
-  lookbehind tradeoff. Parked in `docs/REPORT_PAGES_FOLLOWUP_WARMSTART.md` with the follow-up backlog.
+  lookbehind tradeoff. Parked in `docs/_archive/warmstarts/REPORT_PAGES_FOLLOWUP_WARMSTART.md` with the follow-up backlog.
 
 ## 2026-07-30 — Garden dashboard shipped: roops design applied to generate.py (B-07); §10 amended; orphan plists cleaned
 
@@ -481,7 +481,7 @@
 ### Summary
 - Fixed three defects in `ads-google` that would have cloned into every sibling loop: the action-set **emit path** (a `{}` instruction in `prompt.md` produced a command the shell layer hard-denies), **contract conformance** (docs promised a `loop_status=error` that does not exist in the schema — the real key is `status`, enum `ok|warn|alert`), and **id continuity** (a run that emitted findings but failed to persist its set left those ids unburned, so the next run reused `ADG-01..04`).
 - Verified the console surface end-to-end: `/ads/actions` renders real actions (200, ~34KB), `/ads/campaigns` 200, `/schedules` lists all five ads loops. The schedules path is `/schedules` — `/settings/schedules` 404s.
-- Established what's actually open and wrote `docs/ADS_LOOPS_FOLLOWUP_WARMSTART.md`: ~half of all runs die with no contract, nothing is installed under launchd (engine auth fails in that environment), and `/schedules` still lists the legacy manual check-in rows beside the new loop rows.
+- Established what's actually open and wrote `docs/_archive/warmstarts/ADS_LOOPS_FOLLOWUP_WARMSTART.md`: ~half of all runs die with no contract, nothing is installed under launchd (engine auth fails in that environment), and `/schedules` still lists the legacy manual check-in rows beside the new loop rows.
 
 ### Lessons Learned
 - **Gotcha (§4.5 inverts status):** a non-empty `findings` array overrides the declared contract `status` with the findings' max severity. A run that wrote no action set declared `alert` and displayed **amber** because its findings topped out at `warn`. Emitting *zero* findings is what lets an alert through — the fix for "make failure visible" was to report less, not more. Promoted to CLAUDE.md.
@@ -520,7 +520,7 @@
 
 ### Summary
 - Project created as the home for the custom loop harness after a full portfolio analysis + harness evaluation session (detailed log: `~/projects/.claude/SESSION_LOG.md`, 2026-07-22 entry).
-- Deliverables: `docs/HARNESS_PLAN.md` (harness design, plan-checked 3 rounds with codex, gate passed) and `docs/LOOPS_WARMSTART.md` (loop-selection warmstart). No implementation yet — deliberately split into two follow-up work streams (harness build / loop selection).
+- Deliverables: `docs/HARNESS_PLAN.md` (harness design, plan-checked 3 rounds with codex, gate passed) and `docs/LOOP_SELECTION.md` (loop-selection warmstart). No implementation yet — deliberately split into two follow-up work streams (harness build / loop selection).
 
 ### Decisions
 - Directory `~/projects/loops` chosen by generalissimo (over `loops-infra`).
@@ -534,7 +534,7 @@
 - Wave G (real machine) caught 2 integration bugs hermetic tests couldn't: run_id never injected into prompt (→ RUN CONTEXT block in §6.2) and extract_usage not parsing the adapter's bare codex usage object. LESSON: fake-engine fixtures that substitute values themselves (fake.sh sed __RUN_ID__) can mask "who tells the engine X" gaps — pilot on real engines early.
 - Live-proven: launchd install/kickstart-verify/NATURAL interval firing/uninstall; codex+claude same loop same finding ids; idempotence times_seen; dismiss → runner suppression w/ §4.5 footer; sandbox write-denial (PWNED.txt probe); skipped-overlap/precheck; watchdog silent-green + sticky probe-red; dashboard all states.
 - Final fable whole-branch review: 2 blockers fixed (loopctl run --root env passthrough; credential_env = v1 validate hard-fail RESERVED) + claude denial-vs-transient order, cross-loop retention scoping, redaction rest-of-line+JWT. v1.1 follow-up list in .superpowers/sdd/progress.md.
-- End state: 21 commits on main (local-only, no remote — intentional), suite green (278 py + 158 adapter + 115 runner + 35 examples). docs/LOOPS_WARMSTART.md has generalissimo's uncommitted parallel edits — left untouched.
+- End state: 21 commits on main (local-only, no remote — intentional), suite green (278 py + 158 adapter + 115 runner + 35 examples). docs/LOOP_SELECTION.md has generalissimo's uncommitted parallel edits — left untouched.
 
 ## 2026-07-23 — OpenSpec pilot (brownfield, both lanes) + TT enrollment
 

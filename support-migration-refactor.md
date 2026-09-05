@@ -44,7 +44,7 @@ All pushed. The mechanism works; the blockers below are all elsewhere.
 | `b485843` | `bin/schedule.py` emits a `systemd` timer form beside the `launchd` one. Grammar unchanged, so no `loop.conf` or `SPEC.md` in the fleet moves. INTERFACES §5.1 amended. |
 | `d2e8e71` | `loopctl`'s install backend is platform-dispatched. `install` / `uninstall` / `pause` / `resume` / `set-schedule` / `_is_installed` branch on `_install_backend()`. launchd path byte-identical; its 170 tests still pass. INTERFACES §8.1 amended. |
 | `90051e9` | The suite passes on Linux as well as macOS — 786 python tests both ways, plus every shell fixture. |
-| `6989d08` | `WARMSTART_SYSTEMD.md` — what was verified on the guest, and the per-loop portability matrix. |
+| `6989d08` | `docs/_archive/warmstarts/WARMSTART_SYSTEMD.md` — what was verified on the guest, and the per-loop portability matrix. |
 | maguyva `0f29428` | `GET /api/ads/x-cache` in growth-console, so `ads-x` can read the X snapshot age over HTTP instead of opening `ads.db`. |
 
 Ticket **B-24** is in For Review on the loops board; **B-26** on maguyva's.
@@ -181,7 +181,7 @@ dispositions, and losing them makes the whole fleet re-nag on settled findings.
 
 ## 5. Where the rest of the detail lives
 
-- `WARMSTART_SYSTEMD.md` in this repo — what was verified on the guest, the
+- `docs/_archive/warmstarts/WARMSTART_SYSTEMD.md` in this repo — what was verified on the guest, the
   full per-loop matrix, and the systemd/launchd differences that are
   load-bearing.
 - `~/projects/sysadmin/pve1/PLAN.md` Task 20 — the migration's own record of why

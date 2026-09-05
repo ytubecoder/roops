@@ -1,10 +1,10 @@
 # Custom Loop Harness — Plan (harness only)
 
-> **REVISION 9 (final)** — Scope: custom harness + dashboard + loop-authoring contract ONLY. Individual loops = separate context, seeded by **`~/projects/loops/docs/LOOPS_WARMSTART.md`** (companion file — loop selection/specification lives there, not here). Paperclip/hermes fully out of scope (generalissimo explores Paperclip separately). Engine: codex default, claude switchable. Working directory: **`~/projects/loops`** (generalissimo's choice). **Plan-checked: 3 rounds with Codex — final gate passed; all agreed findings incorporated** (marked ⊕): rounds 1–2 hardened runner/contract/permissions; round 3 gate added per-run contract atomicity, `report_markdown` in-schema emission, and real (credential/allowlist) enforcement for remote-capable CLIs.
+> **REVISION 9 (final)** — Scope: custom harness + dashboard + loop-authoring contract ONLY. Individual loops = separate context, seeded by **`~/projects/loops/docs/LOOP_SELECTION.md`** (companion file — loop selection/specification lives there, not here). Paperclip/hermes fully out of scope (generalissimo explores Paperclip separately). Engine: codex default, claude switchable. Working directory: **`~/projects/loops`** (generalissimo's choice). **Plan-checked: 3 rounds with Codex — final gate passed; all agreed findings incorporated** (marked ⊕): rounds 1–2 hardened runner/contract/permissions; round 3 gate added per-run contract atomicity, `report_markdown` in-schema emission, and real (credential/allowlist) enforcement for remote-capable CLIs.
 
 ## Context
 
-generalissimo is standing up recurring automated "loops" across ~40 projects. Portfolio analysis found zero standing automation against real recurring pain (evidence in `docs/LOOPS_WARMSTART.md`). After evaluating Paperclip (token-heavy orchestration, CalVer churn) and hermes (redundant hop to the same codex backend), generalissimo chose a **custom thin harness we fully understand**, with: a **dashboard (global + per-loop views)** fed by a **standard reporting contract** (tier 1, required) plus **loop-specific custom reporting** (tier 2, optional but fully displayed), and a defined **authoring process** so developer-agent teams integrate the contract correctly every time.
+generalissimo is standing up recurring automated "loops" across ~40 projects. Portfolio analysis found zero standing automation against real recurring pain (evidence in `docs/LOOP_SELECTION.md`). After evaluating Paperclip (token-heavy orchestration, CalVer churn) and hermes (redundant hop to the same codex backend), generalissimo chose a **custom thin harness we fully understand**, with: a **dashboard (global + per-loop views)** fed by a **standard reporting contract** (tier 1, required) plus **loop-specific custom reporting** (tier 2, optional but fully displayed), and a defined **authoring process** so developer-agent teams integrate the contract correctly every time.
 
 Verified environment facts (Codex round 1 double-checked): macOS has **no `flock`, no GNU `timeout`**; `codex exec` supports `--json` (JSONL events), `--output-last-message`, `--output-schema`; `claude -p` supports `--output-format json`, `--json-schema`.
 
@@ -34,7 +34,7 @@ Verified environment facts (Codex round 1 double-checked): macOS has **no `flock
                                          #   WorkingDirectory, EnvironmentVariables, Std{Out,Err}Path ⊕)
   examples/                              # ⊕ pilot loops kept permanently as regression fixtures (never installed)
   docs/LOOP_AUTHORING.md                 # contract + build process for loop developers
-  docs/LOOPS_WARMSTART.md                # companion file (already written) — seeds the separate loop-selection context
+  docs/LOOP_SELECTION.md                # companion file (already written) — seeds the separate loop-selection context
 ```
 
 ### Runner (`bin/run-loop.sh <name>`)
@@ -94,7 +94,7 @@ Runner adds: timestamps, duration, engine, runner-status, tokens/cost (nullable)
 
 ## Implementation Steps
 
-1. ~~Write `docs/LOOPS_WARMSTART.md`~~ — DONE (2026-07-22, alongside this plan doc).
+1. ~~Write `docs/LOOP_SELECTION.md`~~ — DONE (2026-07-22, alongside this plan doc).
 2. Build core: repo init, sqlite schema (WAL), `lock.py`, `contract.schema.json`, `run-loop.sh`, both engine adapters.
 3. Build `loopctl` (new/validate/run/list/install first; pause/resume/uninstall/status after pilot) + launchd template.
 4. Build `dashboard/generate.py` + `loops.html`.

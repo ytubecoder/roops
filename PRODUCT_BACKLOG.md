@@ -69,16 +69,29 @@ Priority: high | Status: for-review
 
 ## Backlog
 
-### B-03: Ads loops phase 1: reliable runs + manual run-everything trigger + clean schedules screen
-Priority: high | Status: proposed
+### B-03: Ads loops phase 1 — RESCOPE: only the GC "run all five" button is left
+Priority: low | Status: proposed
+Two of the three original parts are resolved and were verified live 2026-09-06: runs now produce an action set ~88-97% of the time (was ~50%), and all five ads loops are installed with timers firing on firstparty (the launchd gap died with the B-25 cutover). The `/schedules` duplicate check-in rows are gone. What remains is a convenience only: one Growth Console button that triggers all five loops, which B-13's per-loop run-now already covers from the harness side. That residual belongs to maguyva-marketing's backlog, not this one — close or move.
 
 ## Ideas
+
+### B-26: kagami GitHub auth through the console instead of a hand-pasted PAT
+Priority: medium | Status: proposed
+Generalissimo asked for this directly: "make the gh process go through the UI like a real app" — a GitHub OAuth device flow or GitHub App install driven from the garden console, replacing the fine-grained PAT written by hand to `~/.config/roops-kagami/pat` (procedure: `docs/KAGAMI_SETUP.md`). Needs an `docs/INTERFACES.md` §13 amendment first, because the console would hold a credential for the first time.
 
 ### I-01: Fleet dead-man alarm: one alert when any armed loop misses its expected firing
 Priority: medium | Status: proposed
 Shape (for review, B-25 follow-up): a tiny scheduled check OUTSIDE the fleet's own scheduler that reads state/loops.sqlite and fails loudly when any loop with unit files present + enabled has no run row within (expected_interval_s + grace) — i.e. the garden's existing 'stale' derivation, but pushed, not pulled. Push target: one channel the generalissimo actually sees (proposal: a message via the existing PushNotification/mobile path, or an email through gc), deduped per loop per day. Runs on firstparty as loops-deadman.timer (systemd) with OnBootSec so a reboot does not silence it; a second, cross-host probe from llm ( ping of the guest console /api/state) covers the guest itself being down. Open question in OPEN_THREADS: push-not-pull heartbeat agreement across services.
 
 ## Bugs
+
+### B-27: dashboard "next run" is computed in UTC against local-time schedules
+Priority: medium | Status: proposed
+`dashboard/generate.py` (~lines 406-445) derives the next firing in UTC while loop schedules are declared in local time, so the garden can show a next-run that is hours off. Cosmetic on the dashboard, but it is the number a human uses to decide whether a loop is late.
+
+### B-28: all five ads-loop prompts mint an action id for input-gap problems
+Priority: medium | Status: proposed
+Settled rule: actions come strictly from campaign report recommendations (the DMP/CRO pattern); infrastructure and input problems are run status and mint no id. Every one of the five ads loops still instructs "raise ONE action about the input gap" in its `prompt.md`. Verified still present 2026-09-06. Removing it is approved work, not an open question — it was mis-filed as a design thread rather than a defect.
 
 ## Icebox
 

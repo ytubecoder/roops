@@ -16,6 +16,7 @@ from pathlib import Path
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 PRECHECK = os.path.join(REPO, "loops.d", "ads-x", "precheck.sh")
 BIN_FILES = (
+    "ads_evidence.py",
     "probe",
     "probe_core.py",
     "loopconf.py",

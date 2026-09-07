@@ -294,3 +294,16 @@ line ($2,200 / google $900 / reddit $400 / x $400 as of 2026-07-21) is
 authoritative, as prompt.md already instructs. §1's "one of five per-network
 loops; this is the first" is ads-google clone residue — this is the
 program-level fifth loop.
+
+
+## Amendment September 7, 2026 — versioned conversion evidence (B-29)
+
+The scoreboard and campaign reads request the same explicit seven complete
+account-local days. Shared `bin/ads_evidence.py` carries every configured target,
+current state, evidence window, decision ID/version, freshness and blocker into
+the digest. Legacy/missing decisions are input gaps; no impression-count or CTR
+fallback authorizes a performance recommendation. The prompt amendment replaces
+older pace-to-2,000 examples. Evaluator band E proposals remain reviewed; separate
+analyst restructures require reasons and exact scope. Source gaps, withdrawal,
+review, journaled execution and measured outcomes remain distinct. No permission
+axis, schedule, install state or Ads writer authority changes.

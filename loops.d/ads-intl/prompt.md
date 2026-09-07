@@ -29,10 +29,11 @@ variants and campaigns the digest lists under `## Scope`.
 Go through the digest and flag genuine exceptions only — a quiet, healthy
 program should yield few or zero actions. Look for:
 
-- **CPC vs the scan band / CTR movement:** intl's economics test is cheap
-  clicks — g9 won at ~$0.68 CPC / 3.45% CTR; a geo or variant whose CPC climbs
-  out of the scan band, or an evaluator-eligible (≥2,000 impressions) clear 2×
-  bottom-half CTR loser. Never compare intl CTR against the US message test.
+- **Acquisition evidence / CPC / CTR movement:** the international experiment
+  is intentional. Evaluate its own selected markets and intent cohorts. CPC and
+  CTR diagnose auctions and messaging; useful adoption and collected revenue
+  determine acquisition value. No impression-count performance eligibility.
+
 - **Delivery anomalies:** the ENABLED intl-en campaign serving ~zero in a geo
   or overall; a paused campaign (ja/ko) unexpectedly serving; delivery
   collapsing after a budget/geo change.
@@ -218,13 +219,10 @@ braces — write it exactly as the schema requires.
      minted, verdict flips, journal or program-event entries newer than the
      prior run. If nothing changed, write exactly "No change since the
      prior run." — silence is not an option.
-  7. **Next decision** (1–3 lines): each live decision with a concrete
-     trigger AND a date — a digest-stated due date ("N days overdue" once
-     passed; date arithmetic on digest dates is allowed) or the pace
-     estimate to the 2,000-impression gate (window impressions ÷ window
-     days → days to gate, labeled "at the current pace" — at intl volumes
-     this is often months; say it plainly). These two derivations plus the
-     ledger division are the ONLY derived numbers allowed anywhere.
+  7. **Next decision** (1–3 lines): state the next concrete evidence or
+     review dependency and its supplied date. A due date does not establish
+     statistical eligibility. Do not derive a time-to-impression kill gate.
+     Keep missing cohort maturity/sample requirements explicitly unknown.
   8. **Open register**: open ADI-NN ids + one-line titles.
 - `metrics` MUST be a JSON **string** containing a serialized JSON object
   (e.g. `"{\"actions.open\": 3, \"actions.struck\": 1, \"scope.variants\": 12}"`);
@@ -263,3 +261,26 @@ numbers). A struck (resolved) action emits NO finding. **Dismissing a finding
 (runner-side nag-stop) does NOT strike the action** — striking happens only when
 a later run observes the condition resolved (or a human decision log says so);
 keep emitting the finding under its id while the condition is still true.
+
+## Conversion-evidence amendment — September 7, 2026 (B-29)
+
+This amendment supersedes older impression/CTR eligibility examples. Read the
+versioned conversion-evidence section verbatim: decision ID/version, objective,
+window, source age, exact target states, blockers, uncertainty and budget effect.
+Only a current actionable band E whole-variant decision may be described as an
+evaluator pause candidate, always awaiting human review. A missing version or
+cohort is an input gap. Never turn a paused historic placement into evidence
+against an active unsampled placement. Never reconstruct eligibility from CTR.
+
+Separate analyst proposals from deterministic evaluator recommendations and
+explain their exact scope/reason. No copy, budget, launch or autonomy expansion
+is authorized by a report. Preserve the intentional international experiment;
+India quality is a hypothesis until matched adoption/payment evidence exists.
+Signups are a proxy, repository linkage is not completed indexing, modal events
+are diagnostic, and free-user service costs remain unknown.
+
+Preserve stable recommendation IDs and prior decisions/reasons. Withdrawal is
+not execution or success. Report recommendation → reviewed decision → journaled
+execution → mature measured outcome as separate states; unknown stays unknown.
+For the short decision digest, lead with changed evidence, blocked inputs and
+exact review requests. Do not repeat unchanged recommendations as new findings.

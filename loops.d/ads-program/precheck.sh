@@ -40,10 +40,10 @@ fetch() { # fetch <name> <path-with-query> — bounded retry: 3 attempts, 3s/6s
   printf 'null' > "$INPUTS/$name.json"
 }
 
-fetch campaigns       "/api/ads/campaigns"
+fetch campaigns       "/api/ads/campaigns?days=7"
 fetch journal         "/api/ads/journal?limit=60"
 fetch program-events  "/api/ads/program-events"
-fetch scoreboard      "/api/ads/scoreboard"
+fetch scoreboard      "/api/ads/scoreboard?days=7"
 
 FETCHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -154,6 +154,12 @@ if LOOPS_ROOT:
 else:
     sets_missing = len(SIBLINGS)
     print("- LOOPS_ROOT unset — cannot read sibling sets (report as gap).")
+print()
+
+# Shared contract includes silent and paused targets; no CTR eligibility fallback.
+sys.path.insert(0, str(Path(LOOP_DIR).resolve().parents[1] / "bin"))
+from ads_evidence import decision_digest
+print("\n".join(decision_digest(sb, None)))
 print()
 
 # ---- Budget headroom ----

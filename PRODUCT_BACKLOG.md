@@ -67,6 +67,9 @@ Priority: high | Status: for-review
 ### B-25: Linux port: app/loop separation, host requirements, remote probes, firstparty cutover
 Priority: high | Status: for-review
 
+### B-29: Align Google ads loops with versioned conversion evidence and exact targets
+Priority: medium | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1 — RESCOPE: only the GC "run all five" button is left

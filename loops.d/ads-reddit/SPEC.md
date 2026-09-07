@@ -278,3 +278,15 @@ network and the emit example said `order.network: google` — both now reddit.
 count is 8 (r1–r8). The variant table is required even when all rows are zero
 (the zeros are the finding), and the desktop-only revert's days-overdue count
 must ride the headline and Next-decision line while the decision stands.
+
+## Amendment September 7, 2026 — versioned conversion evidence (B-29)
+
+The scoreboard and campaign reads request the same explicit seven complete
+account-local days. Shared `bin/ads_evidence.py` carries every configured target,
+current state, evidence window, decision ID/version, freshness and blocker into
+the digest. Legacy/missing decisions are input gaps; no impression-count or CTR
+fallback authorizes a performance recommendation. The prompt amendment replaces
+older pace-to-2,000 examples. Evaluator band E proposals remain reviewed; separate
+analyst restructures require reasons and exact scope. Source gaps, withdrawal,
+review, journaled execution and measured outcomes remain distinct. No permission
+axis, schedule, install state or Ads writer authority changes.

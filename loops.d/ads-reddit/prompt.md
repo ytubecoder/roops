@@ -29,10 +29,10 @@ lists under `## Scope`.
 Go through the digest and flag genuine exceptions only — a quiet, healthy
 program should yield few or zero actions. Look for:
 
-- **CTR / spend / verdict movement:** a variant that is evaluator-eligible
-  (≥2,000 impressions) and is a clear 2× bottom-half CTR loser; a new CTR
-  leader; verdicts that have flipped. r-boost history: r2 volume lead, r8/r1
-  CTR ~0.75%.
+- **Conversion evidence / CTR / spend movement:** use the versioned decision
+  payload. Missing inventory, unwindowed snapshots or attribution gaps block
+  performance decisions. CTR remains a diagnostic and never a kill gate.
+
 - **Delivery anomalies — the DESKTOP-ONLY collapse check first:** the
   desktop-only screen (since 2026-07-21) predicted possible delivery collapse
   (24 of 25 recent reddit signup sessions were mobile). If campaign delivery is
@@ -267,3 +267,26 @@ numbers). A struck (resolved) action emits NO finding. **Dismissing a finding
 (runner-side nag-stop) does NOT strike the action** — striking happens only when
 a later run observes the condition resolved (or a human decision log says so);
 keep emitting the finding under its id while the condition is still true.
+
+## Conversion-evidence amendment — September 7, 2026 (B-29)
+
+This amendment supersedes older impression/CTR eligibility examples. Read the
+versioned conversion-evidence section verbatim: decision ID/version, objective,
+window, source age, exact target states, blockers, uncertainty and budget effect.
+Only a current actionable band E whole-variant decision may be described as an
+evaluator pause candidate, always awaiting human review. A missing version or
+cohort is an input gap. Never turn a paused historic placement into evidence
+against an active unsampled placement. Never reconstruct eligibility from CTR.
+
+Separate analyst proposals from deterministic evaluator recommendations and
+explain their exact scope/reason. No copy, budget, launch or autonomy expansion
+is authorized by a report. Preserve the intentional international experiment;
+India quality is a hypothesis until matched adoption/payment evidence exists.
+Signups are a proxy, repository linkage is not completed indexing, modal events
+are diagnostic, and free-user service costs remain unknown.
+
+Preserve stable recommendation IDs and prior decisions/reasons. Withdrawal is
+not execution or success. Report recommendation → reviewed decision → journaled
+execution → mature measured outcome as separate states; unknown stays unknown.
+For the short decision digest, lead with changed evidence, blocked inputs and
+exact review requests. Do not repeat unchanged recommendations as new findings.

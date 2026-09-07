@@ -38,8 +38,8 @@ fetch() { # fetch <name> <path-with-query> — bounded retry: 3 attempts, 3s/6s
   printf 'null' > "$INPUTS/$name.json"
 }
 
-fetch scoreboard      "/api/ads/scoreboard"
-fetch campaigns       "/api/ads/campaigns"
+fetch scoreboard      "/api/ads/scoreboard?days=7"
+fetch campaigns       "/api/ads/campaigns?days=7"
 fetch journal         "/api/ads/journal?limit=60"
 fetch program-events  "/api/ads/program-events"
 
@@ -129,7 +129,6 @@ print()
 
 # ---- Per-variant metrics (in-scope google rows) ----
 print("## In-scope variant metrics (scoreboard)")
-EVAL_IMPR_GATE = 2000
 if isinstance(sb, dict):
     grows = ((sb.get("networks") or {}).get("reddit") or {}).get("rows") or []
     shown = 0
@@ -141,7 +140,7 @@ if isinstance(sb, dict):
         ev = r.get("evaluator") or {}
         verdict = ev.get("action") or ev.get("verdict") or ev.get("status") or "—"
         impr = r.get("impressions") or 0
-        gate = "EVAL-ELIGIBLE" if impr >= EVAL_IMPR_GATE else f"below {EVAL_IMPR_GATE}-impr gate"
+        gate = "reviewable evidence" if ev.get("version") == 1 and ev.get("actionable") else "evidence blocked or unavailable"
         pls = r.get("placements") or []
         legs = "; ".join(f"{p.get('leg')}=camp {p.get('campaign_external_id')}"
                          + (f"/grp {p.get('ad_group_external_id')}" if p.get('ad_group_external_id') else "")
@@ -158,6 +157,12 @@ if isinstance(sb, dict):
     print(f"- scoreboard window: last {sb.get('days')} days")
 else:
     print("- scoreboard MISSING — cannot read per-variant metrics (input gap).")
+print()
+
+# Shared conversion contract; unwindowed snapshots remain blocked.
+sys.path.insert(0, str(Path(LOOP_DIR).resolve().parents[1] / "bin"))
+from ads_evidence import decision_digest
+print("\n".join(decision_digest(sb, scope_variants)))
 print()
 
 # ---- Budget headroom ----

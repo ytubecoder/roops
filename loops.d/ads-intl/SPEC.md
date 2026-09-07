@@ -278,3 +278,16 @@ condition persists (reserved failure spellings unchanged).
 Loop-specific: §10's `scope.variants` "12 today" was ads-google clone residue —
 intl's in-scope count is 4 (g9–g12). Serving state must confirm ja/ko PAUSED
 and carry the standing no-per-geo-breakdown caveat every run.
+
+
+## Amendment September 7, 2026 — versioned conversion evidence (B-29)
+
+The scoreboard and campaign reads request the same explicit seven complete
+account-local days. Shared `bin/ads_evidence.py` carries every configured target,
+current state, evidence window, decision ID/version, freshness and blocker into
+the digest. Legacy/missing decisions are input gaps; no impression-count or CTR
+fallback authorizes a performance recommendation. The prompt amendment replaces
+older pace-to-2,000 examples. Evaluator band E proposals remain reviewed; separate
+analyst restructures require reasons and exact scope. Source gaps, withdrawal,
+review, journaled execution and measured outcomes remain distinct. No permission
+axis, schedule, install state or Ads writer authority changes.

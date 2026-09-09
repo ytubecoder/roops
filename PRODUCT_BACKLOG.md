@@ -70,6 +70,9 @@ Priority: high | Status: for-review
 ### B-29: Align Google ads loops with versioned conversion evidence and exact targets
 Priority: medium | Status: for-review
 
+### B-30: Preserve successful-sync evidence in scheduled ads reviews
+Priority: medium | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1 — RESCOPE: only the GC "run all five" button is left

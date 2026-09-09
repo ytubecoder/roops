@@ -1732,3 +1732,13 @@ firstparty's. The probe key cannot pull. A change to `probes/`, `bin/probe`, or
 `bin/probe-server` is pushed from llm and pulled on firstparty before any loop
 that uses it is installed. A name the server does not list, or lists with a
 different content hash, is unmet.
+
+### Ads evidence consumer compatibility — 2026-09-10 (B-30)
+
+The ads-only `bin/ads_evidence.py` formatter accepts GC decision versions 1 and 2.
+Version 2 adds the successful-sync acquisition objective, collected-payment
+business outcome, objective source status, and separate signup diagnostic fields.
+Carry those fields and all blockers verbatim. Missing completion evidence cannot
+be replaced by version 1 signup bands or CTR to recommend performance cuts.
+Unknown versions remain input gaps. This changes no harness contract, permissions,
+schedule, or order authority; ads loops remain read-only recommendation producers.

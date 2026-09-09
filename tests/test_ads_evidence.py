@@ -183,6 +183,7 @@ class PrecheckIntegrationTests(unittest.TestCase):
                         capture_output=True,
                         text=True,
                         timeout=20,
+                        check=False,
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn('"decision_id": "stable-proof"', result.stdout)

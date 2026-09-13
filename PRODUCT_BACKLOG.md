@@ -73,6 +73,9 @@ Priority: medium | Status: for-review
 ### B-30: Preserve successful-sync evidence in scheduled ads reviews
 Priority: medium | Status: for-review
 
+### B-31: Include native Search query and keyword evidence in existing Google check-ins
+Priority: medium | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1 — RESCOPE: only the GC "run all five" button is left

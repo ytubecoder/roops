@@ -148,6 +148,7 @@ class PrecheckIntegrationTests(unittest.TestCase):
             },
             "/api/ads/journal": {"rows": []},
             "/api/ads/program-events": {"events": []},
+            "/api/ads/search-query-review": {"available": False, "stale": True},
         }
 
         class Handler(http.server.BaseHTTPRequestHandler):

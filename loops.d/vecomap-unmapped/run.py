@@ -3,7 +3,7 @@
 
 Stdlib only. Tracer invocations use the tracer venv python declared in
 requires=file:~/.cache/vecomap-tracer/venv/bin/python. Exit 0 = silent-green
-(nothing traced, nothing superseded/aging); non-zero = escalate.
+; non-zero only on a fatal (API/checkout/state failure).
 """
 from __future__ import annotations
 
@@ -785,8 +785,9 @@ def run() -> int:
                 fh.write("\n")
 
     emit(summary, git_log, fatal)
-    escalate = bool(fatal) or bool(per_key) or bool(superseded) or bool(aging)
-    return 1 if escalate else 0
+    # type=agent: the engine always runs and reports what happened with the findings' own
+    # severities; a non-zero exit is reserved for a genuine fatal (API, checkout, state).
+    return 1 if fatal else 0
 
 
 def main() -> int:

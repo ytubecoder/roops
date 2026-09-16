@@ -30,7 +30,7 @@ than 30 days or the tracer version changed. V2 aspiration, recorded
 honestly and not built: auto-merge high-confidence PRs.
 
 3. Type & data flow (precheck gathers vs engine interprets)
-`type=watchdog`: `precheck.sh` **is** the job (docs/INTERFACES.md §4.1).
+`type=agent`: `precheck.sh` **is** the job (docs/INTERFACES.md §4.1).
 Exit 0 → silent-green, heartbeat ok=1, no engine. Non-zero → escalate,
 heartbeat ok=0, engine interprets already-gathered text. Precheck
 (deterministic, unsandboxed):
@@ -85,11 +85,11 @@ Verbatim, from project docs:
 - "Everything is report/propose-only. No component ever commits, pushes,
   or mutates a project outside `$LOOPS_ROOT`." (docs/INTERFACES.md §0) —
   binds the **engine**. Precheck is trusted unsandboxed code, same as
-  kagami's PR push and every watchdog probe.
+  kagami's PR push and every agent probe.
 - "Fresh engine session per firing" (§0) — enforced at the adapter.
-- Watchdog stickiness (docs/INTERFACES.md §4.3): "if the probe failed,
-  the run's loop_status AND effective_status are alert regardless of what
-  the diagnosis engine returns and regardless of suppression."
+- Agent semantics (docs/INTERFACES.md §4): the effective status is the max
+  severity of unsuppressed findings; a non-zero precheck is a fatal and
+  is shown as alert.
 - This loop never merges, never pushes to `main`, never deletes
   candidates, and never commits a key whose confidence is not `high` or
   `medium` (vecomap SPEC R-676, R-677).
@@ -101,7 +101,7 @@ as kagami). The engine gets no `credential_env`, no network, no exec: it
 physically cannot hold the pen. The one remote mutation (`git push origin
 tracer/<YYYYMMDD-HHMM>` on ytubecoder/vecomap) is performed by
 precheck.sh — trusted deterministic code, the same trust rule
-LOOP_AUTHORING §4 applies to watchdog probes ("a plain, unsandboxed
+LOOP_AUTHORING §4 applies to agent probes ("a plain, unsandboxed
 script … never governed by this axis at all"). Credential: the checkout's
 existing deploy key (`~/.ssh/vecomap-deploy`, ssh Host `github-vecomap`);
 the loop never changes remotes. `perm_remote_mutation` stays `none`
@@ -131,15 +131,11 @@ branch names in the id — those belong in `detail` / `status_reason`.
 
 9. Tier-1 semantics (ok/warn/alert meaning)
 `ok` — silent-green: nothing traced, nothing superseded, nothing aging;
-precheck exit 0, heartbeat ok=1, no engine. `warn` — the engine's own
-emission when it is invoked and the findings are only info/warn (failed
-traces, aging provisionals); it is not what the dashboard stores.
-`alert` — any escalation (precheck non-zero). Watchdog stickiness
-(INTERFACES §4.3) forces stored `loop_status` and `effective_status` to
-`alert` whenever the probe failed, regardless of the engine's declared
-status or finding severities. This loop never emits finding severity
-`alert`; warn is the ceiling on a finding. `status_reason` is the pushed
-branch name when one exists, else `no_branch`.
+`ok` — nothing traced this firing, or only info findings (estimates pushed,
+low-confidence traces, superseded candidates). `warn` — tracer failures or
+aging provisionals (the max severity of unsuppressed findings). `alert` —
+a fatal precheck (API, checkout, state or push failure), shown by the
+runner as precheck-failed.
 
 10. Tier-2 metrics + panels
 All computed in precheck and copied verbatim by the engine (`metrics:`

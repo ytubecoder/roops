@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vecomap-unmapped/precheck.sh — type=watchdog: THIS SCRIPT IS THE JOB
+# vecomap-unmapped/precheck.sh — type=agent: THIS SCRIPT IS THE JOB
 # (docs/INTERFACES.md §4.1). Exit 0 = silent-green (nothing traced, nothing
 # superseded/aging). Non-zero = escalate to the diagnosis engine.
 #

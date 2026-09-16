@@ -34,14 +34,14 @@ Precheck emits `key: value` lines plus compact lists:
   `none`; otherwise `no_branch`.
 - `status=warn` when any `tracer-failed:` or `provisional-aging:` finding
   applies, or when `fatal:` is present.
-- `status=ok` when you are invoked but every finding is info-only
+- `status=ok` when every finding is info-only or there are no findings (a quiet run: nothing new to trace)
   (unmapped / tracer-low / candidate-superseded) and there is no `fatal:`.
 - `headline`: one line, e.g. `pushed tracer/20260916-1140 with 2 estimates`
   or `3 tracer failures, 1 aging provisional`.
 
-You are only invoked because precheck exited non-zero (something was
-traced, superseded, aging, or fatal). Watchdog stickiness (below) is the
-safety net; still emit the mapping above.
+You are invoked every firing (type=agent). A quiet run (nothing traced,
+nothing superseded or aging, no fatal) is `status=ok` with no findings
+and a one-line report saying so.
 
 ## Findings to emit (only these ids)
 
@@ -63,14 +63,6 @@ Emit every applicable finding; more than one can be true.
 If `fatal:` is present and there are no per-key rows, emit no findings
 (stickiness already turns the run red) and put the fatal text in the
 headline and the 5-line report. Do not invent a new finding id.
-
-## Watchdog stickiness (read this before writing `status`)
-
-Per docs/INTERFACES.md §4.3, the runner treats a watchdog's stored
-`loop_status`/`effective_status` as `alert` **regardless of what you
-emit**, because the probe itself already failed (non-zero precheck). This
-does not make your output pointless: your `findings`, `headline`, and
-`report_markdown` are still what a human reads to understand *why*.
 
 ## Output contract
 

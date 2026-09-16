@@ -1,0 +1,8 @@
+{"panels": [
+  {"title": "Traced", "metric": "traced", "type": "number", "unit": "keys", "direction": "neutral", "missing": "gap"},
+  {"title": "Confident", "metric": "confident", "type": "number", "unit": "keys", "direction": "neutral", "missing": "gap"},
+  {"title": "Pushed", "metric": "pushed", "type": "number", "direction": "neutral", "missing": "gap"},
+  {"title": "Low confidence", "metric": "low", "type": "number", "unit": "keys", "direction": "higher_is_worse", "thresholds": {"warn": 1}, "missing": "gap"},
+  {"title": "Failed", "metric": "failed", "type": "number", "unit": "keys", "direction": "higher_is_worse", "thresholds": {"warn": 1}, "missing": "gap"},
+  {"title": "Aging estimates", "metric": "aging", "type": "number", "unit": "keys", "direction": "higher_is_worse", "thresholds": {"warn": 1}, "missing": "gap"}
+]}

@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -21,6 +22,9 @@ ATTEMPT_MAX_DAYS = 30
 PROVISIONAL_AGE_DAYS = 30
 OSM_MAX_DAYS = 60
 MAX_KEYS_CAP = 25
+# The runner caps a precheck at 300 s (INTERFACES); a trace takes 6-15 s on firstparty, so stop
+# starting new keys once this much wall-clock has gone. Untouched keys are picked up next firing.
+TIME_BUDGET_S = 200
 OSM_BBOX = "10.05,123.65,10.60,124.10"
 OSM_FILES = (
     "cebu_named_ways.json",
@@ -401,7 +405,7 @@ def trace_key(
         "--out",
         trace_dir,
     ]
-    rc, out, err = run_cmd(argv, cwd=tracer_dir, env=env, timeout=60)
+    rc, out, err = run_cmd(argv, cwd=tracer_dir, env=env, timeout=120)
     report_path = os.path.join(trace_dir, f"{key}.report.json")
     report: dict[str, Any] = {}
     if os.path.isfile(report_path):
@@ -625,7 +629,7 @@ def run() -> int:
     state_path = os.path.join(loops_root, "state", "vecomap-unmapped", "attempted.json")
     dry_run = env_flag("VECOMAP_DRY_RUN")
     try:
-        max_keys = int(os.environ.get("VECOMAP_MAX_KEYS") or "25")
+        max_keys = int(os.environ.get("VECOMAP_MAX_KEYS") or "10")
     except ValueError:
         max_keys = 25
     max_keys = max(0, min(MAX_KEYS_CAP, max_keys))
@@ -676,7 +680,11 @@ def run() -> int:
     )
 
     per_key: list[dict[str, Any]] = []
+    started = time.monotonic()
     for key in work:
+        if time.monotonic() - started > TIME_BUDGET_S:
+            print(f"time budget reached after {len(per_key)} key(s); the rest wait for the next firing")
+            break
         ok, png, msg = resolve_key(tracer_py, tracer_dir, cache, key)
         if not ok:
             row = {

@@ -40,7 +40,7 @@ heartbeat ok=0, engine interprets already-gathered text. Precheck
 - `GET $VECOMAP_API_BASE/api/admin/unmapped?include=provisional` with
   `X-Admin-Secret: $VECOMAP_ADMIN_SECRET` (both from `$LOOPS_ROOT/.env`,
   exported to the precheck by the runner);
-- choose up to `VECOMAP_MAX_KEYS` (default 25) keys with
+- choose up to `VECOMAP_MAX_KEYS` (default 10, 200 s wall-clock budget under the 300 s precheck cap) keys with
   `provisional=false`, no `data/candidates/<key>.geojson` on main, and no
   fresh matching attempt in `$LOOPS_ROOT/state/vecomap-unmapped/attempted.json`;
 - refresh OSM caches when `cebu_named_ways.json` is older than 60 days
@@ -62,7 +62,7 @@ network, no credentials.
 advisory windows, so a new unmapped key is a same-day estimate rather
 than waiting overnight. Staleness expectation 12h (`86400 / 2`). Calendar
 coalescing after sleep is fine: one catch-up firing traces the backlog
-up to the 25-key cap. New unmapped keys arrive a few times a year; most
+up to the 10-key cap (the rest wait for the next firing). New unmapped keys arrive a few times a year; most
 firings are silent-green.
 
 5. Scope & exclusions
@@ -159,7 +159,7 @@ few firings a month (new unmapped keys are rare; superseded/aging rarer).
 Expected a few hundred tokens/run of interpretation plus the ~12.8k
 codex system-prompt baseline; output is a short JSON contract.
 `retry_transient` default 1. `timeout_s=2400` — the budget is for
-precheck's tracing (up to 25 keys, OCR + resolve) and a short engine
+precheck's tracing (up to 10 keys, OCR + resolve, 200 s budget) and a short engine
 invocation, not for a long model session. Harness still caps precheck at
 `min(timeout_s, 300)` = 300s (INTERFACES §4.1); a 25-key run may not
 finish inside that cap and will pick up the rest next firing via

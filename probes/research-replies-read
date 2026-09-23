@@ -62,7 +62,7 @@ AUTO_SUBJ = re.compile(r"automatic reply|auto-?reply|out of (the )?office|away f
 UNSUB_SUBJ = re.compile(r"unsubscribe|remove me|opt.?out|stop emailing", re.IGNORECASE)
 CODE_LINE = re.compile(r"^\s*\(?([1-5])\s*[\.\):\-—]?(\s|$)", re.MULTILINE)
 CODE_WORD = re.compile(r"\b(?:number|option|answer|#)\s*([1-5])\b", re.IGNORECASE)
-QUOTE_START = re.compile(r"^(On .{5,200}wrote:|-{2,}\s*Original Message|From: .+|Sent from my .+)$", re.MULTILINE)
+QUOTE_START = re.compile(r"^(On .{5,300}wrote:|-{2,}\s*Original Message|From: .+|Sent (from|on) (my|a) .{0,40}|Get Outlook for .+)\s*$", re.MULTILINE | re.DOTALL)
 FINAL_RCPT = re.compile(r"(?:Final|Original)-Recipient:\s*rfc822;\s*<?([^\s>]+)>?", re.IGNORECASE)
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 

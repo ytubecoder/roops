@@ -275,8 +275,14 @@ def main() -> int:
             out["new"]["unmatched"].append({k: item[k] for k in ("uid", "received_at", "domain", "subject")})
             continue
         row = by_email[matched_email]
-        cohort = "3" if (row.get("repo_linked") or "").strip().lower() == "yes" else "2"
-        code = ""  # open-question emails (cohorts 2/3): no numbered menu to parse
+        # 1 abandoned (never linked) · 2 synced (linked, free) · 3 paid (crew plan)
+        if (row.get("plan_tier") or "").strip().lower() == "crew":
+            cohort = "3"
+        elif (row.get("repo_linked") or "").strip().lower() == "yes":
+            cohort = "2"
+        else:
+            cohort = "1"
+        code = ""  # open-question emails: no numbered menu to parse
         reply = {
             **item, "email": matched_email, "name": row.get("name", ""), "first_name": row.get("first_name", ""),
             "cohort": cohort, "signup_date": row.get("created", ""), "repo_linked": row.get("repo_linked", ""),

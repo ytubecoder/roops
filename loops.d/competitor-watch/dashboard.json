@@ -1,0 +1,29 @@
+{
+  "panels": [
+    {
+      "title": "Findings raised",
+      "metric": "findings.raised",
+      "type": "number",
+      "unit": "findings",
+      "direction": "higher_is_worse",
+      "thresholds": { "warn": 1, "alert": 3 },
+      "missing": "gap"
+    },
+    {
+      "title": "Sources unreachable",
+      "metric": "sources.unreachable",
+      "type": "number",
+      "unit": "sources",
+      "direction": "higher_is_worse",
+      "thresholds": { "warn": 1, "alert": 3 },
+      "missing": "gap"
+    },
+    {
+      "title": "Sources reached (trend)",
+      "metric": "sources.reached",
+      "type": "trend",
+      "window_days": 180,
+      "missing": "hold"
+    }
+  ]
+}

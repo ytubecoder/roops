@@ -10,6 +10,9 @@ launchd/*.plist
 # machine-local — the kagami name-leak denylist never ships in the repo
 loops.d/kagami/leak-terms.local.txt
 
+# runtime snapshot cache — self-contained cross-run diff state, not source
+loops.d/competitor-watch/cache/
+
 # scratch / tooling
 .playwright-mcp/
 .superpowers/

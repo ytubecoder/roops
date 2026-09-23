@@ -1,0 +1,342 @@
+#!/usr/bin/env python3
+# probe: research-replies-read
+# probe-timeout-s: 180
+# probe-writes: appends new rows to user-research-replies.csv, marks unsubscribed rows in user-research-send-list.csv, and moves a UID cursor under state/research-replies/ (all under MAGUYVA_REPO outreach dir + LOOPS_ROOT state); 'no-record' arg skips every write
+# probe-output: json
+# probe-reads: IMAP INBOX of mailbox@maguyva.ai (creds MAILBOX_USER/MAILBOX_APP_PASSWORD from MAGUYVA_REPO/.env), the outreach send list + send log under MAGUYVA_REPO/growth-console/brands/maguyva/outreach/
+"""Read mailbox@maguyva.ai for replies to the user-research email.
+
+Read-only against the mailbox: never marks messages read (BODY.PEEK), never
+moves, replies or deletes. Local bookkeeping only:
+  * new replies are APPENDED (keyed by IMAP UID) to user-research-replies.csv,
+    so hand-coded columns already in the file are never touched;
+  * an unsubscribe marks the sender's send-list row notes=unsubscribed
+    (idempotent);
+  * a UID high-water mark under state/research-replies/cursor.json decides what
+    counts as "new" for the loop. The arg `no-record` reads without any write.
+
+Output JSON: new items since the cursor, bucketed (replies / bounces /
+auto_replies / unsubscribes / unmatched), plus running totals. Never prints
+credential values.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import csv
+import email
+import email.utils
+import imaplib
+import json
+import os
+import re
+import sys
+from datetime import datetime, timedelta, timezone
+from email.header import decode_header, make_header
+from pathlib import Path
+
+MAGUYVA_REPO = Path(os.environ.get("MAGUYVA_REPO") or (Path.home() / "projects" / "maguyva-marketing"))
+OUTREACH = MAGUYVA_REPO / "growth-console" / "brands" / "maguyva" / "outreach"
+SEND_LIST = OUTREACH / "user-research-send-list.csv"
+SEND_LOG = OUTREACH / "user-research-send-log.csv"
+REPLIES_CSV = OUTREACH / "user-research-replies.csv"
+ENV_FILE = MAGUYVA_REPO / ".env"
+LOOPS_ROOT = Path(os.environ.get("LOOPS_ROOT") or Path(__file__).resolve().parents[1])
+STATE_DIR = Path(os.environ.get("RESEARCH_REPLIES_STATE") or (LOOPS_ROOT / "state" / "research-replies"))
+CURSOR = STATE_DIR / "cursor.json"
+IMAP_HOST, IMAP_PORT = "imap.gmail.com", 993
+SEND_START_DEFAULT = "2026-09-23"
+TEXT_CAP = 1500
+
+REPLY_FIELDS = [
+    "imap_uid", "received_at", "email", "name", "cohort", "last_verified_event",
+    "reply_code", "reply_text", "subject",
+    # coded by hand / proposed by the loop, never overwritten by this probe:
+    "acquisition_source", "exact_phrase", "job", "urgency", "barrier", "alternative",
+    "first_value_moment", "return_reason", "verbatim_language", "followup_permitted", "notes",
+]
+
+BOUNCE_FROM = re.compile(r"mailer-daemon|postmaster|mail delivery|delivery subsystem", re.IGNORECASE)
+BOUNCE_SUBJ = re.compile(r"undeliver|delivery (status|failure|has failed|incomplete)|returned mail|failure notice|could not be delivered|delivery notification", re.IGNORECASE)
+AUTO_SUBJ = re.compile(r"automatic reply|auto-?reply|out of (the )?office|away from|on leave|autoresponse|vacation", re.IGNORECASE)
+UNSUB_SUBJ = re.compile(r"unsubscribe|remove me|opt.?out|stop emailing", re.IGNORECASE)
+CODE_LINE = re.compile(r"^\s*\(?([1-5])\s*[\.\):\-—]?(\s|$)", re.MULTILINE)
+CODE_WORD = re.compile(r"\b(?:number|option|answer|#)\s*([1-5])\b", re.IGNORECASE)
+QUOTE_START = re.compile(r"^(On .{5,200}wrote:|-{2,}\s*Original Message|From: .+|Sent from my .+)$", re.MULTILINE)
+FINAL_RCPT = re.compile(r"(?:Final|Original)-Recipient:\s*rfc822;\s*<?([^\s>]+)>?", re.IGNORECASE)
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def load_env(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip().strip("'\"")
+    return env
+
+
+def read_csv(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open(newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
+def hdr(msg, name: str) -> str:
+    raw = msg.get(name, "")
+    try:
+        return str(make_header(decode_header(raw)))
+    except (LookupError, UnicodeError, ValueError):
+        return raw
+
+
+def body_text(msg) -> str:
+    parts = []
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain" and not part.get_filename():
+                payload = part.get_payload(decode=True) or b""
+                parts.append(payload.decode(part.get_content_charset() or "utf-8", "replace"))
+    else:
+        payload = msg.get_payload(decode=True) or b""
+        parts.append(payload.decode(msg.get_content_charset() or "utf-8", "replace"))
+    if not parts and msg.is_multipart():  # html-only: crude strip
+        for part in msg.walk():
+            if part.get_content_type() == "text/html":
+                payload = part.get_payload(decode=True) or b""
+                html = payload.decode(part.get_content_charset() or "utf-8", "replace")
+                parts.append(re.sub(r"<[^>]+>", " ", html))
+                break
+    return "\n".join(parts)
+
+
+def strip_quotes(text: str) -> str:
+    m = QUOTE_START.search(text)
+    if m:
+        text = text[: m.start()]
+    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith(">")]
+    text = "\n".join(lines)
+    text = text.split("\n-- \n")[0]
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def reply_code(text: str) -> str:
+    m = CODE_LINE.search(text) or CODE_WORD.search(text)
+    return m.group(1) if m else ""
+
+
+def is_bounce(msg, from_addr: str, subject: str) -> bool:
+    return bool(
+        BOUNCE_FROM.search(from_addr)
+        or BOUNCE_SUBJ.search(subject)
+        or msg.get_content_type() == "multipart/report"
+        or msg.get("X-Failed-Recipients")
+    )
+
+
+def is_auto(msg, subject: str) -> bool:
+    auto = (msg.get("Auto-Submitted") or "no").lower()
+    return bool(
+        auto != "no"
+        or msg.get("X-Autoreply") or msg.get("X-Autorespond")
+        or (msg.get("Precedence") or "").lower() in {"auto_reply", "bulk", "junk"}
+        or AUTO_SUBJ.search(subject)
+    )
+
+
+def bounced_recipient(msg, text: str, sendable: set[str]) -> str:
+    xf = msg.get("X-Failed-Recipients")
+    if xf:
+        return xf.strip().lower()
+    m = FINAL_RCPT.search(text)
+    if m:
+        return m.group(1).lower()
+    for cand in EMAIL_RE.findall(text):
+        if cand.lower() in sendable:
+            return cand.lower()
+    return ""
+
+
+def check() -> int:
+    env = load_env(ENV_FILE)
+    missing = [k for k in ("MAILBOX_USER", "MAILBOX_APP_PASSWORD") if not env.get(k)]
+    if missing:
+        print(f"unmet: {ENV_FILE} lacks {', '.join(missing)}")
+        return 1
+    if not SEND_LIST.exists():
+        print(f"unmet: send list missing at {SEND_LIST}")
+        return 1
+    print(f"ok: creds present, send list {SEND_LIST.name} present, state dir {STATE_DIR}")
+    return 0
+
+
+def main() -> int:
+    if "--check" in sys.argv[1:]:
+        return check()
+    record = "no-record" not in sys.argv[1:]
+    out: dict = {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "mailbox": None, "record": record, "errors": [],
+        "new": {"replies": [], "bounces": [], "auto_replies": [], "unsubscribes": [], "unmatched": []},
+        "totals": {},
+    }
+    env = load_env(ENV_FILE)
+    user, pw = env.get("MAILBOX_USER", "mailbox@maguyva.ai"), env.get("MAILBOX_APP_PASSWORD")
+    out["mailbox"] = user
+    if not pw:
+        out["errors"].append("MAILBOX_APP_PASSWORD missing from repo .env")
+        print(json.dumps(out, indent=1))
+        return 0
+
+    send_rows = read_csv(SEND_LIST)
+    by_email = {r["email"].strip().lower(): r for r in send_rows if r.get("email")}
+    sendable = {e for e, r in by_email.items() if "do not send" not in (r.get("notes") or "").lower()}
+    log_rows = [r for r in read_csv(SEND_LOG) if r.get("mode") == "real"]
+    msgid_to_email = {r["message_id"]: r["email"].lower() for r in log_rows if r.get("message_id")}
+    sent_dates = sorted(r["sent_at"][:10] for r in log_rows if r.get("sent_at"))
+    since_date = sent_dates[0] if sent_dates else SEND_START_DEFAULT
+    since_imap = (datetime.strptime(since_date, "%Y-%m-%d").replace(tzinfo=timezone.utc) - timedelta(days=1)).strftime("%d-%b-%Y")
+
+    cursor = {"last_uid": 0}
+    if CURSOR.exists():
+        try:
+            cursor = json.loads(CURSOR.read_text())
+        except Exception as exc:  # noqa: BLE001 - a corrupt cursor must not stop the read
+            out["errors"].append(f"cursor unreadable, treating as 0: {exc}")
+    last_uid = int(cursor.get("last_uid") or 0)
+    out["cursor_before"] = last_uid
+    out["window_since"] = since_date
+
+    existing = read_csv(REPLIES_CSV)
+    seen_uids = {r.get("imap_uid") for r in existing}
+
+    try:
+        m = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        m.login(user, pw)
+        m.select("INBOX", readonly=True)
+        typ, data = m.uid("search", None, f"(SINCE {since_imap} UID {last_uid + 1}:*)")
+        uids = [int(u) for u in (data[0].split() if typ == "OK" and data and data[0] else []) if int(u) > last_uid]
+    except (imaplib.IMAP4.error, OSError) as exc:
+        out["errors"].append(f"imap: {type(exc).__name__}: {exc}")
+        print(json.dumps(out, indent=1))
+        return 0
+
+    max_uid = last_uid
+    new_reply_rows: list[dict] = []
+    unsub_emails: set[str] = set()
+    for uid in sorted(uids):
+        typ, data = m.uid("fetch", str(uid), "(BODY.PEEK[])")
+        if typ != "OK" or not data or not isinstance(data[0], tuple):
+            out["errors"].append(f"fetch uid {uid} failed")
+            continue
+        msg = email.message_from_bytes(data[0][1])
+        max_uid = max(max_uid, uid)
+        subject = hdr(msg, "Subject")
+        from_name, from_addr = email.utils.parseaddr(hdr(msg, "From"))
+        from_addr = from_addr.lower()
+        date_hdr = msg.get("Date", "")
+        try:
+            received_at = email.utils.parsedate_to_datetime(date_hdr).astimezone(timezone.utc).isoformat(timespec="seconds")
+        except Exception:  # noqa: BLE001
+            received_at = date_hdr
+        raw_text = body_text(msg)
+        refs = f"{msg.get('In-Reply-To', '')} {msg.get('References', '')}"
+        matched_email = from_addr if from_addr in by_email else ""
+        if not matched_email:
+            for mid, em in msgid_to_email.items():
+                if mid and mid in refs:
+                    matched_email = em
+                    break
+        item = {"uid": uid, "received_at": received_at, "from": from_addr, "from_name": from_name, "subject": subject}
+
+        if is_bounce(msg, from_addr, subject):
+            item["bounced_email"] = bounced_recipient(msg, raw_text, sendable)
+            item["snippet"] = re.sub(r"\s+", " ", raw_text)[:300]
+            out["new"]["bounces"].append(item)
+            continue
+        if is_auto(msg, subject):
+            item["matched_email"] = matched_email
+            item["snippet"] = re.sub(r"\s+", " ", strip_quotes(raw_text))[:300]
+            out["new"]["auto_replies"].append(item)
+            continue
+        text = strip_quotes(raw_text)
+        if UNSUB_SUBJ.search(subject) or UNSUB_SUBJ.match(text[:200].strip()):
+            item["matched_email"] = matched_email or from_addr
+            item["snippet"] = text[:300]
+            out["new"]["unsubscribes"].append(item)
+            if matched_email or from_addr in by_email:
+                unsub_emails.add(matched_email or from_addr)
+            continue
+        if not matched_email:
+            item["domain"] = from_addr.split("@")[-1]
+            out["new"]["unmatched"].append({k: item[k] for k in ("uid", "received_at", "domain", "subject")})
+            continue
+        row = by_email[matched_email]
+        code = reply_code(text)
+        reply = {
+            **item, "email": matched_email, "name": row.get("name", ""), "first_name": row.get("first_name", ""),
+            "cohort": "1", "signup_date": row.get("created", ""), "repo_linked": row.get("repo_linked", ""),
+            "plan_tier": row.get("plan_tier", ""), "reply_code": code, "reply_text": text[:TEXT_CAP],
+        }
+        out["new"]["replies"].append(reply)
+        if str(uid) not in seen_uids:
+            new_reply_rows.append({
+                "imap_uid": str(uid), "received_at": received_at, "email": matched_email, "name": row.get("name", ""),
+                "cohort": "1", "last_verified_event": f"signup {row.get('created', '')}; repo_linked={row.get('repo_linked', '')}",
+                "reply_code": code, "reply_text": text[:TEXT_CAP], "subject": subject,
+            })
+    with contextlib.suppress(imaplib.IMAP4.error, OSError):
+        m.logout()
+
+    all_reply_rows = existing + new_reply_rows
+    by_code = {}
+    for r in all_reply_rows:
+        by_code[r.get("reply_code") or "none"] = by_code.get(r.get("reply_code") or "none", 0) + 1
+    out["totals"] = {
+        "sent": len(log_rows), "sendable": len(sendable),
+        "replies": len(all_reply_rows), "replies_new": len(new_reply_rows),
+        "reply_rate_pct": round(100 * len(all_reply_rows) / len(log_rows), 1) if log_rows else None,
+        "by_code": [{"code": k, "count": v} for k, v in sorted(by_code.items())],
+        "bounces_new": len(out["new"]["bounces"]), "auto_replies_new": len(out["new"]["auto_replies"]),
+        "unsubscribes_new": len(out["new"]["unsubscribes"]), "unmatched_new": len(out["new"]["unmatched"]),
+        "unsubscribed_total": sum(1 for r in send_rows if "unsubscribed" in (r.get("notes") or "").lower()) + len(unsub_emails - {e for e in by_email if "unsubscribed" in (by_email[e].get("notes") or "").lower()}),
+    }
+    out["cursor_after"] = max_uid if record else last_uid
+
+    if record:
+        if new_reply_rows:
+            new_file = not REPLIES_CSV.exists()
+            with REPLIES_CSV.open("a", newline="") as fh:
+                w = csv.DictWriter(fh, fieldnames=REPLY_FIELDS, extrasaction="ignore")
+                if new_file:
+                    w.writeheader()
+                for r in new_reply_rows:
+                    w.writerow({k: r.get(k, "") for k in REPLY_FIELDS})
+        changed = False
+        for e in unsub_emails:
+            row = by_email.get(e)
+            if row is not None and "unsubscribed" not in (row.get("notes") or "").lower():
+                row["notes"] = (row.get("notes") + "; " if row.get("notes") else "") + "unsubscribed"
+                changed = True
+        if changed and send_rows:
+            tmp = SEND_LIST.with_suffix(".csv.tmp")
+            with tmp.open("w", newline="") as fh:
+                w = csv.DictWriter(fh, fieldnames=list(send_rows[0].keys()))
+                w.writeheader()
+                w.writerows(send_rows)
+            os.replace(tmp, SEND_LIST)
+        if max_uid > last_uid:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = CURSOR.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps({"last_uid": max_uid, "moved_at": out["generated_at"]}))
+            os.replace(tmp, CURSOR)
+
+    print(json.dumps(out, indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

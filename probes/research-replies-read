@@ -63,7 +63,13 @@ AUTO_SUBJ = re.compile(r"automatic reply|auto-?reply|out of (the )?office|away f
 UNSUB_SUBJ = re.compile(r"unsubscribe|remove me|opt.?out|stop emailing", re.IGNORECASE)
 CODE_LINE = re.compile(r"^\s*\(?([1-5])\s*[\.\):\-—]?(\s|$)", re.MULTILINE)
 CODE_WORD = re.compile(r"\b(?:number|option|answer|#)\s*([1-5])\b", re.IGNORECASE)
-QUOTE_START = re.compile(r"^(On .{5,300}wrote:|-{2,}\s*Original Message|From: .+|Sent (from|on) (my|a) .{0,40}|Get Outlook for .+)\s*$", re.MULTILINE | re.DOTALL)
+HDR_WORDS = re.compile(r"\b(wrote|escreveu|schrieb|a écrit|escribió|ha scritto|skrev|schreef|napisał|написал)\b.*:\s*$", re.IGNORECASE)
+HDR_START = re.compile(r"^(On|Em|Am|Le|El|Il|Den|Op|Dne|W dniu)\b")
+SIG_LINE = re.compile(
+    r"^(-{2,}\s*(Original Message|Mensagem original|Ursprüngliche Nachricht)|From: .+|De: .+|Von: .+"
+    r"|Sent (from|on) (my|a) .{0,40}|Enviado d[oe] .{0,40}|Get Outlook for .+)\s*$",
+    re.IGNORECASE,
+)
 FINAL_RCPT = re.compile(r"(?:Final|Original)-Recipient:\s*rfc822;\s*<?([^\s>]+)>?", re.IGNORECASE)
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 BOOKING_FROM = re.compile(r"@cal\.com$|cal\.com", re.IGNORECASE)
@@ -119,12 +125,22 @@ def body_text(msg) -> str:
 
 
 def strip_quotes(text: str) -> str:
-    m = QUOTE_START.search(text)
-    if m:
-        text = text[: m.start()]
-    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith(">")]
-    text = "\n".join(lines)
-    text = text.split("\n-- \n")[0]
+    """Drop the quoted history: cut at the first 'On … wrote:'-style header (any
+    language, possibly wrapped over two lines, or any header naming our alias),
+    or at a mail-client signature/forward marker; drop '>' lines anywhere."""
+    lines = text.splitlines()
+    cut = len(lines)
+    for i, ln in enumerate(lines):
+        st = ln.strip()
+        pair = (st + " " + (lines[i + 1].strip() if i + 1 < len(lines) else "")).strip()
+        if SIG_LINE.match(st):
+            cut = i
+            break
+        if (HDR_START.match(st) or "tom@maguyva.ai" in pair) and (HDR_WORDS.search(st) or HDR_WORDS.search(pair)):
+            cut = i
+            break
+    kept = [ln for ln in lines[:cut] if not ln.lstrip().startswith(">")]
+    text = "\n".join(kept).split("\n-- \n")[0]
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 

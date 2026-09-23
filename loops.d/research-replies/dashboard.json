@@ -4,6 +4,6 @@
   {"title":"New this run","metric":"replies.new","type":"number","unit":"replies","direction":"neutral","missing":"gap"},
   {"title":"Bounces (new)","metric":"bounces.new","type":"number","unit":"bounces","direction":"higher_is_worse","thresholds":{"warn":3,"alert":10},"missing":"gap"},
   {"title":"Unsubscribed (total)","metric":"unsubscribes.total","type":"number","unit":"people","direction":"higher_is_worse","thresholds":{"warn":5,"alert":15},"missing":"hold"},
-  {"title":"Answers by option","metric":"replies.by_code","type":"table","missing":"hold"},
+  {"title":"Replies by cohort","metric":"replies.by_cohort","type":"table","missing":"hold"},
   {"title":"Replies over time","metric":"replies.total","type":"trend","window_days":30,"missing":"hold"}
 ]}

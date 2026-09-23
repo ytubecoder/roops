@@ -31,7 +31,7 @@ if not n_new and not errors:
 print(f"# research-replies precheck — probe generated {d.get('generated_at')}")
 print(f"mailbox {d.get('mailbox')} · window since {d.get('window_since')} · uid cursor {d.get('cursor_before')} -> {d.get('cursor_after')}")
 print(f"totals: sent {tot.get('sent')} · replies {tot.get('replies')} (new {tot.get('replies_new')}) · reply rate {tot.get('reply_rate_pct')}% · unsubscribed {tot.get('unsubscribed_total')}")
-print(f"by_code: {json.dumps(tot.get('by_code'))}")
+print(f"by_cohort: {json.dumps(tot.get('by_cohort'))}")
 print()
 if errors:
     print("## probe errors")
@@ -46,9 +46,8 @@ def cap(s, n=1500):
 reps = new.get("replies") or []
 print(f"## new replies ({len(reps)})")
 for r in reps:
-    print(f"- uid {r['uid']} · {r['received_at']} · {r['email']} · name={r.get('name') or '-'} · cohort {r['cohort']} · signup {r.get('signup_date')} · repo_linked={r.get('repo_linked')} · plan={r.get('plan_tier')}")
+    print(f"- uid {r['uid']} · {r['received_at']} · {r['email']} · name={r.get('name') or '-'} · cohort {r['cohort']} · signup {r.get('signup_date')} · repo_linked={r.get('repo_linked')} · plan={r.get('plan_tier')}/{r.get('subscription_status') or '-'}")
     print(f"  subject: {r.get('subject')}")
-    print(f"  reply_code (parsed): {r.get('reply_code') or 'none'}")
     print("  text:")
     for ln in cap(r.get("reply_text")).splitlines():
         print(f"    | {ln}")

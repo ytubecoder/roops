@@ -2,7 +2,7 @@
 
 1. Purpose & stop condition
 Surface every reply, bounce and unsubscribe to the founder-led user-research
-email (send plan: maguyva-marketing `growth-console/brands/maguyva/outreach/
+emails (cohort 2 to never-linked signups, cohort 3 to repo-linked ones) (send plan: maguyva-marketing `growth-console/brands/maguyva/outreach/
 user-research-send-plan.md`) so Generalissimo never reads mailbox@maguyva.ai by
 hand. Per firing: "done" = every new inbox message since the probe's UID cursor
 is bucketed and each reply/bounce/unsubscribe is a finding with the reply quoted
@@ -24,12 +24,12 @@ everything deterministic: IMAP `BODY.PEEK` of INBOX since the send start and
 above the UID cursor; sender→send-list matching (From address, else
 In-Reply-To/References against the send log's Message-IDs); bucketing into
 reply / bounce / auto-reply / unsubscribe / unmatched by headers and subject
-patterns; quoted-history stripping; first-pass `reply_code` regex; CSV append
+patterns; quoted-history stripping; cohort from the send-list repo_linked column; CSV append
 keyed by UID (hand-coded columns untouched); unsubscribe marks on the send list;
 cursor move. Precheck prints only what is new; empty stdout when nothing is
-new (skipped-precheck, zero tokens). The engine interprets: the real answer
-when the regex and the words disagree, the proposed coding, severity, and
-whether a human should reply.
+new (skipped-precheck, zero tokens). The engine interprets: the answers to the
+two (cohort 2) or three (cohort 3) open questions, the proposed coding,
+severity, and whether a human should reply.
 
 4. Cadence
 `interval:4h` for the first week after the send (replies cluster in the first
@@ -73,9 +73,9 @@ reply-looking unmatched sender, or one probe error category. Ids:
 counts, run ids or reply text in an id. Same rule in prompt.md.
 
 9. Tier-1 semantics (ok/warn/alert meaning)
-`ok`: only answers 4/5, thank-yous, auto-replies or unmatched noise.
-`warn`: at least one answer 1/2/3 (someone named a broken step), any
-unsubscribe, or 3–9 new bounces. `alert`: any probe error (IMAP auth/connect,
+`ok`: only positive/still-using replies, thank-yous, auto-replies or
+unmatched noise. `warn`: at least one reply naming a barrier or a reason
+they stopped, any unsubscribe, or 3–9 new bounces. `alert`: any probe error (IMAP auth/connect,
 cursor) or 10+ new bounces in one run (deliverability problem — stop the send
 and look). A firing with nothing new never reaches the engine
 (skipped-precheck, amber, expected most of the time).
@@ -83,8 +83,8 @@ and look). A firing with nothing new never reaches the engine
 10. Tier-2 metrics + panels
 `replies.total` (number + 30-day trend), `replies.rate_pct` (number),
 `replies.new` (number), `bounces.new` (number, warn 3 / alert 10),
-`unsubscribes.total` (number, warn 5 / alert 15), `replies.by_code` (table of
-{code,count}). Declared in dashboard.json.
+`unsubscribes.total` (number, warn 5 / alert 15), `replies.by_cohort` (table of
+{cohort,count}). Declared in dashboard.json.
 
 11. Engine/model + budget
 `engine=codex`, model blank (engine default). Expected a few thousand tokens per

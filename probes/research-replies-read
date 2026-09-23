@@ -275,31 +275,33 @@ def main() -> int:
             out["new"]["unmatched"].append({k: item[k] for k in ("uid", "received_at", "domain", "subject")})
             continue
         row = by_email[matched_email]
-        code = reply_code(text)
+        cohort = "3" if (row.get("repo_linked") or "").strip().lower() == "yes" else "2"
+        code = ""  # open-question emails (cohorts 2/3): no numbered menu to parse
         reply = {
             **item, "email": matched_email, "name": row.get("name", ""), "first_name": row.get("first_name", ""),
-            "cohort": "1", "signup_date": row.get("created", ""), "repo_linked": row.get("repo_linked", ""),
-            "plan_tier": row.get("plan_tier", ""), "reply_code": code, "reply_text": text[:TEXT_CAP],
+            "cohort": cohort, "signup_date": row.get("created", ""), "repo_linked": row.get("repo_linked", ""),
+            "plan_tier": row.get("plan_tier", ""), "subscription_status": row.get("subscription_status", ""),
+            "reply_code": code, "reply_text": text[:TEXT_CAP],
         }
         out["new"]["replies"].append(reply)
         if str(uid) not in seen_uids:
             new_reply_rows.append({
                 "imap_uid": str(uid), "received_at": received_at, "email": matched_email, "name": row.get("name", ""),
-                "cohort": "1", "last_verified_event": f"signup {row.get('created', '')}; repo_linked={row.get('repo_linked', '')}",
+                "cohort": cohort, "last_verified_event": f"signup {row.get('created', '')}; repo_linked={row.get('repo_linked', '')}",
                 "reply_code": code, "reply_text": text[:TEXT_CAP], "subject": subject,
             })
     with contextlib.suppress(imaplib.IMAP4.error, OSError):
         m.logout()
 
     all_reply_rows = existing + new_reply_rows
-    by_code = {}
+    by_cohort: dict[str, int] = {}
     for r in all_reply_rows:
-        by_code[r.get("reply_code") or "none"] = by_code.get(r.get("reply_code") or "none", 0) + 1
+        by_cohort[r.get("cohort") or "?"] = by_cohort.get(r.get("cohort") or "?", 0) + 1
     out["totals"] = {
         "sent": len(log_rows), "sendable": len(sendable),
         "replies": len(all_reply_rows), "replies_new": len(new_reply_rows),
         "reply_rate_pct": round(100 * len(all_reply_rows) / len(log_rows), 1) if log_rows else None,
-        "by_code": [{"code": k, "count": v} for k, v in sorted(by_code.items())],
+        "by_cohort": [{"cohort": k, "count": v} for k, v in sorted(by_cohort.items())],
         "bounces_new": len(out["new"]["bounces"]), "auto_replies_new": len(out["new"]["auto_replies"]),
         "unsubscribes_new": len(out["new"]["unsubscribes"]), "unmatched_new": len(out["new"]["unmatched"]),
         "unsubscribed_total": sum(1 for r in send_rows if "unsubscribed" in (r.get("notes") or "").lower()) + len(unsub_emails - {e for e in by_email if "unsubscribed" in (by_email[e].get("notes") or "").lower()}),

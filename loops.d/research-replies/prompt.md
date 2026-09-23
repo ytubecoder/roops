@@ -62,6 +62,13 @@ For **every entry under `## new replies`**, emit one finding:
      follow-up question in the emails doc). State plainly that the follow-up
      is a manual decision — this loop never sends it.
 
+For **`## new call bookings`**: one finding per notification (severity
+`info`; `warn` for a cancellation), title `<attendee email> <kind> a call
+(<when>)`, detail = when, whether the attendee is on the send list, and
+their cohort if known. Bookings are the "second bite": say the call is
+Generalissimo's to prepare for (guide:
+`user-research-interview-guide.md`), nothing for the loop to do.
+
 For **`## new bounces`**: one finding per distinct `bounced_email`
 (severity `warn`), title `<email> bounced`, detail = the bounce snippet. If
 `bounced_email` is `unknown`, use the bounce message's uid as the subject
@@ -102,6 +109,7 @@ For **`## probe errors`**: one finding `probe:<short-error-category>`
 - `replies.new` — the `new` count from the same line (numeric)
 - `replies.rate_pct` — the reply rate from the totals line (numeric; omit if
   it printed `None`)
+- `bookings.total` — the `bookings` total from the totals line (numeric)
 - `bounces.new` — count under `## new bounces` (numeric)
 - `unsubscribes.total` — the `unsubscribed` total from the totals line
 - `replies.by_cohort` — the `by_cohort` array exactly as printed (array of
@@ -150,6 +158,8 @@ is a fixed literal:
   same finding: re-emit `reply:<email>` and put both texts in the detail.
 - bounce: `bounce:<bounced_email>`; when the recipient could not be
   extracted, `bounce-uid-<imap uid>:unknown-recipient`.
+- booking: `booking:<attendee email>` (a cancellation or reschedule of the
+  same person's call is the same finding, re-emitted with the new kind).
 - unsubscribe: `unsubscribe:<email>`.
 - unmatched reply-looking sender: `unmatched:<sender domain>`.
 - probe error: `probe:<short-error-category>`.

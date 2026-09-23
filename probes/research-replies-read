@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # probe: research-replies-read
 # probe-timeout-s: 180
-# probe-writes: appends new rows to user-research-replies.csv, marks unsubscribed rows in user-research-send-list.csv, and moves a UID cursor under state/research-replies/ (all under MAGUYVA_REPO outreach dir + LOOPS_ROOT state); 'no-record' arg skips every write
+# probe-writes: appends new rows to user-research-replies.csv and user-research-bookings.csv, marks unsubscribed rows in user-research-send-list.csv, and moves a UID cursor under state/research-replies/ (all under MAGUYVA_REPO outreach dir + LOOPS_ROOT state); 'no-record' arg skips every write
 # probe-output: json
 # probe-reads: IMAP INBOX of mailbox@maguyva.ai (creds MAILBOX_USER/MAILBOX_APP_PASSWORD from MAGUYVA_REPO/.env), the outreach send list + send log under MAGUYVA_REPO/growth-console/brands/maguyva/outreach/
 """Read mailbox@maguyva.ai for replies to the user-research email.
@@ -40,6 +40,7 @@ OUTREACH = MAGUYVA_REPO / "growth-console" / "brands" / "maguyva" / "outreach"
 SEND_LIST = OUTREACH / "user-research-send-list.csv"
 SEND_LOG = OUTREACH / "user-research-send-log.csv"
 REPLIES_CSV = OUTREACH / "user-research-replies.csv"
+BOOKINGS_CSV = OUTREACH / "user-research-bookings.csv"
 ENV_FILE = MAGUYVA_REPO / ".env"
 LOOPS_ROOT = Path(os.environ.get("LOOPS_ROOT") or Path(__file__).resolve().parents[1])
 STATE_DIR = Path(os.environ.get("RESEARCH_REPLIES_STATE") or (LOOPS_ROOT / "state" / "research-replies"))
@@ -65,6 +66,10 @@ CODE_WORD = re.compile(r"\b(?:number|option|answer|#)\s*([1-5])\b", re.IGNORECAS
 QUOTE_START = re.compile(r"^(On .{5,300}wrote:|-{2,}\s*Original Message|From: .+|Sent (from|on) (my|a) .{0,40}|Get Outlook for .+)\s*$", re.MULTILINE | re.DOTALL)
 FINAL_RCPT = re.compile(r"(?:Final|Original)-Recipient:\s*rfc822;\s*<?([^\s>]+)>?", re.IGNORECASE)
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+BOOKING_FROM = re.compile(r"@cal\.com$|cal\.com", re.IGNORECASE)
+BOOKING_SUBJ = re.compile(r"new event|event (confirmed|cancelled|canceled|rescheduled|request)|booking|confirmed:|rescheduled:|cancelled:", re.IGNORECASE)
+BOOKING_KIND = (("cancel", "cancelled"), ("reschedul", "rescheduled"), ("request", "requested"), ("", "booked"))
+BOOKING_FIELDS = ["imap_uid", "received_at", "kind", "attendee_email", "attendee_name", "when", "subject", "snippet", "notes"]
 
 
 def load_env(path: Path) -> dict[str, str]:
@@ -180,7 +185,7 @@ def main() -> int:
     out: dict = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "mailbox": None, "record": record, "errors": [],
-        "new": {"replies": [], "bounces": [], "auto_replies": [], "unsubscribes": [], "unmatched": []},
+        "new": {"replies": [], "bookings": [], "bounces": [], "auto_replies": [], "unsubscribes": [], "unmatched": []},
         "totals": {},
     }
     env = load_env(ENV_FILE)
@@ -212,6 +217,9 @@ def main() -> int:
 
     existing = read_csv(REPLIES_CSV)
     seen_uids = {r.get("imap_uid") for r in existing}
+    existing_bookings = read_csv(BOOKINGS_CSV)
+    seen_booking_uids = {r.get("imap_uid") for r in existing_bookings}
+    new_booking_rows: list[dict] = []
 
     try:
         m = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
@@ -256,6 +264,25 @@ def main() -> int:
             item["bounced_email"] = bounced_recipient(msg, raw_text, sendable)
             item["snippet"] = re.sub(r"\s+", " ", raw_text)[:300]
             out["new"]["bounces"].append(item)
+            continue
+        if BOOKING_FROM.search(from_addr) and BOOKING_SUBJ.search(subject):
+            kind = next(k for needle, k in BOOKING_KIND if needle in subject.lower())
+            attendee = ""
+            for cand in EMAIL_RE.findall(raw_text):
+                c = cand.lower()
+                if c in by_email or (not c.endswith("cal.com") and c not in (user, "tom@maguyva.ai")):
+                    attendee = c
+                    break
+            when = ""
+            mw = re.search(r"(?:When|Date & Time|Time)\s*:?\s*\n?\s*([^\n]{6,80})", raw_text, re.IGNORECASE)
+            if mw:
+                when = mw.group(1).strip()
+            item.update({"kind": kind, "attendee_email": attendee, "attendee_name": (by_email.get(attendee) or {}).get("name", ""),
+                         "when": when, "on_send_list": attendee in by_email, "snippet": re.sub(r"\s+", " ", raw_text)[:400]})
+            out["new"]["bookings"].append(item)
+            if str(uid) not in seen_booking_uids:
+                new_booking_rows.append({"imap_uid": str(uid), "received_at": received_at, "kind": kind, "attendee_email": attendee,
+                                         "attendee_name": item["attendee_name"], "when": when, "subject": subject, "snippet": item["snippet"], "notes": ""})
             continue
         if is_auto(msg, subject):
             item["matched_email"] = matched_email
@@ -308,13 +335,33 @@ def main() -> int:
         "replies": len(all_reply_rows), "replies_new": len(new_reply_rows),
         "reply_rate_pct": round(100 * len(all_reply_rows) / len(log_rows), 1) if log_rows else None,
         "by_cohort": [{"cohort": k, "count": v} for k, v in sorted(by_cohort.items())],
+        "bookings": len(existing_bookings) + len(new_booking_rows), "bookings_new": len(new_booking_rows),
         "bounces_new": len(out["new"]["bounces"]), "auto_replies_new": len(out["new"]["auto_replies"]),
         "unsubscribes_new": len(out["new"]["unsubscribes"]), "unmatched_new": len(out["new"]["unmatched"]),
         "unsubscribed_total": sum(1 for r in send_rows if "unsubscribed" in (r.get("notes") or "").lower()) + len(unsub_emails - {e for e in by_email if "unsubscribed" in (by_email[e].get("notes") or "").lower()}),
     }
     out["cursor_after"] = max_uid if record else last_uid
+    # full picture for the report page (deterministic render on the loops host)
+    out["all_replies"] = [{k: r.get(k, "") for k in REPLY_FIELDS} for r in all_reply_rows][:2000]
+    out["all_bookings"] = [{k: r.get(k, "") for k in BOOKING_FIELDS} for r in existing_bookings + new_booking_rows][:500]
+    out["send_progress"] = {
+        "by_cohort_sent": {c: sum(1 for r in log_rows if (by_email.get(r["email"].lower()) or {}).get("plan_tier", "").lower() == "crew" and c == "3"
+                                   or (by_email.get(r["email"].lower()) or {}).get("plan_tier", "").lower() != "crew" and (by_email.get(r["email"].lower()) or {}).get("repo_linked", "").lower() == "yes" and c == "2"
+                                   or (by_email.get(r["email"].lower()) or {}).get("plan_tier", "").lower() != "crew" and (by_email.get(r["email"].lower()) or {}).get("repo_linked", "").lower() != "yes" and c == "1")
+                           for c in ("1", "2", "3")},
+        "first_sent_at": min((r["sent_at"] for r in log_rows if r.get("sent_at")), default=""),
+        "last_sent_at": max((r["sent_at"] for r in log_rows if r.get("sent_at")), default=""),
+        "errors": sum(1 for r in read_csv(SEND_LOG) if (r.get("mode") or "").startswith("error")),
+    }
 
     if record:
+        if new_booking_rows:
+            new_file = not BOOKINGS_CSV.exists()
+            with BOOKINGS_CSV.open("a", newline="") as fh:
+                w = csv.DictWriter(fh, fieldnames=BOOKING_FIELDS, extrasaction="ignore")
+                if new_file:
+                    w.writeheader()
+                w.writerows(new_booking_rows)
         if new_reply_rows:
             new_file = not REPLIES_CSV.exists()
             with REPLIES_CSV.open("a", newline="") as fh:

@@ -94,4 +94,10 @@ nothing-new firing. `retry_transient` default 1. `timeout_s=300` (the probe
 itself caps at 180 s).
 
 12. Page output
-None. Findings + `latest.md` are enough; the replies CSV on llm is the record.
+Yes — class `snapshot`, rendered by `render.sh` → `render_page.py` from the
+probe capture (`$OUT_DIR/inputs/replies.json`, which carries every reply and
+booking to date plus send progress). Stat strip: emails sent by cohort,
+replies by cohort + reply rate, call bookings, unsubscribed + send errors.
+Groups: Replies (newest first, verbatim text, hand-coded research columns
+read from the CSV), Call bookings (cal.com notifications). Deterministic; the
+CSV on llm stays the record, the page is the consolidated view.

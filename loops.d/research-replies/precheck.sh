@@ -30,7 +30,7 @@ if not n_new and not errors:
 
 print(f"# research-replies precheck — probe generated {d.get('generated_at')}")
 print(f"mailbox {d.get('mailbox')} · window since {d.get('window_since')} · uid cursor {d.get('cursor_before')} -> {d.get('cursor_after')}")
-print(f"totals: sent {tot.get('sent')} · replies {tot.get('replies')} (new {tot.get('replies_new')}) · reply rate {tot.get('reply_rate_pct')}% · unsubscribed {tot.get('unsubscribed_total')}")
+print(f"totals: sent {tot.get('sent')} · replies {tot.get('replies')} (new {tot.get('replies_new')}) · reply rate {tot.get('reply_rate_pct')}% · bookings {tot.get('bookings')} (new {tot.get('bookings_new')}) · unsubscribed {tot.get('unsubscribed_total')}")
 print(f"by_cohort: {json.dumps(tot.get('by_cohort'))}")
 print()
 if errors:
@@ -51,6 +51,11 @@ for r in reps:
     print("  text:")
     for ln in cap(r.get("reply_text")).splitlines():
         print(f"    | {ln}")
+print()
+bk = new.get("bookings") or []
+print(f"## new call bookings ({len(bk)}) — cal.com notifications; rows already appended to user-research-bookings.csv")
+for x in bk:
+    print(f"- uid {x['uid']} · {x['received_at']} · {x.get('kind')} · attendee={x.get('attendee_email') or 'unknown'} · on_send_list={x.get('on_send_list')} · when={x.get('when') or '?'} · subject: {x.get('subject')}")
 print()
 b = new.get("bounces") or []
 print(f"## new bounces ({len(b)})")

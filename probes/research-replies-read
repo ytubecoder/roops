@@ -49,10 +49,10 @@ IMAP_HOST, IMAP_PORT = "imap.gmail.com", 993
 SEND_START_DEFAULT = "2026-09-23"
 TEXT_CAP = 1500
 
+# Columns after "references" are coded by hand / proposed by the loop; this probe never overwrites them.
 REPLY_FIELDS = [
     "imap_uid", "received_at", "email", "name", "cohort", "last_verified_event",
-    "reply_code", "reply_text", "subject",
-    # coded by hand / proposed by the loop, never overwritten by this probe:
+    "reply_code", "reply_text", "subject", "message_id", "references",
     "acquisition_source", "exact_phrase", "job", "urgency", "barrier", "alternative",
     "first_value_moment", "return_reason", "verbatim_language", "followup_permitted", "notes",
 ]
@@ -331,6 +331,7 @@ def main() -> int:
             "cohort": cohort, "signup_date": row.get("created", ""), "repo_linked": row.get("repo_linked", ""),
             "plan_tier": row.get("plan_tier", ""), "subscription_status": row.get("subscription_status", ""),
             "reply_code": code, "reply_text": text[:TEXT_CAP],
+            "message_id": (msg.get("Message-ID") or "").strip(), "references": re.sub(r"\s+", " ", refs).strip(),
         }
         out["new"]["replies"].append(reply)
         if str(uid) not in seen_uids:
@@ -338,6 +339,7 @@ def main() -> int:
                 "imap_uid": str(uid), "received_at": received_at, "email": matched_email, "name": row.get("name", ""),
                 "cohort": cohort, "last_verified_event": f"signup {row.get('created', '')}; repo_linked={row.get('repo_linked', '')}",
                 "reply_code": code, "reply_text": text[:TEXT_CAP], "subject": subject,
+                "message_id": reply["message_id"], "references": reply["references"],
             })
     with contextlib.suppress(imaplib.IMAP4.error, OSError):
         m.logout()

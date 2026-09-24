@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# probe: gtm-refresh
+# probe-timeout-s: 120
+# probe-writes: refreshes anonymized JSON snapshots under ~/.growth-console/gtm
+# probe-output: json
+# probe-reads: approved baseline in MAGUYVA_REPO plus existing anonymized GTM snapshots
+set -euo pipefail
+repo="${MAGUYVA_REPO:-$HOME/projects/maguyva-marketing}"
+if [[ "${1:-}" == "--check" ]]; then
+  test -x "$repo/growth-console/.venv/bin/python"
+  test -f "$repo/growth-console/brands/maguyva/gtm/baseline.json"
+  echo "ok: GTM refresh command and approved baseline present"
+  exit 0
+fi
+cd "$repo/growth-console"
+PYTHONPATH=. .venv/bin/python -m console.dashboard.gtm refresh

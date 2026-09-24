@@ -52,6 +52,11 @@ for r in reps:
     for ln in cap(r.get("reply_text")).splitlines():
         print(f"    | {ln}")
 print()
+ob = new.get("outbound") or []
+print(f"## replies Tom sent by hand from the mailbox ({len(ob)}) — informational; GC marks these people as replied")
+for x in ob:
+    print(f"- uid {x['uid']} · {x['sent_at']} · to {x['to_email']} · subject: {x.get('subject')} · {cap(x.get('body'), 160)}")
+print()
 bk = new.get("bookings") or []
 print(f"## new call bookings ({len(bk)}) — cal.com notifications; rows already appended to user-research-bookings.csv")
 for x in bk:

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # probe: research-replies-read
 # probe-timeout-s: 180
-# probe-writes: appends new rows to user-research-replies.csv and user-research-bookings.csv, marks unsubscribed rows in user-research-send-list.csv, and moves a UID cursor under state/research-replies/ (all under MAGUYVA_REPO outreach dir + LOOPS_ROOT state); 'no-record' arg skips every write
+# probe-writes: appends new rows to user-research-replies.csv, user-research-bookings.csv and user-research-outbound.csv (replies Tom sent from the mailbox by hand), marks unsubscribed rows in user-research-send-list.csv, and moves a UID cursor under state/research-replies/ (all under MAGUYVA_REPO outreach dir + LOOPS_ROOT state); 'no-record' arg skips every write
 # probe-output: json
-# probe-reads: IMAP INBOX of mailbox@maguyva.ai (creds MAILBOX_USER/MAILBOX_APP_PASSWORD from MAGUYVA_REPO/.env), the outreach send list + send log under MAGUYVA_REPO/growth-console/brands/maguyva/outreach/
+# probe-reads: IMAP INBOX + [Gmail]/Sent Mail of mailbox@maguyva.ai (creds MAILBOX_USER/MAILBOX_APP_PASSWORD from MAGUYVA_REPO/.env), the outreach send list + send log under MAGUYVA_REPO/growth-console/brands/maguyva/outreach/
 """Read mailbox@maguyva.ai for replies to the user-research email.
 
 Read-only against the mailbox: never marks messages read (BODY.PEEK), never
@@ -41,6 +41,8 @@ SEND_LIST = OUTREACH / "user-research-send-list.csv"
 SEND_LOG = OUTREACH / "user-research-send-log.csv"
 REPLIES_CSV = OUTREACH / "user-research-replies.csv"
 BOOKINGS_CSV = OUTREACH / "user-research-bookings.csv"
+OUTBOUND_CSV = OUTREACH / "user-research-outbound.csv"
+OUTBOUND_FIELDS = ["imap_uid", "sent_at", "to_email", "subject", "message_id", "in_reply_to", "body"]
 ENV_FILE = MAGUYVA_REPO / ".env"
 LOOPS_ROOT = Path(os.environ.get("LOOPS_ROOT") or Path(__file__).resolve().parents[1])
 STATE_DIR = Path(os.environ.get("RESEARCH_REPLIES_STATE") or (LOOPS_ROOT / "state" / "research-replies"))
@@ -201,7 +203,7 @@ def main() -> int:
     out: dict = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "mailbox": None, "record": record, "errors": [],
-        "new": {"replies": [], "bookings": [], "bounces": [], "auto_replies": [], "unsubscribes": [], "unmatched": []},
+        "new": {"replies": [], "bookings": [], "bounces": [], "auto_replies": [], "unsubscribes": [], "unmatched": [], "outbound": []},
         "totals": {},
     }
     env = load_env(ENV_FILE)
@@ -228,11 +230,17 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - a corrupt cursor must not stop the read
             out["errors"].append(f"cursor unreadable, treating as 0: {exc}")
     last_uid = int(cursor.get("last_uid") or 0)
+    last_sent_uid = int(cursor.get("last_sent_uid") or 0)
     out["cursor_before"] = last_uid
+    out["sent_cursor_before"] = last_sent_uid
     out["window_since"] = since_date
 
     existing = read_csv(REPLIES_CSV)
     seen_uids = {r.get("imap_uid") for r in existing}
+    existing_outbound = read_csv(OUTBOUND_CSV)
+    seen_outbound_uids = {r.get("imap_uid") for r in existing_outbound}
+    new_outbound_rows: list[dict] = []
+    logged_message_ids = {r.get("message_id") for r in read_csv(SEND_LOG) if r.get("message_id")}
     existing_bookings = read_csv(BOOKINGS_CSV)
     seen_booking_uids = {r.get("imap_uid") for r in existing_bookings}
     new_booking_rows: list[dict] = []
@@ -341,6 +349,56 @@ def main() -> int:
                 "reply_code": code, "reply_text": text[:TEXT_CAP], "subject": subject,
                 "message_id": reply["message_id"], "references": reply["references"],
             })
+    # Replies Tom sent by hand from the mailbox (Gmail UI). Anything the send
+    # script or GC sent is in the send log by Message-ID and is skipped here.
+    max_sent_uid = last_sent_uid
+    try:
+        typ, _ = m.select('"[Gmail]/Sent Mail"', readonly=True)
+        if typ == "OK":
+            typ, data = m.uid("search", None, f"(SINCE {since_imap} UID {last_sent_uid + 1}:*)")
+            sent_uids = [int(u) for u in (data[0].split() if typ == "OK" and data and data[0] else []) if int(u) > last_sent_uid]
+            if sent_uids:
+                max_sent_uid = max(max_sent_uid, max(sent_uids))
+            # Headers first (one round trip for the whole range); the 346 campaign
+            # sends and GC thank-yous are in the send log by Message-ID and never
+            # need their bodies fetched.
+            candidates: list[int] = []
+            if sent_uids:
+                typ, data = m.uid("fetch", f"{min(sent_uids)}:{max(sent_uids)}", "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID TO)])")
+                for part in data if typ == "OK" else []:
+                    if not isinstance(part, tuple):
+                        continue
+                    um = re.search(rb"UID (\d+)", part[0])
+                    if not um:
+                        continue
+                    huid = int(um.group(1))
+                    if huid <= last_sent_uid:
+                        continue
+                    h = email.message_from_bytes(part[1])
+                    if (h.get("Message-ID") or "").strip() in logged_message_ids:
+                        continue
+                    _, to_h = email.utils.parseaddr(hdr(h, "To"))
+                    if to_h.lower() in by_email:
+                        candidates.append(huid)
+            for uid in sorted(candidates):
+                typ, data = m.uid("fetch", str(uid), "(BODY.PEEK[])")
+                if typ != "OK" or not data or not isinstance(data[0], tuple):
+                    continue
+                msg = email.message_from_bytes(data[0][1])
+                mid = (msg.get("Message-ID") or "").strip()
+                _, to_addr = email.utils.parseaddr(hdr(msg, "To"))
+                to_addr = to_addr.lower()
+                try:
+                    sent_at = email.utils.parsedate_to_datetime(msg.get("Date", "")).astimezone(timezone.utc).isoformat(timespec="seconds")
+                except Exception:  # noqa: BLE001
+                    sent_at = msg.get("Date", "")
+                item = {"uid": uid, "sent_at": sent_at, "to_email": to_addr, "subject": hdr(msg, "Subject"), "message_id": mid,
+                        "in_reply_to": (msg.get("In-Reply-To") or "").strip(), "body": strip_quotes(body_text(msg))[:TEXT_CAP]}
+                out["new"]["outbound"].append(item)
+                if str(uid) not in seen_outbound_uids:
+                    new_outbound_rows.append({"imap_uid": str(uid), **{k: item[k] for k in OUTBOUND_FIELDS if k != "imap_uid"}})
+    except (imaplib.IMAP4.error, OSError) as exc:
+        out["errors"].append(f"imap sent-folder: {type(exc).__name__}: {exc}")
     with contextlib.suppress(imaplib.IMAP4.error, OSError):
         m.logout()
 
@@ -362,6 +420,10 @@ def main() -> int:
     # full picture for the report page (deterministic render on the loops host)
     out["all_replies"] = [{k: r.get(k, "") for k in REPLY_FIELDS} for r in all_reply_rows][:2000]
     out["all_bookings"] = [{k: r.get(k, "") for k in BOOKING_FIELDS} for r in existing_bookings + new_booking_rows][:500]
+    out["all_outbound"] = [{k: r.get(k, "") for k in OUTBOUND_FIELDS} for r in existing_outbound + new_outbound_rows][:1000]
+    out["totals"]["outbound_new"] = len(new_outbound_rows)
+    out["totals"]["replied_by_hand"] = len({r.get("to_email") for r in existing_outbound + new_outbound_rows})
+    out["sent_cursor_after"] = max_sent_uid if record else last_sent_uid
     out["send_progress"] = {
         "by_cohort_sent": {c: sum(1 for r in log_rows if (by_email.get(r["email"].lower()) or {}).get("plan_tier", "").lower() == "crew" and c == "3"
                                    or (by_email.get(r["email"].lower()) or {}).get("plan_tier", "").lower() != "crew" and (by_email.get(r["email"].lower()) or {}).get("repo_linked", "").lower() == "yes" and c == "2"
@@ -373,6 +435,13 @@ def main() -> int:
     }
 
     if record:
+        if new_outbound_rows:
+            new_file = not OUTBOUND_CSV.exists()
+            with OUTBOUND_CSV.open("a", newline="") as fh:
+                w = csv.DictWriter(fh, fieldnames=OUTBOUND_FIELDS, extrasaction="ignore")
+                if new_file:
+                    w.writeheader()
+                w.writerows(new_outbound_rows)
         if new_booking_rows:
             new_file = not BOOKINGS_CSV.exists()
             with BOOKINGS_CSV.open("a", newline="") as fh:
@@ -401,10 +470,10 @@ def main() -> int:
                 w.writeheader()
                 w.writerows(send_rows)
             os.replace(tmp, SEND_LIST)
-        if max_uid > last_uid:
+        if max_uid > last_uid or max_sent_uid > last_sent_uid:
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             tmp = CURSOR.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps({"last_uid": max_uid, "moved_at": out["generated_at"]}))
+            tmp.write_text(json.dumps({"last_uid": max_uid, "last_sent_uid": max_sent_uid, "moved_at": out["generated_at"]}))
             os.replace(tmp, CURSOR)
 
     print(json.dumps(out, indent=1))

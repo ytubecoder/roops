@@ -78,6 +78,9 @@ For **`## new unsubscribes`**: one finding per address (severity `warn`),
 title `<email> unsubscribed`, detail: their words + "send-list row marked
 notes=unsubscribed by the probe; nothing else to do".
 
+For **`## replies Tom sent by hand from the mailbox`**: no finding; one line in
+`report_markdown`. The person is handled on GC already.
+
 For **`## new auto-replies`** and **`## unmatched senders`**: do NOT emit
 findings; summarise them in one line each in `report_markdown`. Exception:
 an unmatched sender whose subject is plainly a reply to a research email

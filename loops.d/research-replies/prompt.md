@@ -50,14 +50,7 @@ For **every entry under `## new replies`**, emit one finding:
      for cohorts 2 and 3 add `Testimonial:` — quote any sentence usable as
      a testimonial and whether they gave an explicit ok to be quoted
      (yes / no / not stated);
-  3. `Coding (proposed):` one line each for the research fields the emails
-     doc asks to record, filling only what the reply actually supports and
-     writing `unknown` otherwise: acquisition source · exact phrase or
-     example that caused signup · job they were trying to do · urgency at
-     signup · activation or trust barrier · alternative used or considered ·
-     first value moment · reason to return or not · verbatim language worth
-     testing in GTM copy · follow-up permitted (yes/no/unclear);
-  4. `Next:` whether a human reply is warranted (they asked a question,
+  3. `Next:` whether a human reply is warranted (they asked a question,
      reported a bug, offered a call, or gave a rich answer worth the optional
      follow-up question in the emails doc). State plainly that the follow-up
      is a manual decision — this loop never sends it.
@@ -123,7 +116,7 @@ Example: `"{\"replies.total\": 7, \"replies.new\": 3, \"replies.rate_pct\": 2.0,
 ## report_markdown
 
 A short human report: the totals line, then every new reply quoted in full
-with its answers and proposed coding, then bounces, unsubscribes, and one
+with its answers, then bounces, unsubscribes, and one
 line each for auto-replies and unmatched senders. Do not treat reply counts
 as market prevalence — say so once at the end if you draw any pattern across
 replies.

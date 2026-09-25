@@ -5,8 +5,8 @@ Surface every reply, bounce and unsubscribe to the founder-led user-research
 emails (1 abandoned: never linked · 2 synced: linked, free · 3 paid: crew plan) (send plan: maguyva-marketing `growth-console/brands/maguyva/outreach/
 user-research-send-plan.md`) so Generalissimo never reads mailbox@maguyva.ai by
 hand. Per firing: "done" = every new inbox message since the probe's UID cursor
-is bucketed and each reply/bounce/unsubscribe is a finding with the reply quoted
-and a proposed research coding. Cross-run: a reply finding is a one-shot alarm
+is bucketed and each reply/bounce/unsubscribe is a finding with the reply quoted.
+No research coding (dropped 2026-09-24: Generalissimo infers what he needs from pasted CSVs). Cross-run: a reply finding is a one-shot alarm
 (it resolves on the next run); the durable record is `user-research-replies.csv`
 on llm, which the probe appends to. The loop is retired (uninstalled) when
 replies stop, roughly six weeks after the send.
@@ -14,9 +14,8 @@ replies stop, roughly six weeks after the send.
 2. Agentic pattern
 Outer shape Human-in-the-loop (v1 mapping). Inside one invocation: plain
 interpretation of precheck text — read each quoted reply, decide the answer
-number, propose the coding, judge whether a human reply is warranted. No
-iteration across firings. v2 aspiration (recorded, not built): let the engine
-write its proposed coding back into the CSV columns; today a human copies it.
+number, judge whether a human reply is warranted. No
+iteration across firings. The coding v2 aspiration was dropped 2026-09-24.
 
 3. Type & data flow (precheck gathers vs engine interprets)
 `type=agent`. Precheck calls `probe:research-replies-read` on llm, which does
@@ -29,7 +28,7 @@ keyed by UID (hand-coded columns untouched); unsubscribe marks on the send list;
 cursor move. Precheck prints only what is new; empty stdout when nothing is
 new (skipped-precheck, zero tokens). The engine interprets: the answers to the
 two or three open questions of the person's cohort, any testimonial-grade
-sentence and whether quoting was okayed, the proposed coding,
+sentence and whether quoting was okayed,
 severity, and whether a human should reply.
 
 4. Cadence
@@ -98,6 +97,6 @@ Yes — class `snapshot`, rendered by `render.sh` → `render_page.py` from the
 probe capture (`$OUT_DIR/inputs/replies.json`, which carries every reply and
 booking to date plus send progress). Stat strip: emails sent by cohort,
 replies by cohort + reply rate, call bookings, unsubscribed + send errors.
-Groups: Replies (newest first, verbatim text, hand-coded research columns
+Groups: Replies (newest first, verbatim text
 read from the CSV), Call bookings (cal.com notifications). Deterministic; the
 CSV on llm stays the record, the page is the consolidated view.

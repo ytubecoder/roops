@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """research-replies render_page.py — snapshot page of the user-research email
 programme: send progress, reply rate, every reply to date (verbatim, with the
-hand-coded research columns), call bookings, unsubscribes. Input is the probe
+call bookings, unsubscribes. Input is the probe
 capture `replies.json` written by precheck.sh. Deterministic; inlines
 $PAGEKIT/kit.css + toggle.js per pagekit/README.md; one #report-data envelope.
 """
@@ -21,11 +21,6 @@ _PAGEKIT = pathlib.Path(os.environ.get("PAGEKIT") or _ROOT / "pagekit")
 _KIT_HEADER_RE = re.compile(r"\A/\*.*?\*/\s*", re.DOTALL)
 
 COHORT = {"1": "abandoned — never linked a repo", "2": "synced — linked, free plan", "3": "paid — crew plan"}
-CODED = [("acquisition_source", "acquisition source"), ("exact_phrase", "phrase that caused signup"),
-         ("job", "job to be done"), ("urgency", "urgency"), ("barrier", "barrier"),
-         ("alternative", "alternative"), ("first_value_moment", "first value moment"),
-         ("return_reason", "reason to return / not"), ("verbatim_language", "language worth testing"),
-         ("followup_permitted", "follow-up permitted"), ("notes", "notes")]
 
 
 def esc(s) -> str:
@@ -42,9 +37,6 @@ def load_kit(name: str) -> str:
 def reply_rows(replies: list[dict]) -> str:
     out = []
     for i, r in enumerate(sorted(replies, key=lambda r: r.get("received_at") or "", reverse=True), 1):
-        coded = "".join(
-            f"<tr><th>{esc(label)}</th><td>{esc(r.get(k) or '—')}</td></tr>" for k, label in CODED
-        )
         text = esc(r.get("reply_text"))
         out.append(Template("""<details class="frow" style="--i:$i">
   <summary>
@@ -56,13 +48,11 @@ def reply_rows(replies: list[dict]) -> str:
   <div class="fbody">
     <p class="explain"><b>cohort $cohort</b> · $cohort_label · $last_event</p>
     <blockquote class="quote">$text</blockquote>
-    <h4>Coding</h4>
-    <table class="coded">$coded</table>
   </div>
 </details>""").substitute(
             i=i, mk="●", who=esc(r.get("email")), first=esc((r.get("reply_text") or "").strip().splitlines()[0][:90] if r.get("reply_text") else "(empty)"),
             date=esc((r.get("received_at") or "")[:10]), cohort=esc(r.get("cohort")), cohort_label=esc(COHORT.get(r.get("cohort"), "?")),
-            last_event=esc(r.get("last_verified_event")), text=text.replace("\n", "<br>"), coded=coded))
+            last_event=esc(r.get("last_verified_event")), text=text.replace("\n", "<br>")))
     return "\n".join(out) or '<p class="sub">No replies yet.</p>'
 
 
@@ -117,7 +107,7 @@ $kit_css
 
   <section class="group">
     <header class="ghead"><h3>Replies</h3><span class="gmeta">$replies to date, newest first</span></header>
-    <p class="gblurb">Verbatim text as received (quoted history stripped). The coding table is filled by hand or from the loop's proposed coding in each finding; this page never edits it. Do not read counts as market prevalence.</p>
+    <p class="gblurb">Verbatim text as received (quoted history stripped). This page never edits the CSV. Do not read counts as market prevalence.</p>
 $reply_rows
   </section>
 

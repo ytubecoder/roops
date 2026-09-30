@@ -50,7 +50,7 @@ else
 fi
 
 if [ "$mode" = editorial ]; then
-  "$HOME/.local/venvs/dapodcast/bin/python" tools/pdf-pages.py >/dev/null
+  "$HOME/.local/venvs/dapodcast/bin/python" tools/pdf-pages.py >/dev/null 2>"$OUT_DIR/pdf-pages.log"
 fi
 
 echo "mode: $mode"

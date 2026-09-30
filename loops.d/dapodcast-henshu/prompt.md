@@ -32,14 +32,21 @@ Before any command, run `export PATH="$HOME/.local/node/bin:$PATH"`.
    - Add a CR entry with status "In progress".
    - Archive the source records verbatim under
      `docs/author-feedback/<YYYY-MM-DD>-<slug>.json`.
-   - Edit the English brief, then run `./tools/build.sh`.
-   - Translate the result into `site/content/pl.js`, keeping the author's
-     original Polish in the archive only.
+   - **Author answers are Polish-primary** (CLAUDE.md, CR-63). Add the
+     author's Polish verbatim to
+     `docs/author-feedback/answers-polish-primary.json`, correcting only
+     outright typos and listing each one. Copy that text exactly into the
+     answer in `site/content/pl.js`. Translate it faithfully into the brief's
+     `Author Answer`: no tightening, no editorialising. Never generate Polish
+     answer text from English.
+   - **Everything else is English-primary.** Edit the English brief, run
+     `./tools/build.sh`, then translate the result into `site/content/pl.js`.
    - Rewrite the `Author Context / Direction` lines from the book pages
      wherever a question changes.
    - Update count assertions in tests when you add answers.
    - Never hand-edit `parts` in `site/content/en.js`.
-   - Never write an author's answer for them.
+   - Never write an author's answer for them. Editorial concerns about an
+     answer go in the reply, not into his words.
 6. Write the editorial manifest to
    `docs/author-feedback/pending/<run_id>.json`. `<run_id>` is the RUN CONTEXT
    value, and the schema is in

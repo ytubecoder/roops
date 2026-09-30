@@ -1,18 +1,14 @@
 # dapodcast-henshu — prompt
 
 You are the editorial step of dapodcast-henshu. Your working directory is the
-loop's dedicated checkout of `directorsactorspodcast` on `main`. A trusted
-precheck has already refreshed it, fetched production review state, and run
-the feedback scanner. Its output is in the PRECHECK OUTPUT block below.
+loop's dedicated checkout of `directorsactorspodcast` on `main`. You run in a
+sandbox that cannot write `.git`: you prepare work, and the trusted precheck
+publishes it on the next firing (every 15 minutes). The PRECHECK OUTPUT block
+below states the mode.
 
 Before any command, run `export PATH="$HOME/.local/node/bin:$PATH"`.
 
-## Mode `resume`
-
-A previous run's publish did not finish. Do no editorial work. Run
-`tools/feedback-publish.sh --resume` and report its final `RESULT {json}` line.
-
-## Mode `editorial`
+## Mode `editorial`: prepare a pass. Do not publish.
 
 1. Read `CLAUDE.md` completely, then `skills/podcast-feedback-editor/SKILL.md`
    and `workflows/monitor-author-feedback.txt`. They are binding. The
@@ -41,6 +37,7 @@ A previous run's publish did not finish. Do no editorial work. Run
      original Polish in the archive only.
    - Rewrite the `Author Context / Direction` lines from the book pages
      wherever a question changes.
+   - Update count assertions in tests when you add answers.
    - Never hand-edit `parts` in `site/content/en.js`.
    - Never write an author's answer for them.
 6. Write the editorial manifest to
@@ -51,24 +48,34 @@ A previous run's publish did not finish. Do no editorial work. Run
      `Odpowiedź redakcyjna — CR-NN` (Polish).
    - Set `structural` deltas when you add or remove questions, follow-ups
      or answers.
-7. **Do not** post to the API, commit, push or deploy yourself.
-8. Run `tools/feedback-publish.sh <run_id>`. It checks, commits, posts,
-   pushes, deploys and verifies. Exit codes:
-   - 0: done.
-   - 2: your changes failed validation or checks, and nothing was posted.
-     Read the error, fix your edits or the manifest, and run it again, at most
-     twice more.
-   - 3: failed after posting. Do not retry. The next run resumes.
+7. Check your work without git: `./tools/build.sh && node tools/parity.js &&
+   node --test tests/acceptance/*.test.mjs tests/review/*.test.mjs`. Fix any
+   failure.
+8. **Do not** post to the API, commit, push, deploy or run
+   `tools/feedback-publish.sh`. The next firing publishes and verifies.
+
+## Mode `fix`: publish rejected the prepared pass before posting anything
+
+Read `publish_log_tail` and `publish_log`. Correct the edits or the manifest, and
+nothing else, then re-run step 7's checks. The next firing retries publishing.
+
+## Modes `published`, `publish-failed`, `publish-timeout`: report only
+
+Make no edits. Read `result`, `publish_log_tail` and the manifest, then report.
+A failed or timed-out publish resumes by itself on the next firing.
 
 ## Status mapping (deterministic)
 
-- `status=ok`: publish returned 0, or `status: resume` completed.
-- `status=warn`: at least one item was held, or publish exited 2 three times.
-  The checkout is left as it is for a human, and the next precheck will alert
-  because it is dirty.
-- `status=alert`: publish exited 3.
+- `editorial`:
+  - `status=ok` when the pass is prepared.
+  - `status=warn` when any item is held, or when your checks still fail.
+- `fix`: `status=warn`.
+- `published`: `status=ok`, or `warn` if the manifest held items.
+- `publish-failed`: `status=alert`.
+- `publish-timeout`: `status=warn`.
 - `status_reason`: the CR number, or `no_cr`.
-- `headline`: one line. Example: `CR-62 published: 2 accepted, 1 declined, 1 held`.
+- `headline`: one line. Examples: `CR-62 prepared: 7 accepted, 2 editorialised`
+  and `CR-62 published as deployment 1a2b3c4d`.
 
 ## Finding identity
 
@@ -82,8 +89,8 @@ The runner tracks recurrence.
   and what the owner must decide.
 - `publish-failed:<run_id>` (alert): the detail holds the publish script's
   last error lines and its exit code.
-- `checks-failed:<run_id>` (warn): the detail holds the failing check output
-  after the third attempt.
+- `checks-failed:<run_id>` (warn): in `fix` mode, or when your own checks still
+  fail. The detail holds the failing output.
 
 A fully published run has no findings. Do not invent other IDs, and never put
 counts or timestamps in an ID.
@@ -98,7 +105,7 @@ prose outside that JSON object.
 - `run_id` MUST equal the RUN CONTEXT value.
 - `metrics` is a JSON **string** of a serialized object. Take the precheck
   `metrics:` object and add `published` (the number of items replied to and
-  deployed) and `held`.
+  deployed by this firing, 0 unless mode is `published`) and `held`.
 - `report_markdown`: at most eight lines, covering:
   - the CR and the deployment ID
   - one line for each item's outcome

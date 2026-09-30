@@ -20,34 +20,42 @@ direct edit gets:
   item: Queued, In progress, Completed, Declined or Reverted.
 
 2. Agentic pattern
-The pattern is script → agent → script. A read-only precheck decides whether
-there is work. The codex engine does the editorial judgment and edits the
-checkout. The project's own deterministic `tools/feedback-publish.sh` does
-every mutation.
+The pattern is script → agent, run across two firings.
+- **Firing N:** the precheck scans. The codex engine makes the editorial
+  judgment and prepares edits and a manifest, offline.
+- **Firing N+1:** the precheck publishes that pass through the project's
+  deterministic `tools/feedback-publish.sh`. The engine only reports the
+  result, or fixes a rejected pass.
 
 3. Type & data flow
 `type=agent`.
-- **Precheck** fast-forwards the checkout, fetches
-  `/api/review/state`, and runs `tools/review-feedback-scan.mjs`. It prints the
-  mode (`editorial` or `resume`) and the scan. Its stdout is empty when there
-  is nothing to do.
-- **The engine** writes the source edits and
-  `docs/author-feedback/pending/<run_id>.json`, then calls the publish
-  script.
-- **The publish script**:
-  - runs the build and tests
-  - commits
-  - posts replies with idempotent mutation IDs
-  - pushes main and deploys
-  - verifies the live bytes
-  - moves the ledger to `deployed`
-  - writes the run log
-  - redeploys the ledger asset
+
+Precheck without a pending manifest:
+- fast-forwards the checkout
+- fetches `/api/review/state` and runs `tools/review-feedback-scan.mjs`
+- emits `mode: editorial` with the scan, or empty stdout when there is nothing
+  to do
+
+The engine prepares source edits and
+`docs/author-feedback/pending/<run_id>.json`, then runs the build and tests.
+Its sandbox is read-only for `.git` and it has no network.
+
+Precheck with a pending manifest runs `tools/feedback-publish.sh --resume`
+under a 270 s budget. The publish script:
+- stages, checks and commits
+- posts replies with idempotent mutation IDs
+- pushes main, deploys and verifies the live bytes
+- closes the ledger and writes the run log
+- redeploys the ledger asset
+
+The precheck then emits `published`, `fix` (a rejection before anything was
+posted, capped at 3 rounds), `publish-failed` or `publish-timeout`. The last
+two resume on the next firing.
 
 4. Cadence
-`interval:1h`. Author feedback arrives in bursts during review rounds, and an
-hour is fast enough for the badge to turn Completed the same session. An empty
-hour costs no tokens.
+`interval:15m`. A pass is prepared in one firing and published in the next, so
+a note turns Completed about 15–30 minutes after the pass starts. A firing
+with nothing to do costs no tokens.
 
 5. Scope & exclusions
 In scope: author notes and direct edits in the production review store.
@@ -80,30 +88,29 @@ Precheck adds these:
 - Revert is by owner request only (`tools/revert-run.sh CR-NN`).
 
 7. Permission axes + justification
-The engine runs with:
-- `perm_fs_write=workdir`, where workdir is the dedicated checkout
-- `perm_network=full`
-- `perm_local_exec=full`
-- `i_accept_unrestricted=true`
-- `perm_remote_mutation=allowlist`
+The engine runs with `perm_fs_write=workdir`, where workdir is the dedicated
+checkout. Every other axis stays at the floor: no network, no remote mutation.
+`perm_local_exec` is `full`, but only for the build and tests. The first
+design gave the engine full network and the publish step. The first live run
+showed that codex's workspace-write sandbox keeps `.git` read-only, so
+publishing moved into trusted precheck code (the vecomap/kagami precedent),
+which is strictly safer.
 
 **Owner sign-off, 2026-09-30.** The owner explicitly chose full autonomy:
 "Full: deploy to prod". This is the amendment `docs/OPEN_THREADS.md` §1 requires
-for a scheduled network write. It covers exactly three mutations:
+for a scheduled network write. It covers exactly three mutations, all in
+precheck via `tools/feedback-publish.sh`:
 - reply and revert notes through the site's own `/api/review/feedback`
 - `git push` of `main` on `ytubecoder/directorsactorspodcast`
 - `wrangler pages deploy` of the `dapodcast` project
-
-Why the engine and not a hook: prechecks and `render.sh` are capped at 300 s,
-and render failures are ignored. Publishing needs about 5–10 minutes and must
-alert when it fails.
 
 The credentials, all on firstparty only:
 - `~/.ssh/dapodcast-deploy`: a deploy key with write access to this one repo
 - `~/.config/dapodcast/cloudflare.env` (mode 600): a Pages-edit and D1-read
   token
 
-The harness `.env` holds no credentials for this loop.
+The harness `.env` holds no credentials for this loop, and the engine never
+sees them.
 
 8. Finding identity
 - `held:<source id>`: an item waiting on the owner. It resolves when the

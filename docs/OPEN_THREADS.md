@@ -28,7 +28,10 @@ Facts the design has to respect:
   process calls `service.record_and_apply()` or any network write API; CDP is
   never cron'd; loops never git-write maguyva-marketing. Widening is
   Generalissimo's explicit amendment each time, never assumed. (One narrow
-  exemption exists and is documented in `loops.d/ads-hard-cut/SPEC.md` §7.)
+  exemption exists and is documented in `loops.d/ads-hard-cut/SPEC.md` §7.
+  A second, wider one — full editorial autonomy incl. push + production
+  deploy for directorsactorspodcast feedback — was granted 2026-09-30 and is
+  documented in `loops.d/dapodcast-henshu/SPEC.md` §7.)
 
 **The open question:** should approval live in the harness (a new disposition
 verb, e.g. `approve`) or in Growth Console, where ads-google's SPEC already says

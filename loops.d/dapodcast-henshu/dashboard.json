@@ -1,0 +1,7 @@
+{"panels": [
+  {"title": "New feedback", "metric": "new_feedback", "type": "number", "unit": "notes", "direction": "neutral", "missing": "gap"},
+  {"title": "New edits", "metric": "new_edits", "type": "number", "direction": "neutral", "missing": "gap"},
+  {"title": "Published", "metric": "published", "type": "number", "unit": "items", "direction": "neutral", "missing": "gap"},
+  {"title": "Held for owner", "metric": "held", "type": "number", "unit": "items", "direction": "higher_is_worse", "thresholds": {"warn": 1}, "missing": "gap"},
+  {"title": "Resume pending", "metric": "resumable", "type": "number", "direction": "higher_is_worse", "thresholds": {"warn": 1}, "missing": "gap"}
+]}

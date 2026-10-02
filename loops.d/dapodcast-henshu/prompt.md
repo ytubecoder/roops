@@ -55,6 +55,9 @@ Before any command, run `export PATH="$HOME/.local/node/bin:$PATH"`.
      `Odpowiedź redakcyjna — CR-NN` (Polish).
    - Set `structural` deltas when you add or remove questions, follow-ups
      or answers.
+   - Set `"asks": true` on any item whose reply asks the author for something,
+     such as Polish wording or a confirmation. The Feedback tab then shows it to him
+     as "Question for you", and it clears once he answers on that field.
 7. Check your work without git: `./tools/build.sh && node tools/parity.js &&
    node --test tests/acceptance/*.test.mjs tests/review/*.test.mjs`. Fix any
    failure.

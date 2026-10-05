@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+# probe: drip-tick
+# probe-timeout-s: 840
+# probe-writes: SENDS drip campaign emails from mailbox@maguyva.ai for campaigns the operator turned ON in GC; drip ledger rows in ~/.growth-console/research/research.db; send-log CSV rows; its own reply-probe cursor (drip-probe-state)
+# probe-output: json
+# probe-reads: growth-console venv + research DB under MAGUYVA_REPO (default ~/projects/maguyva-marketing); mailbox@ via research-replies-read; DRIP_SEND_ENABLED + MAILBOX_* from MAGUYVA_REPO/.env
+"""One drip scheduler tick, run where the research DB and mailbox credentials live.
+
+🚨 THIS PROBE SENDS EMAIL. It deliberately amends the standing "loops never send"
+rule, narrowly. Generalissimo granted it on 2026-10-05: a scheduled job may send
+drip emails ONLY for campaigns he has turned ON in the GC Drips tab. Everything
+that decides what may be sent lives in growth-console
+(`console/dashboard/drip_scheduler.py`): the on/off state, the on-version pin, the
+DRIP_SEND_ENABLED kill switch, the single-run lock, the canary hold and the
+auto-off on bounces. This probe adds no logic of its own. It runs the tick and
+passes its JSON summary through.
+
+Args (all optional): `dry-run` reports what would send and sends nothing.
+`--check` validates the environment only.
+
+Spec: maguyva-marketing openspec/changes/drip-campaigns/ (design decision 7).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(os.environ.get("MAGUYVA_REPO") or (Path.home() / "projects" / "maguyva-marketing"))
+GC = REPO / "growth-console"
+VENV_PY = GC / ".venv" / "bin" / "python"
+
+
+def check() -> int:
+    if not VENV_PY.is_file():
+        print(f"growth-console venv not found at {VENV_PY}")
+        return 1
+    if not (GC / "console" / "dashboard" / "drip_scheduler.py").is_file():
+        print("drip_scheduler.py not found - DC-02 not deployed")
+        return 1
+    print("ok drip-tick")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if "--check" in argv:
+        return check()
+    unknown = [a for a in argv if a != "dry-run"]
+    if unknown:
+        print(json.dumps({"ok": False, "error": f"unknown args: {unknown}"}))
+        return 2
+    if check() != 0:
+        print(json.dumps({"ok": False, "error": "environment check failed"}))
+        return 1
+    cmd = [str(VENV_PY), "-m", "console.dashboard.drip_scheduler", "tick", "--json"]
+    if "dry-run" in argv:
+        cmd.append("--dry-run")
+    proc = subprocess.run(cmd, cwd=GC, capture_output=True, text=True, timeout=820)
+    out = proc.stdout.strip()
+    try:
+        summary = json.loads(out) if out else {}
+    except json.JSONDecodeError:
+        summary = {"ok": False, "error": "unparseable tick output", "stdout_tail": out[-400:]}
+    summary.setdefault("ok", proc.returncode == 0)
+    summary["tick_exit"] = proc.returncode
+    if proc.returncode not in (0, 1):
+        summary["stderr_tail"] = proc.stderr.strip()[-600:]
+    print(json.dumps(summary, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

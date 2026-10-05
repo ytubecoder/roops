@@ -3,8 +3,8 @@
 A probe is trusted unsandboxed code on the host it runs on, same class as
 `precheck.sh`. The narrowing is WHICH scripts exist, reviewed in git.
 
-Two probes write: `ticket-add` (one ticket) and `ads-emergency-pause` (pauses
-ad campaigns). Both take a single base64url JSON argv, both are bounded by an
+Three probes write: `ticket-add` (one ticket), `ads-emergency-pause` (pauses
+ad campaigns) and `drip-tick` (sends drip emails; see its header). Both take a single base64url JSON argv, both are bounded by an
 `.allow` file beside them, and neither ever builds a shell string.
 `ads-emergency-pause` adds a third bound: it acts only on a fresh nonce that
 `ads-spend-read` minted on the same host, so it can only execute a decision
@@ -34,6 +34,7 @@ Shipped probes (plus test-only `echo-test`):
 | `gtm-refresh` | GC historical baseline and research intake | merge private snapshots, preserve approval |
 | `gtm-learning-read` | sanitized GC evidence digest | none |
 | `research-replies-read` | read-only mailbox and outreach CSVs | UID-deduplicated CSV/SQLite intake, feedback, collection health; cursor only after successful publication; `no-record` skips writes |
+| `drip-tick` | growth-console venv + research DB, mailbox@ via research-replies-read (own cursor), `DRIP_SEND_ENABLED` | **sends drip emails** for campaigns turned ON in GC `/drips`; drip ledger rows; send-log rows (grant 2026-10-05, gates live in growth-console) |
 
 ## Header grammar
 

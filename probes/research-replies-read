@@ -240,7 +240,16 @@ def main() -> int:
     by_email = {r["email"].strip().lower(): r for r in send_rows if r.get("email")}
     sendable = {e for e, r in by_email.items() if "do not send" not in (r.get("notes") or "").lower()}
     log_rows = [r for r in read_csv(SEND_LOG) if r.get("mode") == "real"]
-    msgid_to_email = {r["message_id"]: r["email"].lower() for r in log_rows if r.get("message_id")}
+    # Drip campaign sends (mode drip:<campaign>:<key>) are logged in the same send
+    # log. Their recipients may not be on the research send list, so add them to
+    # the matching sets: a reply or bounce from a drip recipient must match too.
+    drip_rows = [r for r in read_csv(SEND_LOG) if (r.get("mode") or "").startswith("drip:")]
+    for r in drip_rows:
+        e = (r.get("email") or "").strip().lower()
+        if e and e not in by_email:
+            by_email[e] = {"email": e, "name": "", "notes": ""}
+            sendable.add(e)
+    msgid_to_email = {r["message_id"]: r["email"].lower() for r in log_rows + drip_rows if r.get("message_id")}
     sent_dates = sorted(r["sent_at"][:10] for r in log_rows if r.get("sent_at"))
     since_date = sent_dates[0] if sent_dates else SEND_START_DEFAULT
     since_imap = (datetime.strptime(since_date, "%Y-%m-%d").replace(tzinfo=timezone.utc) - timedelta(days=1)).strftime("%d-%b-%Y")

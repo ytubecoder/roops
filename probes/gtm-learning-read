@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# probe: gtm-learning-read
+# probe-timeout-s: 60
+# probe-writes: none
+# probe-output: json
+# probe-reads: sanitized GTM snapshots through Growth Console digest
+set -euo pipefail
+repo="${MAGUYVA_REPO:-$HOME/projects/maguyva-marketing}"
+if [[ "${1:-}" == "--check" ]]; then
+  test -x "$repo/growth-console/.venv/bin/python"
+  test -f "$repo/growth-console/console/dashboard/gtm_learning.py"
+  echo "ok: anonymized GTM digest available"
+  exit 0
+fi
+cd "$repo/growth-console"
+PYTHONPATH=. .venv/bin/python -m console.dashboard.gtm_learning digest

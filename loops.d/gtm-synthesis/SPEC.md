@@ -1,37 +1,37 @@
-# gtm-synthesis — intake spec
+# gtm-synthesis — intake
 
-1. Purpose & stop condition
-Refresh the private GTM evidence snapshots daily and report failure. A firing is done when the probe returns status ok with updated/unchanged synthesis; cross-run failure is done when the same condition disappears.
+## 1. Purpose & stop condition
+Assess changed GTM evidence; each firing ends with a validated recommendation. A finding resolves when its evidence gap disappears.
 
-2. Agentic pattern
-Outer Human-in-the-loop. The successful path is deterministic and zero-token; a single engine invocation diagnoses a failed probe, without retrying or repairing.
+## 2. Agentic pattern
+Outer Human-in-the-loop; single-shot interpretation inside. Never automatic approval or retries across firings.
 
-3. Type & data flow (precheck gathers vs engine interprets)
-Watchdog. precheck invokes the reviewed llm `gtm-refresh` probe, which atomically merges the approved baseline and anonymized research evidence, synthesizes the candidate, and writes health. The engine sees only failure output.
+## 3. Type & data flow
+Agent. Precheck refreshes bounded private snapshots with gtm-refresh and reads anonymized digest through gtm-learning-read. The engine emits assessment in metrics. GC pulls contract plus inputs and validates references before publication.
 
-4. Cadence
-`daily:10:15`: replies are checked every four hours, while a daily strategy projection is frequent enough and avoids meaningless intra-day churn.
+## 4. Cadence
+Daily 10:15 host local time. Identical hashes skip the engine only when GC already accepted that hash.
 
-5. Scope & exclusions
-In scope: anonymized GTM snapshots and deterministic candidate/health refresh. Excluded: email sending, inbox reads, core-app access, campaign changes, human approval changes, and model-written positioning.
+## 5. Scope & exclusions
+Anonymized responses, public evidence and positioning hypotheses. No raw mailbox, private identities, email sending, campaigns, or approval writes.
 
-6. Guardrails
-Report/propose-only. Never approve a proposition. Never expose identities or raw mailbox data. Never mutate outside the reviewed probe's private GTM snapshot directory.
+## 6. Guardrails
+Report/propose-only. Never approve a proposition. Never expose identities or raw mailbox data. Loops run on firstparty; llm supplies data.
 
-7. Permission axes + justification
-All engine axes remain at the floor: `report_only / none / none / none`. The reviewed probe performs bounded local writes on llm; this is the same trusted probe boundary used by research-replies.
+## 7. Permission axes + justification
+report_only / none / none / none. Trusted gtm-refresh performs bounded local snapshot writes. The model has no application mutation or network authority.
 
-8. Finding identity (what a finding IS + finding_id derivation rule)
-A finding is one durable refresh failure. `gtm-synthesis:<condition>` with condition from probe-transport, snapshot-refresh, candidate-synthesis, unknown; no volatile values.
+## 8. Finding identity
+One durable evidence gap: gtm-synthesis:<condition>; conditions documented in prompt. No volatile values.
 
-9. Tier-1 semantics (ok/warn/alert meaning)
-ok = refresh and synthesis succeeded. alert = probe or refresh failed. warn is unused.
+## 9. Tier-1 semantics
+ok useful assessment, warn evidence gap, alert unusable inputs. A skipped unchanged digest means no new interpretation was needed.
 
-10. Tier-2 metrics + panels
-No engine metrics on healthy runs; watchdog heartbeat is authoritative. Failure diagnosis may emit `{}`. No custom panels.
+## 10. Tier-2 metrics + panels
+assessment object in metrics JSON string; consumed by GC. No numeric panels.
 
-11. Engine/model + budget
-Codex default model, zero tokens on success, at most a few hundred on failure, retry_transient=1, timeout_s=180.
+## 11. Engine/model + budget
+Codex default, one invocation, timeout 600 seconds, retry_transient default 1. Several thousand tokens per changed digest, zero on unchanged inputs.
 
-12. Page output
-None. The product output is Growth Console `/gtm`; the loop dashboard only exposes heartbeat/failure.
+## 12. Page output
+None; product display is GC /gtm. Harness contract report remains available.

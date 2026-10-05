@@ -59,7 +59,7 @@ Before any command, run `export PATH="$HOME/.local/node/bin:$PATH"`.
      such as Polish wording or a confirmation. The Feedback tab then shows it to him
      as "Question for you", and it clears once he answers on that field.
 7. Check your work without git: `./tools/build.sh && node tools/parity.js &&
-   node --test tests/acceptance/*.test.mjs tests/review/*.test.mjs`. Fix any
+   node --test tests/acceptance/*.test.mjs tests/review/*.test.mjs tests/recording/*.test.mjs`. Fix any
    failure.
 8. **Do not** post to the API, commit, push, deploy or run
    `tools/feedback-publish.sh`. The next firing publishes and verifies.

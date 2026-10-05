@@ -7,6 +7,7 @@
 - `research-replies-read` publishes local GC feedback and check health even on quiet/failed reads, preserves delivery events and advances its cursor only after publication. Restored `interval:4h` for ongoing notifications; `no-record` still skips writes.
 - Validation: all three loop definitions; 15 probe tests and two new hermetic collector/gating tests; real firstparty research and synthesis accepted by GC. Repeated synthesis with unchanged accepted evidence skipped the model. Both checkouts received matching probes before installation.
 - Installation caveat: the weekly agent took roughly five minutes. Default 90s `loopctl install` verification tore down its first install-triggered run. Retry with `LOOPCTL_INSTALL_POLL_TIMEOUT_S=660` to cover the configured 600s job timeout; no harness change is needed.
+- Retry completed successfully; all three timers are enabled on firstparty and GC accepted the installation-triggered public research result. Schedules are four-hour mailbox, daily 10:15 synthesis, Monday 09:30 research in the host's Asia/Manila timezone. B-32 is in review; implementation tasks are complete.
 
 ## 2026-09-05 — gc-health-watch shipped (grok peon); OUT_DIR fix in two prechecks; runbook test un-redded
 

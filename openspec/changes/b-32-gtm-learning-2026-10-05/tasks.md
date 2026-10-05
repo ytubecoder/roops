@@ -6,5 +6,5 @@
 
 ## 2. Delivery
 
-- [ ] 2.1 Deploy both checkouts, run supervised firstparty loops and install verified timers.
-- [ ] 2.2 Verify GC consumes the actual output; document and push scoped changes.
+- [x] 2.1 Deploy both checkouts, run supervised firstparty loops and install verified timers.
+- [x] 2.2 Verify GC consumes the actual output; document and push scoped changes.

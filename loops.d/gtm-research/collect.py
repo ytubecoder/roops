@@ -44,7 +44,7 @@ def collect(now=None, fetch=None):
                         raise ValueError("response too large")
                     payload = json.loads(body)
             if not isinstance(payload.get("items"), list):
-                raise ValueError("missing issue results")
+                raise TypeError("missing issue results")
             for item in payload["items"][:6]:
                 address = item.get("html_url", "")
                 if not address.startswith(f"https://github.com/{repo}/issues/"):
@@ -66,7 +66,7 @@ def collect(now=None, fetch=None):
                         "text": text or "No excerpt",
                     }
                 )
-        except Exception as exc:
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
             source.update(status="error", error=type(exc).__name__, records=[])
         sources.append(source)
     return {"schema_version": 1, "generated_at": stamp, "sources": sources}

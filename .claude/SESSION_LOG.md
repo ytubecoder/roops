@@ -1,5 +1,13 @@
 # Session Log
 
+## 2026-10-05 — GTM learning loops and reliable feedback publication (B-32)
+
+- Converted `gtm-synthesis` from baseline watchdog to daily changed-evidence agent. Precheck compares anonymized input content against GC's accepted hash, not an unchecked model checkpoint. Added read-only `gtm-learning-read`; permission axes stay at the report-only floor.
+- Added Monday 09:30 `gtm-research`: four bounded public GitHub issue searches, then source-bound interpretation in contract metrics. No harness modifications or added credentials. GC validates provenance and keeps last-good outputs and frozen source history.
+- `research-replies-read` publishes local GC feedback and check health even on quiet/failed reads, preserves delivery events and advances its cursor only after publication. Restored `interval:4h` for ongoing notifications; `no-record` still skips writes.
+- Validation: all three loop definitions; 15 probe tests and two new hermetic collector/gating tests; real firstparty research and synthesis accepted by GC. Repeated synthesis with unchanged accepted evidence skipped the model. Both checkouts received matching probes before installation.
+- Installation caveat: the weekly agent took roughly five minutes. Default 90s `loopctl install` verification tore down its first install-triggered run. Retry with `LOOPCTL_INSTALL_POLL_TIMEOUT_S=660` to cover the configured 600s job timeout; no harness change is needed.
+
 ## 2026-09-05 — gc-health-watch shipped (grok peon); OUT_DIR fix in two prechecks; runbook test un-redded
 
 ### Summary

@@ -32,11 +32,10 @@ sentence and whether quoting was okayed,
 severity, and whether a human should reply.
 
 4. Cadence
-`interval:4h` for the first week after the send (replies cluster in the first
-72 h; a same-day human reply to someone who named a broken step is the point).
-After ~2026-10-01 edit to `daily:09:30` and reinstall. Staleness: a missed
-firing during sleep is simply the next one 4 h later; nothing compounds because
-the cursor moves only after a successful probe read.
+`interval:4h` for continuous feedback and timely GC notifications (restored
+2026-10-05). GC marks collection overdue after eight hours without a successful
+check. Quiet checks publish health without invoking the model. The cursor moves
+only after successful read and GC publication; UID deduplication makes retries safe.
 
 5. Scope & exclusions
 In scope: INBOX of mailbox@maguyva.ai, messages dated on/after the first real

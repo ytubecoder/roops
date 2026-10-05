@@ -31,6 +31,9 @@ Shipped probes (plus test-only `echo-test`):
 | `gc-health-read` | growth-console venv + schedules ledger under MAGUYVA_REPO (default ~/projects/maguyva-marketing); ~/.opentwins (env OT_HOME override); Postiz public API using POSTIZ_API_KEY from the repo-root .env (fallback growth-console/.env) | none |
 | `sysadmin-tailnet` | `$TAILNET_SETUP_DIR` policy + zones-meta | none |
 | `ticket-add` | `$TICKETS_CLI`, `probes/ticket-add.allow` | one ticket via tickets-cli add |
+| `gtm-refresh` | GC historical baseline and research intake | merge private snapshots, preserve approval |
+| `gtm-learning-read` | sanitized GC evidence digest | none |
+| `research-replies-read` | read-only mailbox and outreach CSVs | UID-deduplicated CSV/SQLite intake, feedback, collection health; cursor only after successful publication; `no-record` skips writes |
 
 ## Header grammar
 

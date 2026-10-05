@@ -4,7 +4,7 @@ A probe is trusted unsandboxed code on the host it runs on, same class as
 `precheck.sh`. The narrowing is WHICH scripts exist, reviewed in git.
 
 Three probes write: `ticket-add` (one ticket), `ads-emergency-pause` (pauses
-ad campaigns) and `drip-tick` (sends drip emails; see its header). Both take a single base64url JSON argv, both are bounded by an
+ad campaigns) and `drip-tick` (sends drip emails; see its header). The first two take a single base64url JSON argv, both are bounded by an
 `.allow` file beside them, and neither ever builds a shell string.
 `ads-emergency-pause` adds a third bound: it acts only on a fresh nonce that
 `ads-spend-read` minted on the same host, so it can only execute a decision

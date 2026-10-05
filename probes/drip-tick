@@ -34,15 +34,18 @@ GC = REPO / "growth-console"
 VENV_PY = GC / ".venv" / "bin" / "python"
 
 
-def check() -> int:
+def problem() -> str | None:
     if not VENV_PY.is_file():
-        print(f"growth-console venv not found at {VENV_PY}")
-        return 1
+        return f"growth-console venv not found at {VENV_PY}"
     if not (GC / "console" / "dashboard" / "drip_scheduler.py").is_file():
-        print("drip_scheduler.py not found - DC-02 not deployed")
-        return 1
-    print("ok drip-tick")
-    return 0
+        return "drip_scheduler.py not found - DC-02 not deployed"
+    return None
+
+
+def check() -> int:
+    issue = problem()
+    print(issue or "ok drip-tick")
+    return 1 if issue else 0
 
 
 def main(argv: list[str]) -> int:
@@ -52,8 +55,9 @@ def main(argv: list[str]) -> int:
     if unknown:
         print(json.dumps({"ok": False, "error": f"unknown args: {unknown}"}))
         return 2
-    if check() != 0:
-        print(json.dumps({"ok": False, "error": "environment check failed"}))
+    issue = problem()
+    if issue:
+        print(json.dumps({"ok": False, "error": issue}))
         return 1
     cmd = [str(VENV_PY), "-m", "console.dashboard.drip_scheduler", "tick", "--json"]
     if "dry-run" in argv:

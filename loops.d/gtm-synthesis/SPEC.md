@@ -29,6 +29,9 @@ ok useful assessment, warn evidence gap, alert unusable inputs. A skipped unchan
 
 ## 10. Tier-2 metrics + panels
 assessment object in metrics JSON string; consumed by GC. No numeric panels.
+Customer-only themes cite response messages; sender-level sample metadata prevents
+repeat messages inflating confidence. Public-origin document counts remain separate.
+Combined candidate inference discloses source families and non-generalizability.
 
 ## 11. Engine/model + budget
 Codex default, one invocation, timeout 600 seconds, retry_transient default 1. Several thousand tokens per changed digest, zero on unchanged inputs.

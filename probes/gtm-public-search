@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+# probe: gtm-public-search
+# probe-timeout-s: 120
+# probe-writes: none
+# probe-output: json
+# probe-reads: existing ~/.codex/config.toml Tavily credential; four fixed public searches
+"""Bounded public search. No credential values or provider errors leave this process."""
+
+import hashlib
+import html
+import ipaddress
+import json
+import re
+import signal
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qsl, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+ENDPOINT = "https://api.tavily.com/search"
+QUERIES = (
+    ("public_reddit", "codebase context retrieval AI coding agents problems"),
+    ("public_reddit", "MCP tools code search coding agents developer experience"),
+    ("public_web", "codebase context retrieval AI coding agents limitations"),
+    ("public_web", "MCP code intelligence tools coding agents developer experience"),
+)
+SUCCESS = {"ok"}
+ERRORS = {
+    "config",
+    "auth",
+    "quota",
+    "http",
+    "network",
+    "timeout",
+    "size_limit",
+    "malformed",
+    "transport",
+    "output_limit",
+}
+MAX_OUTPUT = 65536
+
+
+class CollectionError(Exception):
+    pass
+
+
+class DeadlineExpired(BaseException):
+    """Escape per-source handling when the whole probe expires."""
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise CollectionError("http")
+
+
+def key_from_config(path=None):
+    # Exact existing field only; no environment fallback or config crawling.
+    try:
+        import tomllib
+
+        path = path or Path.home() / ".codex/config.toml"
+        with path.open("rb") as stream:
+            data = tomllib.load(stream)
+        key = data["mcp_servers"]["tavily"]["env"]["TAVILY_API_KEY"]
+        if not isinstance(key, str) or not key.strip() or any(c.isspace() for c in key):
+            raise ValueError
+        return key
+    except (ImportError, OSError, ValueError, KeyError, TypeError):
+        raise CollectionError("config") from None
+
+
+def safe_url(value):
+    if (
+        not isinstance(value, str)
+        or len(value) > 1024
+        or re.search(r"[\s\\\x00-\x1f]", value)
+    ):
+        return False
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+        if any(
+            re.search(
+                r"token|key|secret|password|signature|authorization", k, re.IGNORECASE
+            )
+            for k, _ in parse_qsl(parsed.query)
+        ):
+            return False
+        if (
+            parsed.scheme != "https"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in (None, 443)
+            or "." not in host
+            or host.endswith(
+                (
+                    ".local",
+                    ".internal",
+                    ".localhost",
+                    ".test",
+                    ".invalid",
+                    ".example",
+                    ".arpa",
+                    ".ts.net",
+                )
+            )
+        ):
+            return False
+        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", host):
+            return False
+        try:
+            ipaddress.ip_address(host)
+            return False
+        except ValueError:
+            return not all(c.isdigit() or c == "." for c in host)
+    except ValueError:
+        return False
+
+
+def excerpt(value):
+    text = re.sub(r"<[^>]*>", " ", html.unescape(str(value or "")))
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
+    text = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[address]", text)
+    text = re.sub(r"(?<!\w)(?:/?u/|@)[\w-]+", "[handle]", text)
+    return " ".join(text.split()[:22])[:300]
+
+
+def timestamp(value):
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return value
+    except ValueError:
+        return None
+
+
+def source_spec(family, query, now):
+    return {
+        "source_type": family,
+        "query": query,
+        "method": "search",
+        "provider": "tavily",
+        "window": {
+            "start_date": (now - timedelta(days=90)).date().isoformat(),
+            "end_date": now.date().isoformat(),
+            "days": 90,
+        },
+        "limit": 5,
+        "status": "ok",
+        "empty": True,
+        "error": None,
+        "records": [],
+        "result_count": 0,
+        "rejected_count": 0,
+        "duplicate_count": 0,
+        "unique_count": 0,
+    }
+
+
+def failed_sources(now, error):
+    sources = [source_spec(f, q, now) for f, q in QUERIES]
+    for source in sources:
+        source.update(
+            status="error", empty=False, error=error if error in ERRORS else "malformed"
+        )
+    return sources
+
+
+def fetch_search(source, key, opener=None):
+    body = {
+        "query": source["query"],
+        "max_results": 5,
+        "search_depth": "basic",
+        "auto_parameters": False,
+        "include_answer": False,
+        "include_raw_content": False,
+        "include_images": False,
+        "start_date": source["window"]["start_date"],
+        "end_date": source["window"]["end_date"],
+    }
+    if source["source_type"] == "public_reddit":
+        body["include_domains"] = ["reddit.com"]
+    else:
+        body["exclude_domains"] = ["reddit.com", "github.com"]
+    request = Request(
+        ENDPOINT,
+        data=json.dumps(body).encode(),
+        headers={
+            "Authorization": "Bearer " + key,
+            "Content-Type": "application/json",
+            "User-Agent": "Maguyva-GTM-research/1.0",
+        },
+    )
+    with (opener or build_opener(NoRedirect()).open)(request, timeout=20) as response:
+        raw = response.read(1_000_001)
+    if len(raw) > 1_000_000:
+        raise CollectionError("size_limit")
+    return json.loads(raw)
+
+
+def error_category(exc):
+    if isinstance(exc, CollectionError):
+        return str(exc) if str(exc) in ERRORS else "malformed"
+    if isinstance(exc, HTTPError):
+        # Close the body without reading/logging it; avoid destructor diagnostics.
+        exc.close()
+        return (
+            "auth"
+            if exc.code in (401, 403)
+            else "quota"
+            if exc.code in (429, 432, 433)
+            else "http"
+        )
+    if isinstance(exc, TimeoutError) or (
+        isinstance(exc, URLError) and isinstance(exc.reason, TimeoutError)
+    ):
+        return "timeout"
+    if isinstance(exc, (OSError, URLError)):
+        return "network"
+    return "malformed"
+
+
+def normalize_results(source, payload, stamp, seen):
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        raise CollectionError("malformed")
+    rows = payload["results"][: source["limit"]]
+    source["result_count"] = len(rows)
+    for row in rows:
+        url = row.get("url") if isinstance(row, dict) else None
+        if not safe_url(url):
+            source["rejected_count"] += 1
+            continue
+        host = urlsplit(url).hostname
+        reddit = host == "reddit.com" or host.endswith(".reddit.com")
+        github = host == "github.com" or host.endswith(".github.com")
+        if (source["source_type"] == "public_reddit" and not reddit) or (
+            source["source_type"] == "public_web" and (reddit or github)
+        ):
+            source["rejected_count"] += 1
+            continue
+        if url in seen:
+            source["duplicate_count"] += 1
+            continue
+        seen.add(url)
+        source["records"].append(
+            {
+                "id": "pub-" + hashlib.sha256(url.encode()).hexdigest()[:16],
+                "url": url,
+                "observed_at": stamp,
+                "published_at": timestamp(row.get("published_date")),
+                # Title shares the same single excerpt budget; never emitted separately.
+                "text": excerpt(
+                    str(row.get("title") or "") + " " + str(row.get("content") or "")
+                ),
+            }
+        )
+    source["unique_count"] = len(source["records"])
+    source["status"] = "ok"
+    source["empty"] = not rows
+    if rows and source["rejected_count"] == len(rows):
+        source.update(status="error", error="malformed")
+
+
+def collect(now=None, fetch=None, config_path=None):
+    now = now or datetime.now(timezone.utc)
+    try:
+        key = key_from_config(config_path)
+    except CollectionError:
+        return {
+            "schema_version": 1,
+            "generated_at": now.isoformat(),
+            "sources": failed_sources(now, "config"),
+        }
+    sources, seen = [], set()
+    for family, query in QUERIES:
+        source = source_spec(family, query, now)
+        try:
+            payload = (fetch or fetch_search)(source, key)
+            payload = json.loads(json.dumps(payload).replace(key, "[credential]"))
+            normalize_results(source, payload, now.isoformat(), seen)
+        except (OSError, ValueError, TypeError, AttributeError, CollectionError) as exc:
+            source.update(
+                status="error",
+                empty=False,
+                error=error_category(exc),
+                records=[],
+                result_count=0,
+                unique_count=0,
+                duplicate_count=0,
+                rejected_count=0,
+            )
+        sources.append(source)
+    return {"schema_version": 1, "generated_at": now.isoformat(), "sources": sources}
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv == ["--check"]:
+        try:
+            key_from_config()
+        except CollectionError:
+            print("unmet: Tavily configuration")
+            return 1
+        print("ok: Tavily configuration available")
+        return 0
+    if argv:
+        print("refused: unexpected arguments", file=sys.stderr)
+        return 64
+
+    def deadline(signum, frame):
+        raise DeadlineExpired
+
+    signal.signal(signal.SIGALRM, deadline)
+    signal.alarm(105)
+    try:
+        result = collect()
+    except DeadlineExpired:
+        now = datetime.now(timezone.utc)
+        result = {
+            "schema_version": 1,
+            "generated_at": now.isoformat(),
+            "sources": failed_sources(now, "timeout"),
+        }
+    finally:
+        signal.alarm(0)
+    print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    # Source failures are data. The merged precheck decides all-source failure.
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -22,12 +22,14 @@ metrics MUST be a JSON STRING containing this object:
       "observations":[{"id":"COPY record.id", "query":"COPY source.query",
         "url":"COPY record.url", "observed_at":"COPY record.observed_at",
         "theme":"Concrete theme", "polarity":"support|contradict|neutral",
+        "sentiment":"positive|negative|mixed|neutral|unknown",
+        "sentiment_rationale":"Short explanation grounded only in this excerpt",
         "finding":"Paraphrase what the collected excerpt actually supports",
         "implication":"Explain the inference for positioning"}],
       "changes":["New evidence or unresolved gap"],
       "next_tests":["One way to test an implication"]}}
 
-At most 12 observations (choose relevant records, do not fill quotas), 5 changes,
+At most 18 observations (choose relevant records, do not fill quotas), 5 changes,
 5 next tests. Each observation ID must occur once and match a collected record.
 Copy query, url and observed_at exactly. Do not infer sentiment from a bare
 technical issue title. Omit observations when the excerpt supports no useful
@@ -36,6 +38,19 @@ more than 25 words from a source. No emails, names, handles or author identities
 Use status warn for partial source failures, alert if all sources failed, otherwise
 ok. report_markdown is a concise readable version with source links. findings
 may be an empty array when there is nothing actionable.
+
+Select across public_reddit, public_web and public_github when relevant evidence
+exists. Interpret these families separately in report_markdown with observation
+IDs and source links. Never invent observations to fill a family quota. Preserve
+coverage gaps and successful empty searches; search snippets are not full threads.
+Require sentiment and a short sentiment_rationale on every observation. They describe only the cited excerpt's
+expressed evaluation of the tool or experience, not customer sentiment or the
+market. Use unknown when the excerpt cannot establish an evaluation, especially
+bare technical issue titles; neutral is an explicitly non-evaluative account.
+Polarity separately describes support for the positioning hypothesis. Public
+evidence never counts as customer survey/mail responses or customer validation.
+Per-query and family counts in inputs are authoritative; do not double-count
+URLs found by multiple queries. Do not add public_themes to the metrics schema.
 
 ## Findings prompt contract
 

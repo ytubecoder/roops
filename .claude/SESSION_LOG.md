@@ -1,5 +1,30 @@
 # Session Log
 
+## 2026-10-06 — Source-separated Reddit/web GTM research (B-33)
+
+- Added `gtm-public-search`, a reviewed llm-only probe using the existing Tavily
+  credential against a fixed official endpoint. Two Reddit and two wider-web
+  basic searches, top five each, 90-day requested window, 20s/1MB request bounds,
+  105s internal deadline, 120s probe timeout; no redirects or credential export.
+- Merged results with four existing 30-day GitHub searches. Fixed queries,
+  validated HTTPS URL identities, one 22-word/300-character excerpt budget,
+  origin-labelled counts, duplicate/empty/error distinctions, and a 64KiB merged
+  output cap. All-source failure stops interpretation; partial success is explicit.
+- Weekly model adds document-level sentiment with rationale, keeping unknown
+  when snippets do not support an evaluation. Daily synthesis uses distinct-sender
+  metadata and customer-only themes, never pooled customer/public denominators.
+  Model permissions and schedules are unchanged.
+- Matching probe hashes and requirements passed on firstparty before supervised
+  run `20261006T082634Z-gtm-research-27603a`. Eight queries succeeded, one empty;
+  35 unique documents collected (Reddit 5/web 10/GitHub 20), 15 selected (3/2/10).
+  GC accepted provenance, source counts and snippets without import errors.
+- Daily run `20261006T083302Z-gtm-synthesis-50cd99` was accepted after GC excluded
+  one explicitly recorded test-only reply: 3 customer responses, 15 public
+  documents and 25 historical observations remain distinct. Approval unchanged.
+- Verification: 20 hermetic GTM tests, Ruff, shell syntax, OpenSpec/loop validation,
+  live collection/import and enabled/active firstparty timers. No timer reinstall,
+  harness changes, new auth, mail sends or campaign actions. B-33 is in review.
+
 ## 2026-10-05 — GTM learning loops and reliable feedback publication (B-32)
 
 - Converted `gtm-synthesis` from baseline watchdog to daily changed-evidence agent. Precheck compares anonymized input content against GC's accepted hash, not an unchecked model checkpoint. Added read-only `gtm-learning-read`; permission axes stay at the report-only floor.

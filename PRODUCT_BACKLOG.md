@@ -79,6 +79,9 @@ Priority: medium | Status: for-review
 ### B-32: GTM daily evidence learning and weekly public research
 Priority: high | Status: for-review
 
+### B-33: GTM wider-web and Reddit evidence with source-family coverage
+Priority: high | Status: for-review
+
 ## Backlog
 
 ### B-03: Ads loops phase 1 — RESCOPE: only the GC "run all five" button is left

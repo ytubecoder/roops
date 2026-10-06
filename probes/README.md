@@ -33,6 +33,7 @@ Shipped probes (plus test-only `echo-test`):
 | `ticket-add` | `$TICKETS_CLI`, `probes/ticket-add.allow` | one ticket via tickets-cli add |
 | `gtm-refresh` | GC historical baseline and research intake | merge private snapshots, preserve approval |
 | `gtm-learning-read` | sanitized GC evidence digest | none |
+| `gtm-public-search` | existing Tavily credential in local Codex config; four fixed bounded Reddit/wider-web searches | none; no credential export |
 | `research-replies-read` | read-only mailbox and outreach CSVs | UID-deduplicated CSV/SQLite intake, feedback, collection health; cursor only after successful publication; `no-record` skips writes |
 | `drip-tick` | growth-console venv + research DB, mailbox@ via research-replies-read (own cursor), `DRIP_SEND_ENABLED` | **sends drip emails** for campaigns turned ON in GC `/drips`; drip ledger rows; send-log rows (grant 2026-10-05, gates live in growth-console) |
 

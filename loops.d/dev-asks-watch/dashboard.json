@@ -1,0 +1,5 @@
+{"panels":[
+  {"title":"Awaiting us","metric":"asks.awaiting_us","type":"number","unit":"asks","direction":"higher_is_worse","thresholds":{"warn":1,"alert":3},"missing":"hold"},
+  {"title":"Open asks","metric":"asks.open","type":"number","unit":"asks","direction":"neutral","missing":"hold"},
+  {"title":"Changes per run","metric":"asks.changed","type":"trend","window_days":30,"missing":"gap"}
+]}

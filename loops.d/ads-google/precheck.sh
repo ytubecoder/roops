@@ -212,10 +212,13 @@ if isinstance(camp, dict):
     cpa = camp.get("cpa") or {}
     print(f"- CPA readable={cpa.get('readable')} conversions_sitewide={cpa.get('conversions_sitewide')} "
           f"intent_sitewide={cpa.get('intent_sitewide')} (event={cpa.get('conversion_event')})")
-    print("- NOTE: the budget GUARD binds on COMMITTED basis first (monthly_cap), "
-          "then the google-network ACTUAL MTD-spend gate; a positive-spend order "
-          "may be refused even with paper headroom. Any positive-spend action "
-          "brief MUST state committed-vs-actual basis.")
+    print("- NOTE (budget.py, reworked 2026-07-21): COMMITTED = order amounts journaled "
+          "THIS calendar month only; $0 with positive actual-MTD is normal when every "
+          "launch was journaled in an earlier month and is NOT an unreconciled ledger. "
+          "Committed over its ceiling only WARNS; the hard refusals are ACTUAL network "
+          "MTD at/over its cap and ACTUAL monthly spend at/over monthly_cap. No cap "
+          "pauses a serving campaign. Any positive-spend action brief MUST state "
+          "committed-vs-actual basis.")
 else:
     print("- campaigns MISSING — no headroom read.")
 print()

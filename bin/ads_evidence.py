@@ -121,7 +121,7 @@ def decision_digest(scoreboard, variants=None):
                 if len(values) == 1:
                     value = decided[0][1].get(key)
                     if key == "attribution_age_s" and isinstance(value, (int, float)):
-                        value = int(round(value))
+                        value = round(value)
                     shared[key] = value
         # TARGET DEFAULTS: most common value per non-identity target field.
         counts = {}
@@ -178,7 +178,7 @@ def decision_digest(scoreboard, variants=None):
                     if value == "; ".join(str(b) for b in (d.get("blockers") or [])):
                         continue
                 elif key == "attribution_age_s" and isinstance(value, (int, float)):
-                    value = int(round(value))
+                    value = round(value)
                 parts.append(f"{key}={_scalar(value)}")
             targets = "; ".join(
                 _compact_target(t, defaults) for t in (d.get("targets") or [])

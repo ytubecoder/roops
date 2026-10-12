@@ -218,9 +218,12 @@ braces — write it exactly as the schema requires.
      verifiably spends), say so IN this block.
   3. **Serving state** (1–2 lines): google-intl-en-jul26 ENABLED/PAUSED as
      the digest states it + one delivery word (serving / starved / dark);
-     confirm ja/ko remain PAUSED. Include the standing caveat: the digest
-     carries NO per-geo breakdown, so the 13-geo screen reads only in
-     aggregate.
+     confirm ja/ko remain PAUSED. Then a **per-geo line per selected geo**
+     from the digest's `## Per-geo delivery` block (impressions, clicks,
+     spend, signups/syncs, in-scope campaign share) — name any selected geo
+     that is starved (no row / zero delivery) or that dominates spend. Only
+     if that block is MISSING does the old caveat apply (say so, and raise
+     the input-gap action).
   4. **Variant table** — g9–g12: id, impressions, clicks, CTR, CPC, spend,
      evaluator verdict, verbatim from the digest rows.
      Follow the table with a concise **Search intent** note: snapshot time and

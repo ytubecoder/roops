@@ -321,7 +321,9 @@ Default `--from loops.d`; `--trigger manual`.
     harness-error. The live `bin/probe --check` path is not used here (config-only).
 4. **Precheck** (`precheck.sh`, if present and executable): run with the same process-group timeout
    discipline as the engine, capped at `min(timeout_s, 300)`. stdout captured to
-   `state/runs/<id>/precheck.out` with a **64 KiB cap** (truncate + append a truncation marker);
+   `state/runs/<id>/precheck.out` with a **64 KiB cap by default** — `precheck_cap_bytes` in
+   loop.conf raises it per loop, hard ceiling 256 KiB (Amendment 3) — (truncate + append a
+   truncation marker naming the cap in bytes);
    reject binary output (NUL byte → treat as failed precheck); run a redaction pass (§4.4).
    - `type=agent`: exit 0 **and empty stdout** → `runner_status=skipped-precheck`, loop_status
      `ok`, **amber** on the dashboard, write heartbeat `ok=1`, finish, exit 0. Non-empty stdout →
@@ -504,6 +506,7 @@ Python, and sourcing arbitrary files is a code-execution footgun):
 | `enabled` | no | `true` \| `false` | `true` | false ⇒ only `--trigger manual` runs |
 | `retention_days` | no | int 1–3650 | `30` | reports + run artifacts |
 | `retry_transient` | no | int 0–3 | `1` | in-run retries for adapter exit 12 ONLY (§4.6) |
+| `precheck_cap_bytes` | no | int 4096–262144 | `65536` | precheck stdout cap (§4 step 4); Amendment 3 — 2026-10-12: a loop whose deterministic digest legitimately outgrows 64 KiB raises its own ceiling rather than losing its tail blocks to the truncation marker (ads-google ran 228 KB for a month; see ADG-INP-29). The page-render log cap stays 64 KiB. |
 | `perm_fs_write` | no | `none` \| `report_only` \| `workdir` | `report_only` | §5.2 |
 | `perm_network` | no | `none` \| `full` | `none` | §5.2 |
 | `perm_local_exec` | no | `none` \| `allowlist` \| `full` | `none` | §5.2 |

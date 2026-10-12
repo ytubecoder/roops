@@ -54,14 +54,79 @@ class AdsEvidenceTests(unittest.TestCase):
         }
         text = "\n".join(decision_digest(board, {"g4"}))
         for part in (
-            '"decision_id": "abc"',
-            '"actionable": false',
-            "silent-search",
-            "old-youtube",
+            "- g4: id=abc",
+            "actionable=false",
+            ":silent-search@",
+            ":old-youtube@",
             "reference cohort unavailable",
         ):
             self.assertIn(part, text)
         self.assertNotIn("- g9:", text)
+
+    def test_shared_values_print_once_and_rows_stay_distinct(self):
+        # Compact form: identical keys hoist into SHARED, blockers dedupe into a
+        # legend, targets print only the fields that differ from the defaults —
+        # and every row still carries its own decision id and targets.
+        common = {
+            "version": 2,
+            "action": "unproven",
+            "actionable": False,
+            "objective": "first_sync_completed",
+            "blockers": ["no validated linkage cohort"],
+            "reason": "no validated linkage cohort",
+            "window": {"start_ms": 1, "end_ms": 2},
+        }
+        rows = [
+            {
+                "variant_id": "g17",
+                "evaluator": dict(
+                    common,
+                    decision_id="d17",
+                    targets=[
+                        {
+                            "leg": "primary",
+                            "ad_group_id": "A",
+                            "campaign_id": "C1",
+                            "state": "active",
+                            "evidence_state": "observed",
+                        }
+                    ],
+                ),
+            },
+            {
+                "variant_id": "g18",
+                "evaluator": dict(
+                    common,
+                    decision_id="d18",
+                    blockers=["no validated linkage cohort", "ad group B is paused"],
+                    reason="no validated linkage cohort; ad group B is paused",
+                    targets=[
+                        {
+                            "leg": "primary",
+                            "ad_group_id": "B",
+                            "campaign_id": "C1",
+                            "state": "paused",
+                            "evidence_state": "observed",
+                        }
+                    ],
+                ),
+            },
+        ]
+        text = "\n".join(decision_digest({"networks": {"google": {"rows": rows}}}))
+        self.assertEqual(text.count("first_sync_completed"), 1)  # hoisted into SHARED
+        self.assertEqual(text.count("no validated linkage cohort"), 1)  # legend once
+        self.assertIn("B1: no validated linkage cohort", text)
+        self.assertIn("B2: ad group B is paused", text)
+        self.assertIn("- g17: id=d17 blockers=B1 ", text)
+        self.assertIn("- g18: id=d18 blockers=B1,B2 ", text)
+        self.assertIn("primary:A@C1", text)
+        self.assertIn("primary:B@C1", text)
+        self.assertNotIn("reason=", text)  # equal to joined blockers → omitted
+        # evidence_state is identical everywhere → default, not repeated per target
+        self.assertIn('"ev":"observed"', text)
+        self.assertNotIn("ev=observed", text)
+        # state differs between the two targets → one of them must spell it out
+        self.assertTrue("st=active" in text or "st=paused" in text)
 
     def test_no_data_is_not_zero_performance(self):
         self.assertIn("INPUT GAP", "\n".join(decision_digest(None)))
@@ -187,8 +252,9 @@ class PrecheckIntegrationTests(unittest.TestCase):
                         check=False,
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertIn('"decision_id": "stable-proof"', result.stdout)
-                    self.assertIn('"ad_group_id": "silent"', result.stdout)
+                    self.assertIn("id=stable-proof", result.stdout)
+                    self.assertIn(":silent@", result.stdout)
+                    self.assertNotIn("[TRUNCATED", result.stdout)
                     self.assertNotIn("EVAL-ELIGIBLE", result.stdout)
             evidence_requests = [
                 p for p in requests if "scoreboard" in p or "campaigns" in p

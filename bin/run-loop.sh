@@ -48,7 +48,8 @@ chmod 700 "$TMPDIR" 2>/dev/null || true
 ENV_FILE_KEYS=""
 
 PRECHECK_MAX_TIMEOUT_S=300
-PRECHECK_CAP_BYTES=65536
+PRECHECK_CAP_BYTES=65536   # default; loop.conf precheck_cap_bytes overrides (Amendment 3, 4 KiB–256 KiB)
+RENDER_LOG_CAP_BYTES=65536
 LOCK_WAIT_POLL_S=0.05
 LOCK_WAIT_MAX_MS=5000
 ENGINE_TERM_GRACE_S=10
@@ -330,6 +331,11 @@ CONF_ENABLED="$(conf_get enabled)"
 CONF_SCHEDULE="$(conf_get schedule)"
 CONF_RETENTION_DAYS="$(conf_get retention_days)"
 CONF_RETRY_TRANSIENT="$(conf_get retry_transient)"
+CONF_PRECHECK_CAP_BYTES="$(conf_get precheck_cap_bytes)"
+case "$CONF_PRECHECK_CAP_BYTES" in
+  ''|*[!0-9]*) ;;   # loopconf.py already range-checked; a blank/odd value keeps the default
+  *) PRECHECK_CAP_BYTES="$CONF_PRECHECK_CAP_BYTES" ;;
+esac
 CONF_PERM_FS_WRITE="$(conf_get perm_fs_write)"
 CONF_PERM_NETWORK="$(conf_get perm_network)"
 CONF_PERM_LOCAL_EXEC="$(conf_get perm_local_exec)"
@@ -679,7 +685,7 @@ if [ -f "$PRECHECK_SH" ] && [ -x "$PRECHECK_SH" ]; then
   [ -f "$raw_file" ] && size=$(wc -c < "$raw_file" | tr -d ' ')
   if [ "$size" -gt "$PRECHECK_CAP_BYTES" ]; then
     dd if="$raw_file" of="$OUT_DIR/precheck.out" bs=1 count="$PRECHECK_CAP_BYTES" 2>/dev/null
-    printf '\n...[TRUNCATED: precheck output exceeded 64KiB cap]\n' >> "$OUT_DIR/precheck.out"
+    printf '\n...[TRUNCATED: precheck output exceeded %s-byte cap]\n' "$PRECHECK_CAP_BYTES" >> "$OUT_DIR/precheck.out"
   else
     cp "$raw_file" "$OUT_DIR/precheck.out" 2>/dev/null || : > "$OUT_DIR/precheck.out"
   fi
@@ -1072,8 +1078,8 @@ finish_render_log() {
   if [ -f "$raw" ]; then
     size=$(wc -c < "$raw" | tr -d ' ') || size=0
   fi
-  if [ "$size" -gt "$PRECHECK_CAP_BYTES" ]; then
-    dd if="$raw" of="$RENDER_LOG" bs=1 count="$PRECHECK_CAP_BYTES" 2>/dev/null || \
+  if [ "$size" -gt "$RENDER_LOG_CAP_BYTES" ]; then
+    dd if="$raw" of="$RENDER_LOG" bs=1 count="$RENDER_LOG_CAP_BYTES" 2>/dev/null || \
       { : > "$RENDER_LOG"; } 2>/dev/null || true
     printf '\n...[TRUNCATED: render log exceeded 64KiB cap]\n' >> "$RENDER_LOG" || true
   else

@@ -645,6 +645,47 @@ EOF
 }
 
 # ===========================================================================
+# precheck stdout cap: 64 KiB default, per-loop precheck_cap_bytes override
+# (Amendment 3 -- 2026-10-12)
+# ===========================================================================
+
+test_precheck_cap_default_and_override() {
+  reset_fake_env
+  local root; root="$(new_hermetic_root)"
+  local fixture="$root/fixture-cap.json"
+  write_contract_fixture "$fixture" ok '[]'
+  export FAKE_CONTRACT_FILE="$fixture"
+  # 100 KiB of precheck output with a sentinel at the very end.
+  local big_precheck
+  big_precheck='#!/usr/bin/env bash
+head -c 102400 /dev/zero | tr "\0" "x"
+printf "\nTAIL-SENTINEL\n"
+exit 0'
+
+  local dir1; dir1="$(make_loop "$root" loopcapdef agent)"
+  printf '%s\n' "$big_precheck" | make_precheck "$dir1"
+  run_runner "$root" loopcapdef
+  local run1; run1="$(last_run_field "$root" loopcapdef run_id)"
+  local out1="$root/state/runs/$run1/precheck.out"
+  assert_file_exists "cap-default: precheck.out written" "$out1"
+  assert_contains "cap-default: truncation marker names the 64 KiB cap" "$(tail -c 200 "$out1")" "TRUNCATED: precheck output exceeded 65536-byte cap"
+  assert_not_contains "cap-default: tail sentinel lost to the cap" "$(cat "$out1")" "TAIL-SENTINEL"
+
+  local dir2; dir2="$(make_loop "$root" loopcapbig agent "precheck_cap_bytes=131072")"
+  printf '%s\n' "$big_precheck" | make_precheck "$dir2"
+  run_runner "$root" loopcapbig
+  local run2; run2="$(last_run_field "$root" loopcapbig run_id)"
+  local out2="$root/state/runs/$run2/precheck.out"
+  assert_file_exists "cap-override: precheck.out written" "$out2"
+  assert_not_contains "cap-override: no truncation marker" "$(tail -c 200 "$out2")" "TRUNCATED"
+  assert_contains "cap-override: tail sentinel survives" "$(tail -c 200 "$out2")" "TAIL-SENTINEL"
+  local composed2; composed2="$(cat "$root/state/runs/$run2/prompt.composed.md" 2>/dev/null || true)"
+  assert_contains "cap-override: full precheck reaches the composed prompt" "$composed2" "TAIL-SENTINEL"
+  unset FAKE_CONTRACT_FILE
+  rm -rf "$root"
+}
+
+# ===========================================================================
 # start-of-run non-blocking dashboard regen (Amendment 2 -- 2026-07-30)
 # ===========================================================================
 
@@ -893,6 +934,7 @@ test_dry_run
 
 echo "== bin/run-loop.sh: prompt composition =="
 test_prompt_composition
+test_precheck_cap_default_and_override
 
 echo "== bin/run-loop.sh: start-of-run non-blocking dashboard regen =="
 test_start_regen_never_blocks_or_fails_when_dashboard_lock_held

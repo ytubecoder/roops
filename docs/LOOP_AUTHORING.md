@@ -163,7 +163,12 @@ and its intended panel type.
 **11. Engine/model + budget.** `engine=codex|claude`, `model=` (blank for engine default), a rough
 expected tokens/run (order of magnitude is fine — "a few hundred tokens" vs. "tens of thousands"
 matters more than precision), `retry_transient` (default 1, max 3), `timeout_s` (30–7200, default
-900 — pick something proportional to the actual work, not the ceiling).
+900 — pick something proportional to the actual work, not the ceiling). The precheck digest is
+capped at 64 KiB by default; if it is legitimately bigger (measure it: `wc -c` on a real run's
+`precheck.out`, and look for the `[TRUNCATED` marker at its tail) first make it compact — shared
+values once, legends instead of repeated strings, authoritative blocks before bulky evidence —
+and only then raise `precheck_cap_bytes` (max 262144). A truncated digest silently drops the
+blocks at the end, which is exactly where the authoritative ones usually sit.
 
 **12. Page output** — does this loop need a full report page (`docs/REPORT_PAGES.md`)?
 If yes: which page class (`snapshot` | `findings`), which data lands on it, and what its

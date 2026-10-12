@@ -282,7 +282,12 @@ gates refuse (verified against growth-console/console/ads/budget.py);
 condition persists (reserved failure spellings unchanged).
 Loop-specific: §10's `scope.variants` "12 today" was ads-google clone residue —
 intl's in-scope count is 4 (g9–g12). Serving state must confirm ja/ko PAUSED
-and carry the standing no-per-geo-breakdown caveat every run.
+and carry the standing no-per-geo-breakdown caveat every run — **superseded
+2026-10-12:** precheck.sh now prints the scoreboard's `geo.rows` (all selected
+geos, this loop's campaign share per country) under `## Per-geo delivery`; the
+caveat applies only when that block is missing. The rows were always in the
+scoreboard API; the digest simply never printed them (ADI-INP-04, open since
+2026-07-31).
 
 
 ## Amendment September 7, 2026 — versioned conversion evidence (B-29)

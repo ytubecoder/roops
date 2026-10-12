@@ -177,6 +177,20 @@ class TestLoopConfParsing(unittest.TestCase):
         _conf, errors = loopconf.parse(path)
         self.assertTrue(any("retry_transient" in e for e in errors))
 
+    def test_precheck_cap_bytes_default_and_range(self):
+        # Amendment 3: default 64 KiB, per-loop override, hard ceiling 256 KiB.
+        conf, errors = loopconf.parse(self.write(MINIMAL_VALID))
+        self.assertEqual(errors, [])
+        self.assertEqual(conf["precheck_cap_bytes"], 65536)
+        conf, errors = loopconf.parse(
+            self.write(MINIMAL_VALID + "precheck_cap_bytes=131072\n")
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(conf["precheck_cap_bytes"], 131072)
+        for bad in ("precheck_cap_bytes=1024\n", "precheck_cap_bytes=999999\n"):
+            _conf, errors = loopconf.parse(self.write(MINIMAL_VALID + bad))
+            self.assertTrue(any("precheck_cap_bytes" in e for e in errors), bad)
+
     def test_perm_fs_write_enum(self):
         content = MINIMAL_VALID + "perm_fs_write=bogus\n"
         path = self.write(content)
@@ -544,9 +558,7 @@ class TestRequires(unittest.TestCase):
         return loopconf.parse(p)
 
     def test_requires_parse_ok(self):
-        conf, errors = self._parse_with(
-            'requires="bin:gh, probe:av-scan, bin:gh"'
-        )
+        conf, errors = self._parse_with('requires="bin:gh, probe:av-scan, bin:gh"')
         self.assertEqual(errors, [])
         self.assertEqual(conf["requires"], ["bin:gh", "probe:av-scan"])
 

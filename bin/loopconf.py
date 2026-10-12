@@ -77,6 +77,17 @@ FIELDS = {
         "max": 3,
         "default": 1,
     },
+    # Amendment 3 (2026-10-12): per-loop precheck stdout cap. The 64 KiB
+    # default stays; a loop whose deterministic digest legitimately outgrows
+    # it (ads-google: 70+ in-scope variants) raises its own ceiling instead of
+    # silently losing its authoritative tail blocks to the truncation marker.
+    "precheck_cap_bytes": {
+        "required": False,
+        "type": "int",
+        "min": 4096,
+        "max": 262144,
+        "default": 65536,
+    },
     "perm_fs_write": {
         "required": False,
         "type": "enum",

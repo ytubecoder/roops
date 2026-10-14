@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # competitor-watch/precheck.sh — deterministic gathering step (script->agent
 # pattern, docs/INTERFACES.md §4.1/§6.2). Fetches raw signal for all six
-# watches from gc-actions/specs/B-27.md's design (watch 5, Ref Plans depth
+# watches from gc-actions/specs/B-27.md's design (watch 5, ref.tools — Ref Plans depth
 # creep, added after that design's original build — see SPEC.md); the engine
 # only interprets the digest below, never fetches anything itself
 # (perm_network=none for the engine — this script is unsandboxed and does
@@ -41,37 +41,65 @@ CURL="curl -sL -m 20 -A"
 echo "# competitor-watch precheck — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo
 
-# Strips <script>/<style> blocks and volatile Cloudflare anti-bot noise
-# (challenge tokens, cdn-cgi beacon URLs — both rotate on every single fetch
-# regardless of whether the page's real content changed) before caching, so
-# the diff reflects actual page content, not CDN churn. Found by hand-testing
-# this precheck against sourcegraph.com/pricing, which is Cloudflare-fronted.
+# Normalization v2 (2026-10-15). v1 only stripped <script>/<style> and CDN
+# noise and cached the remaining HTML — on minified sites (cursor.com, the
+# Mintlify docs at docs.ref.tools) that is ONE line of 60-230 KB, so a single
+# changed line blew the 64 KiB precheck cap and the 2026-10-01 run lost
+# watches 3-6 to the truncation marker ("report truncated before watches 3-6").
+# v2 caches visible TEXT: tags become line breaks, entities are decoded, runs
+# of whitespace collapse, blank lines drop. Diffs are then a few short lines
+# of prose per real change, and each diff is additionally capped in bytes
+# (DIFF_CAP) with an explicit truncation note. The full fresh copies still
+# land in inputs/ for anyone who needs the raw page.
+NORM_VERSION=2
+DIFF_CAP=5000
 normalize_html () {
   perl -0pe '
     s/<script\b[^>]*>.*?<\/script>//gis;
     s/<style\b[^>]*>.*?<\/style>//gis;
+    s/<noscript\b[^>]*>.*?<\/noscript>//gis;
+    s/<!--.*?-->//gs;
+    s/<(title|meta)\b([^>]*)>/\n[$1$2]\n/gi;   # keep <title>/<meta> attrs: the only copy on JS-shell pages
+    s/<[^>]+>/\n/g;
+    s/&nbsp;/ /g; s/&amp;/&/g; s/&lt;/</g; s/&gt;/>/g; s/&quot;/"/g; s/&#39;/'"'"'/g; s/&#x27;/'"'"'/g;
     s/[?&]?id=[A-Za-z0-9._-]{20,}//g;
-    s/cdn-cgi\/[^"'\'' ]*//g;
+    s/cdn-cgi\/[^"'\'' \n]*//g;
     s/\br=.[a-f0-9]{16}.,t=.[A-Za-z0-9=]+./r=REDACTED,t=REDACTED/g;
+    s/[ \t\r\f\x{00a0}]+/ /g;
+    s/^ +| +$//mg;
+    s/\n{2,}/\n/g;
   ' "$1" 2>/dev/null || cat "$1"
 }
+
+# One-time baseline reset when the normalization version changes: old-format
+# cache files would diff against new-format text as "everything changed".
+if [ ! -f "$CACHE/.norm-v$NORM_VERSION" ]; then
+  echo "NOTE: cache normalization is now v$NORM_VERSION (text, not HTML) — all page baselines are"
+  echo "re-established THIS run; no page diff below is a real change. Star counts are unaffected."
+  rm -f "$CACHE"/*.txt
+  touch "$CACHE/.norm-v$NORM_VERSION"
+  echo
+fi
 
 fetch_and_diff () {
   # $1 = cache key (filename-safe), $2 = url, $3 = human label
   local key="$1" url="$2" label="$3"
   local cache_file="$CACHE/${key}.txt"
-  local fresh_file="$INPUTS/${key}.txt"
-  local fresh_norm="$INPUTS/${key}.norm.txt"
+  local fresh_file="$INPUTS/${key}.html"
+  local fresh_norm="$INPUTS/${key}.txt"
   if $CURL "$UA" "$url" -o "$fresh_file" --fail; then
     if [ -s "$fresh_file" ]; then
-      echo "## $label — fetched OK ($(wc -c <"$fresh_file" | tr -d ' ') bytes)"
+      echo "## $label — fetched OK ($(wc -c <"$fresh_file" | tr -d ' ') bytes raw, $(normalize_html "$fresh_file" | wc -c | tr -d ' ') bytes as text)"
       normalize_html "$fresh_file" > "$fresh_norm"
       if [ -f "$cache_file" ]; then
         if cmp -s "$cache_file" "$fresh_norm"; then
-          echo "  no change vs cached copy (after stripping scripts/CDN noise)"
+          echo "  no change vs cached copy (visible text, scripts/CDN noise stripped)"
         else
-          echo "  CHANGED vs cached copy — diff (first 60 lines, scripts/CDN noise stripped):"
-          diff "$cache_file" "$fresh_norm" 2>/dev/null | head -60 | sed 's/^/  /'
+          local d; d="$(diff "$cache_file" "$fresh_norm" 2>/dev/null | grep -E '^[<>]' )"
+          local dbytes=${#d}
+          echo "  CHANGED vs cached copy — $(printf '%s\n' "$d" | grep -c '^<') line(s) removed, $(printf '%s\n' "$d" | grep -c '^>') added (< old, > new; first $DIFF_CAP of $dbytes bytes):"
+          printf '%s\n' "$d" | head -c "$DIFF_CAP" | sed 's/^/  /'
+          [ "$dbytes" -gt "$DIFF_CAP" ] && echo "  [diff truncated at $DIFF_CAP bytes — full text copies: inputs/${key}.txt vs previous cache]"
         fi
       else
         echo "  no cached copy from a prior run — establishing baseline this run, not a change"
@@ -95,13 +123,19 @@ echo
 
 # Watch 2: editor/CLI-native context becoming good-enough
 echo "### Watch 2: editor/CLI-native persistent repo indexing"
-fetch_and_diff "claude-code-changelog" "https://docs.claude.com/en/release-notes/claude-code" "Claude Code changelog"
+# docs.claude.com/en/release-notes/claude-code now 301s to the GitHub blob view of
+# anthropics/claude-code CHANGELOG.md (386 KB of HTML, intermittently refused —
+# failed 1 of 3 supervised runs on 2026-10-15). The raw file is the same content
+# as plain markdown, a tenth the size, and not rate-gated the same way.
+fetch_and_diff "claude-code-changelog-md" "https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md" "Claude Code changelog (raw CHANGELOG.md; docs.claude.com redirects here)"
 fetch_and_diff "cursor-blog" "https://cursor.com/blog" "Cursor research blog"
 echo
 
 # Watch 3: OSS local-indexer commoditization
 echo "### Watch 3: OSS local-indexer traction"
-for repo in "DeusData/codebase-memory-mcp" "abhigyanpatwari/GitNexus" "Pharaoh-so/pharaoh-mcp" "MagneticAnomaly/SourcePrep-MCP"; do
+# colbymchenry/codegraph added 2026-10-15 (71k-star OSS indexer surfaced by the
+# 2026-09-17 research, previously unwatched; see competitor-registry.yaml).
+for repo in "DeusData/codebase-memory-mcp" "abhigyanpatwari/GitNexus" "colbymchenry/codegraph" "Pharaoh-so/pharaoh-mcp" "MagneticAnomaly/SourcePrep-MCP"; do
   api_out="$INPUTS/gh-$(echo "$repo" | tr '/' '_').json"
   if $CURL "$UA" "https://api.github.com/repos/$repo" -o "$api_out" --fail 2>/dev/null && \
      jq -e '.stargazers_count' "$api_out" >/dev/null 2>&1; then
@@ -117,8 +151,8 @@ for repo in "DeusData/codebase-memory-mcp" "abhigyanpatwari/GitNexus" "Pharaoh-s
     echo "- $repo: LOOKUP FAILED (source-unavailable) — repo id may have changed since B-27's design; verify the slug"
   fi
 done
-echo "NOTE: the four repo slugs above are best-effort guesses at the org/repo path for the names in"
-echo "B-27's design (code-graph-mcp, GitNexus, Pharaoh, SourcePrep) — confirm/correct them on first review."
+echo "NOTE: the Pharaoh and SourcePrep slugs above are best-effort guesses at the org/repo path for the"
+echo "names in B-27's design — confirm/correct them on first review. The other three are verified."
 echo
 
 # Watch 4: Augment SEO encroachment (DEVIATION — see header: sitemap proxy, not live SERP, no credential available)
@@ -139,7 +173,7 @@ for site in "augmentcode.com" "maguyva.ai"; do
         $CURL "$UA" -L "$child" --fail 2>/dev/null >> "$sm_out" || true
       done <<< "$child_urls"
     fi
-    url_count=$(grep -c '<loc>' "$sm_out" 2>/dev/null); url_count=${url_count:-0}
+    url_count=$(grep -o '<loc>' "$sm_out" 2>/dev/null | wc -l | tr -d ' '); url_count=${url_count:-0}  # -o|wc: single-line sitemaps counted 1 with grep -c
     echo "- $site sitemap fetched ($url_count urls, incl. any expanded child sitemaps)"
     for q in "${QUERIES[@]}"; do
       hits=$(grep -ioE "<loc>[^<]*</loc>" "$sm_out" | grep -iE "$(echo "$q" | tr '-' '.')" || true)
@@ -155,18 +189,52 @@ for site in "augmentcode.com" "maguyva.ai"; do
 done
 echo
 
-# Watch 5: Ref Plans depth creep — ref.tools' "Ref Plans" product
-# (plan.ref.tools) currently does shallow codebase reading to inform task
-# generation (per its own docs: "researches your codebase, reads relevant
-# files... auth flows, DB models, API routes") — real but shallow overlap,
-# not the graph-based/dependency analysis Maguyva does. Watch for its own
-# public docs starting to claim dependency-graph, call-graph, blast-radius,
-# or structural/AST-based analysis — that would close the "depth gap" a lot
-# of current Maguyva positioning leans on. "Reads more file types" or
-# "supports more languages" is noise, not signal (see prompt.md).
-echo "### Watch 5: Ref Plans depth creep"
+# Watch 5: ref.tools — both products under the one brand (2026-10-15: widened
+# from "Ref Plans depth creep" only, after Generalissimo asked to monitor
+# ref.tools as a whole).
+#   5a Ref Plans (plan.ref.tools) currently does shallow codebase reading to
+#      inform task generation (per its own docs: "researches your codebase,
+#      reads relevant files... auth flows, DB models, API routes") — real but
+#      shallow overlap, not the graph-based/dependency analysis Maguyva does.
+#      Signal = its docs start claiming dependency-graph, call-graph,
+#      blast-radius, or structural/AST-based analysis. "Reads more file types"
+#      or "supports more languages" is noise, not signal (see prompt.md).
+#   5b Ref Context (docs.ref.tools/context, OSS ref-tools/ref-tools-mcp) is an
+#      MCP server for EXTERNAL library/API docs — adjacent to Maguyva, not
+#      substitutable. Signal = its docs/changelog start offering indexing of
+#      the user's OWN repository/codebase (private repo context), which would
+#      be a direct category entry; or a star jump on the OSS repo.
+#   The docs site is Mintlify and server-renders, so fetch_and_diff works.
+#   ref.tools/pricing and the ref.tools homepage are a JS shell (2 KB, no
+#   pricing text server-side) — only the homepage <title>/<meta description>
+#   carry positioning copy, so the homepage is diffed for that alone and the
+#   pricing page is deliberately NOT watched (it would never diff).
+#   docs.ref.tools/llms.txt is the docs' own page index: a new page appearing
+#   there is the cheapest "new capability shipped" signal across both products.
+echo "### Watch 5: ref.tools (5a Ref Plans depth creep · 5b Ref Context codebase-indexing entry)"
+echo "#### 5a Ref Plans"
 fetch_and_diff "refplans-first-plan" "https://docs.ref.tools/plans/getting-started/your-first-plan" "docs.ref.tools/plans/getting-started/your-first-plan"
 fetch_and_diff "refplans-intro" "https://docs.ref.tools/plans/getting-started/intro" "docs.ref.tools/plans/getting-started/intro (capability description; other easily-discoverable Ref Plans docs page via docs.ref.tools/sitemap.xml)"
+echo "#### 5b Ref Context"
+fetch_and_diff "refcontext-intro" "https://docs.ref.tools/context/getting-started/intro" "docs.ref.tools/context/getting-started/intro (what Ref Context says it does)"
+fetch_and_diff "ref-changelog" "https://docs.ref.tools/changelog" "docs.ref.tools/changelog (monthly updates, both products)"
+fetch_and_diff "ref-docs-index" "https://docs.ref.tools/llms.txt" "docs.ref.tools/llms.txt (docs page index — a new page = new capability)"
+fetch_and_diff "ref-home" "https://ref.tools/" "ref.tools homepage (JS shell; only <title>/<meta description> positioning copy is diffable)"
+repo="ref-tools/ref-tools-mcp"
+api_out="$INPUTS/gh-$(echo "$repo" | tr '/' '_').json"
+if $CURL "$UA" "https://api.github.com/repos/$repo" -o "$api_out" --fail 2>/dev/null && \
+   jq -e '.stargazers_count' "$api_out" >/dev/null 2>&1; then
+  stars=$(jq -r '.stargazers_count' "$api_out")
+  pushed=$(jq -r '.pushed_at' "$api_out")
+  echo "- $repo (Ref Context OSS MCP server): stars=$stars, last_pushed=$pushed"
+  cache_file="$CACHE/gh-$(echo "$repo" | tr '/' '_').txt"
+  prev="none"
+  [ -f "$cache_file" ] && prev="$(cat "$cache_file")"
+  echo "  previous cached star count: $prev"
+  echo "$stars" > "$cache_file"
+else
+  echo "- $repo: LOOKUP FAILED (source-unavailable)"
+fi
 echo
 
 # Watch 6: backlink-gap — dependent on B-23 (GSC Links export)

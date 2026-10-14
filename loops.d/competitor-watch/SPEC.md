@@ -15,10 +15,21 @@ that original teardown). It follows the exact same twelve-heading contract and t
 precheck fetch-and-diff/cache pattern as the original four threats. The backlink-gap watch shifted
 from watch 5 to watch 6 to make room for it.
 
+**2026-10-15 addendum:** watch 5 widened from Ref Plans only to **ref.tools as a brand** (5a Ref
+Plans depth creep, unchanged; 5b Ref Context codebase-indexing entry) after Generalissimo asked to
+monitor ref.tools as well. 5b diffs `docs.ref.tools/context/getting-started/intro`,
+`docs.ref.tools/changelog`, `docs.ref.tools/llms.txt` (the docs' own page index — a new page is the
+cheapest "new capability shipped" signal) and the `ref.tools` homepage title/description, and tracks
+GitHub stars for `ref-tools/ref-tools-mcp`. `ref.tools/pricing` is a 2 KB JavaScript shell with no
+pricing text server-side, so it is deliberately not watched (it would never diff). Watch 3 also
+gained `colbymchenry/codegraph` (the 71k-star OSS indexer the 2026-09-17 research found unwatched).
+The tracked-competitor list of record is now `maguyva-marketing/gc-actions/specs/inputs/competitor-registry.yaml`;
+this loop's URL and repo choices follow it.
+
 ## 1. Purpose & stop condition
 Five named competitive threats (Sourcegraph/Amp self-serve re-entry, editor/CLI-native context
-becoming good-enough, OSS local-indexer commoditization, Augment SEO encroachment, Ref Plans depth
-creep) plus a backlink-gap watch need a RECURRING read, not the one-off teardown done in the
+becoming good-enough, OSS local-indexer commoditization, Augment SEO encroachment, ref.tools —
+Ref Plans depth creep plus Ref Context entering own-codebase indexing) plus a backlink-gap watch need a RECURRING read, not the one-off teardown done in the
 2026-07-21 competitor-analysis. Watch 5 (Ref Plans depth creep) was added 2026-09-18, after this
 loop's original B-27 build, following the same twelve-heading contract this SPEC already used.
 The loop reports; it never acts. **Per-firing done:** a fresh set of findings
@@ -34,7 +45,7 @@ emit findings. No cross-invocation retry machinery, no resumed session.
 ## 3. Type & data flow (precheck gathers vs engine interprets)
 `type=agent`. `precheck.sh` does ALL fetching (unsandboxed, house pattern): sourcegraph.com/pricing
 snapshot diffed vs a self-contained `cache/` copy; Claude Code changelog + Cursor blog heads,
-diffed the same way; GitHub stars/last-pushed for the four named OSS indexer repos; sitemap checks
+diffed the same way; GitHub stars/last-pushed for the five named OSS indexer repos (CodeGraph added 2026-10-15); sitemap checks
 on augmentcode.com and maguyva.ai for the three contestable query slugs (**deviation**: the design
 doc specified live SERP checks via the tavily API — not buildable under this harness, since
 `credential_env` is reserved/hard-disabled in v1 per `docs/INTERFACES.md` §5 rule 8, and a
@@ -45,7 +56,10 @@ and `docs.ref.tools/plans/getting-started/intro` (the latter found via
 `docs.ref.tools/sitemap.xml`, easily discoverable — no other Ref Plans docs page describes its
 indexing/analysis capability more directly than these two), diffed the same way, watching for Ref
 Plans' own docs to start claiming dependency-graph/call-graph/blast-radius/structural analysis
-rather than its current documented shallow codebase-reading behavior; and B-23's status line from
+rather than its current documented shallow codebase-reading behavior; the Ref Context docs intro,
+changelog, llms.txt page index and ref.tools homepage copy, diffed the same way, plus
+`ref-tools/ref-tools-mcp` stars, watching for Ref Context to start indexing the user's own
+codebase (2026-10-15); and B-23's status line from
 `gc-actions/PRODUCT_BACKLOG.md` for the backlink-gap dependency check. The engine only interprets
 the resulting digest — it never fetches, and it never decides something is "probably fine" without
 saying so.
@@ -92,7 +106,9 @@ A finding is **one watch observing one condition**. `finding_id` = `<threat-slug
 `augment-serp:codebase-context-mcp`, `augment-serp:give-claude-code-repo-context`,
 `augment-serp:mcp-server-codebase-map`, `ref-plans:graph-analysis-signal` (fires when Ref Plans'
 own docs start claiming dependency-graph/call-graph/blast-radius/structural analysis — not for
-breadth claims like more file types or languages), `backlink-gap:new-referring-domain` (reserved,
+breadth claims like more file types or languages), `ref-context:codebase-indexing-signal` (Ref
+Context starts offering own-repository/private-codebase indexing — not more external doc sources),
+`ref-context:traction-jump`, `backlink-gap:new-referring-domain` (reserved,
 cannot fire until B-23 lands), `backlink-gap:source-unavailable`,
 `backlink-gap:dependency-may-be-satisfiable`, and generalized `<threat-slug>:source-unavailable`
 for any watch whose fetch fails outright. See `prompt.md`'s `## Finding identity` section
@@ -121,7 +137,10 @@ development, per Generalissimo's 2026-08-05 call, [[feedback_codex_preferred_loo
 capped (sitemaps grepped down to matching lines, GitHub API responses reduced to two fields, diffs
 capped at 60 lines) and the engine's job is judgment on a handful of diffs, not open-ended research
 (a few thousand input tokens, a few hundred output tokens). `retry_transient=1` (default).
-`timeout_s=900` (default) — generous relative to the trivial interpretation task; the real time
+`precheck_cap_bytes=131072` (2026-10-15: the 2026-10-01 run was truncated at the 64 KiB default
+because v1 normalization cached minified single-line HTML — one changed line was 60 KB and watches
+3–6 fell off the tail; v2 caches visible text with a 5 KB per-diff cap, and the ceiling is raised
+only as headroom per Amendment 3, measured not guessed). `timeout_s=900` (default) — generous relative to the trivial interpretation task; the real time
 cost is precheck's six watches' worth of sequential HTTP fetches (each capped at 20s via
 `curl -m 20`), not engine reasoning.
 

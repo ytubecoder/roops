@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # probe: gtm-public-search
-# probe-timeout-s: 120
+# probe-timeout-s: 180
 # probe-writes: none
 # probe-output: json
-# probe-reads: existing ~/.codex/config.toml Tavily credential; four fixed public searches
+# probe-reads: existing ~/.codex/config.toml Tavily credential; tracked competitor registry under $MAGUYVA_REPO (default ~/projects/maguyva-marketing); four fixed public searches plus bounded per-competitor voice searches
 """Bounded public search. No credential values or provider errors leave this process."""
 
 import hashlib
 import html
 import ipaddress
 import json
+import os
 import re
 import signal
 import sys
@@ -26,6 +27,16 @@ QUERIES = (
     ("public_web", "codebase context retrieval AI coding agents limitations"),
     ("public_web", "MCP code intelligence tools coding agents developer experience"),
 )
+# Weekly voice of user: competitor registry rows without repos are searched by
+# voice_hint on the community domains only. Competitors with repos get GitHub
+# issue searches on the firstparty side (collect.py); no Tavily call for them.
+REGISTRY_REL = "gc-actions/specs/inputs/competitor-registry.yaml"
+VOICE_FAMILY = "public_voice"
+VOICE_DOMAINS = ("reddit.com", "news.ycombinator.com", "forum.cursor.com", "github.com")
+MAX_VOICE_SEARCHES = 12
+MAX_COMPETITORS = 40
+MAX_REGISTRY_BYTES = 200_000
+ALARM_S = 165
 SUCCESS = {"ok"}
 ERRORS = {
     "config",
@@ -40,6 +51,7 @@ ERRORS = {
     "output_limit",
 }
 MAX_OUTPUT = 65536
+COUNTERS = ("result_count", "unique_count", "duplicate_count", "rejected_count")
 
 
 class CollectionError(Exception):
@@ -69,6 +81,106 @@ def key_from_config(path=None):
         return key
     except (ImportError, OSError, ValueError, KeyError, TypeError):
         raise CollectionError("config") from None
+
+
+def registry_path(path=None):
+    if path:
+        return Path(path)
+    repo = os.environ.get("MAGUYVA_REPO") or str(Path.home() / "projects/maguyva-marketing")
+    return Path(repo) / REGISTRY_REL
+
+
+def _label(value, maximum):
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > maximum
+        or re.search(r"[\x00-\x1f\x7f@]", value)
+    ):
+        raise CollectionError("malformed")
+    return " ".join(value.split())
+
+
+def clean_competitors(rows):
+    """Tracked registry rows with bounded fields. Shared by probe and collect.py."""
+    if not isinstance(rows, list) or len(rows) > 200:
+        raise CollectionError("malformed")
+    competitors, slugs = [], set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise CollectionError("malformed")
+        if row.get("status") != "tracked":
+            continue
+        name = _label(row.get("name"), 80)
+        slug = row.get("slug")
+        if not isinstance(slug, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", slug):
+            raise CollectionError("malformed")
+        if slug in slugs:
+            raise CollectionError("malformed")
+        slugs.add(slug)
+        repos = row.get("repos") or []
+        hints = row.get("voice_hints") or []
+        if (
+            not isinstance(repos, list)
+            or not isinstance(hints, list)
+            or len(repos) > 5
+            or len(hints) > 6
+        ):
+            raise CollectionError("malformed")
+        for repo in repos:
+            if not isinstance(repo, str) or not re.fullmatch(
+                r"[A-Za-z0-9_.-]{1,60}/[A-Za-z0-9_.-]{1,80}", repo
+            ):
+                raise CollectionError("malformed")
+        competitors.append(
+            {
+                "name": name,
+                "slug": slug,
+                "status": "tracked",
+                "repos": list(repos),
+                "voice_hints": [_label(h, 80) for h in hints],
+            }
+        )
+    if len(competitors) > MAX_COMPETITORS:
+        raise CollectionError("malformed")
+    return competitors
+
+
+def load_registry(path=None):
+    """Tracked competitors from the repo registry; PyYAML is required to parse it."""
+    try:
+        import yaml
+    except ImportError:
+        raise CollectionError("config") from None
+    try:
+        with registry_path(path).open("rb") as stream:
+            raw = stream.read(MAX_REGISTRY_BYTES + 1)
+    except OSError:
+        raise CollectionError("config") from None
+    if len(raw) > MAX_REGISTRY_BYTES:
+        raise CollectionError("size_limit")
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        raise CollectionError("malformed") from None
+    if not isinstance(data, dict) or data.get("schema_version") != 1:
+        raise CollectionError("malformed")
+    updated = data.get("updated")
+    return {
+        "updated": str(updated)[:10] if updated is not None else None,
+        "competitors": clean_competitors(data.get("competitors")),
+    }
+
+
+def voice_plan(competitors):
+    """(slug, hint) pairs for competitors without repos, in registry order."""
+    plan = []
+    for competitor in competitors:
+        if competitor["repos"]:
+            continue
+        for hint in competitor["voice_hints"]:
+            plan.append((competitor["slug"], hint))
+    return plan
 
 
 def safe_url(value):
@@ -119,6 +231,10 @@ def safe_url(value):
         return False
 
 
+def _host_in(host, domains):
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
 def excerpt(value):
     text = re.sub(r"<[^>]*>", " ", html.unescape(str(value or "")))
     text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
@@ -137,10 +253,11 @@ def timestamp(value):
         return None
 
 
-def source_spec(family, query, now):
+def source_spec(family, query, now, competitor=None):
     return {
         "source_type": family,
         "query": query,
+        "competitor": competitor,
         "method": "search",
         "provider": "tavily",
         "window": {
@@ -157,16 +274,36 @@ def source_spec(family, query, now):
         "rejected_count": 0,
         "duplicate_count": 0,
         "unique_count": 0,
+        "truncated": False,
+        "truncated_count": 0,
     }
 
 
+def fail_source(source, error):
+    source.update(
+        status="error",
+        empty=False,
+        error=error if error in ERRORS else "malformed",
+        records=[],
+        result_count=0,
+        unique_count=0,
+        duplicate_count=0,
+        rejected_count=0,
+        truncated=False,
+        truncated_count=0,
+    )
+    return source
+
+
 def failed_sources(now, error):
-    sources = [source_spec(f, q, now) for f, q in QUERIES]
-    for source in sources:
-        source.update(
-            status="error", empty=False, error=error if error in ERRORS else "malformed"
-        )
-    return sources
+    return [fail_source(source_spec(f, q, now), error) for f, q in QUERIES]
+
+
+def failed_voice_sources(now, plan, error):
+    return [
+        fail_source(source_spec(VOICE_FAMILY, hint, now, slug), error)
+        for slug, hint in plan
+    ]
 
 
 def fetch_search(source, key, opener=None):
@@ -183,6 +320,8 @@ def fetch_search(source, key, opener=None):
     }
     if source["source_type"] == "public_reddit":
         body["include_domains"] = ["reddit.com"]
+    elif source["source_type"] == VOICE_FAMILY:
+        body["include_domains"] = list(VOICE_DOMAINS)
     else:
         body["exclude_domains"] = ["reddit.com", "github.com"]
     request = Request(
@@ -236,8 +375,11 @@ def normalize_results(source, payload, stamp, seen):
         host = urlsplit(url).hostname
         reddit = host == "reddit.com" or host.endswith(".reddit.com")
         github = host == "github.com" or host.endswith(".github.com")
-        if (source["source_type"] == "public_reddit" and not reddit) or (
-            source["source_type"] == "public_web" and (reddit or github)
+        family = source["source_type"]
+        if (
+            (family == "public_reddit" and not reddit)
+            or (family == "public_web" and (reddit or github))
+            or (family == VOICE_FAMILY and not _host_in(host, VOICE_DOMAINS))
         ):
             source["rejected_count"] += 1
             continue
@@ -264,47 +406,109 @@ def normalize_results(source, payload, stamp, seen):
         source.update(status="error", error="malformed")
 
 
-def collect(now=None, fetch=None, config_path=None):
+def run_searches(specs, key, fetch, stamp, seen_for):
+    """Run specs in order. A deadline marks the rest timeout; earlier results survive."""
+    sources, expired = [], False
+    for source in specs:
+        seen = seen_for(source)
+        if expired:
+            fail_source(source, "timeout")
+        elif key is None:
+            fail_source(source, "config")
+        else:
+            try:
+                payload = (fetch or fetch_search)(source, key)
+                payload = json.loads(json.dumps(payload).replace(key, "[credential]"))
+                normalize_results(source, payload, stamp, seen)
+            except (OSError, ValueError, TypeError, AttributeError, CollectionError) as exc:
+                fail_source(source, error_category(exc))
+            except DeadlineExpired:
+                expired = True
+                fail_source(source, "timeout")
+        sources.append(source)
+    return sources
+
+
+def fit_output(result, groups):
+    """Drop whole records, largest source first, until the JSON fits MAX_OUTPUT.
+
+    Every drop is explicit on the source (truncated, truncated_count). Returns the
+    encoded output, or None when nothing is left to drop and it still does not fit.
+    """
+    while True:
+        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n"
+        if len(encoded.encode()) <= MAX_OUTPUT:
+            return encoded
+        candidates = [s for group in groups for s in result.get(group, []) if s["records"]]
+        if not candidates:
+            return None
+        victim = max(candidates, key=lambda s: len(json.dumps(s["records"])))
+        victim["records"].pop()
+        victim["unique_count"] = len(victim["records"])
+        victim["truncated"] = True
+        victim["truncated_count"] += 1
+
+
+def collect(now=None, fetch=None, config_path=None, registry=None):
     now = now or datetime.now(timezone.utc)
+    stamp = now.isoformat()
     try:
         key = key_from_config(config_path)
     except CollectionError:
-        return {
-            "schema_version": 1,
-            "generated_at": now.isoformat(),
-            "sources": failed_sources(now, "config"),
-        }
-    sources, seen = [], set()
-    for family, query in QUERIES:
-        source = source_spec(family, query, now)
-        try:
-            payload = (fetch or fetch_search)(source, key)
-            payload = json.loads(json.dumps(payload).replace(key, "[credential]"))
-            normalize_results(source, payload, now.isoformat(), seen)
-        except (OSError, ValueError, TypeError, AttributeError, CollectionError) as exc:
-            source.update(
-                status="error",
-                empty=False,
-                error=error_category(exc),
-                records=[],
-                result_count=0,
-                unique_count=0,
-                duplicate_count=0,
-                rejected_count=0,
-            )
-        sources.append(source)
-    return {"schema_version": 1, "generated_at": now.isoformat(), "sources": sources}
+        key = None
+    registry_block = {"status": "ok", "error": None, "updated": None, "competitors": []}
+    try:
+        loaded = load_registry(registry)
+        registry_block.update(updated=loaded["updated"], competitors=loaded["competitors"])
+    except CollectionError as exc:
+        registry_block.update(status="error", error=error_category(exc))
+    plan = voice_plan(registry_block["competitors"])
+    voice_block = {
+        "planned": len(plan),
+        "run": min(len(plan), MAX_VOICE_SEARCHES),
+        "truncated": len(plan) > MAX_VOICE_SEARCHES,
+        "domains": list(VOICE_DOMAINS),
+    }
+    plan = plan[:MAX_VOICE_SEARCHES]
+    # One pass so a deadline marks every later search, voice included. The
+    # positioning searches share one dedupe set; voice dedupes per competitor.
+    shared, per_competitor = set(), {}
+
+    def seen_for(source):
+        if source["source_type"] != VOICE_FAMILY:
+            return shared
+        return per_competitor.setdefault(source["competitor"], set())
+
+    specs = [source_spec(f, q, now) for f, q in QUERIES] + [
+        source_spec(VOICE_FAMILY, hint, now, slug) for slug, hint in plan
+    ]
+    searched = run_searches(specs, key, fetch, stamp, seen_for)
+    return {
+        "schema_version": 1,
+        "generated_at": stamp,
+        "sources": searched[: len(QUERIES)],
+        "registry": registry_block,
+        "voice_plan": voice_block,
+        "voice_sources": searched[len(QUERIES) :],
+    }
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv == ["--check"]:
+        unmet = []
         try:
             key_from_config()
         except CollectionError:
-            print("unmet: Tavily configuration")
+            unmet.append("Tavily configuration")
+        try:
+            load_registry()
+        except CollectionError as exc:
+            unmet.append(f"competitor registry ({exc})")
+        if unmet:
+            print("unmet: " + "; ".join(unmet))
             return 1
-        print("ok: Tavily configuration available")
+        print("ok: Tavily configuration and competitor registry available")
         return 0
     if argv:
         print("refused: unexpected arguments", file=sys.stderr)
@@ -314,7 +518,7 @@ def main(argv=None):
         raise DeadlineExpired
 
     signal.signal(signal.SIGALRM, deadline)
-    signal.alarm(105)
+    signal.alarm(ALARM_S)
     try:
         result = collect()
     except DeadlineExpired:
@@ -323,10 +527,23 @@ def main(argv=None):
             "schema_version": 1,
             "generated_at": now.isoformat(),
             "sources": failed_sources(now, "timeout"),
+            "registry": {
+                "status": "error",
+                "error": "timeout",
+                "updated": None,
+                "competitors": [],
+            },
+            "voice_plan": {"planned": 0, "run": 0, "truncated": False, "domains": list(VOICE_DOMAINS)},
+            "voice_sources": [],
         }
     finally:
         signal.alarm(0)
-    print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    encoded = fit_output(result, ("voice_sources", "sources"))
+    if encoded is None:
+        for source in result["sources"] + result["voice_sources"]:
+            fail_source(source, "output_limit")
+        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n"
+    sys.stdout.write(encoded)
     # Source failures are data. The merged precheck decides all-source failure.
     return 0
 

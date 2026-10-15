@@ -1,0 +1,28 @@
+{
+  "panels": [
+    {
+      "title": "Candidates",
+      "metric": "candidates",
+      "type": "number",
+      "unit": "threads",
+      "direction": "neutral",
+      "missing": "gap"
+    },
+    {
+      "title": "Failed adapters",
+      "metric": "sources.failed",
+      "type": "number",
+      "unit": "adapters",
+      "direction": "higher_is_worse",
+      "thresholds": {"warn": 1, "alert": 3},
+      "missing": "gap"
+    },
+    {
+      "title": "Drafts",
+      "metric": "drafts",
+      "type": "trend",
+      "window_days": 30,
+      "missing": "hold"
+    }
+  ]
+}

@@ -24,7 +24,10 @@ GitHub stars for `ref-tools/ref-tools-mcp`. `ref.tools/pricing` is a 2 KB JavaSc
 pricing text server-side, so it is deliberately not watched (it would never diff). Watch 3 also
 gained `colbymchenry/codegraph` (the 71k-star OSS indexer the 2026-09-17 research found unwatched).
 The tracked-competitor list of record is now `maguyva-marketing/gc-actions/specs/inputs/competitor-registry.yaml`;
-this loop's URL and repo choices follow it.
+this loop's URL choices follow it, and since 2026-10-15 watch 3 reads its repo list straight from it
+(every `tracked`/`watch` row with `repos`, minus ref-tools which 5b owns — so the ast-grep class
+added that day, Semgrep, GritQL, Comby, Zoekt, OpenGrok, Glean and Kythe, is star-tracked without a
+code change; a literal five-repo fallback keeps the watch alive if the registry is unreadable).
 
 ## 1. Purpose & stop condition
 Five named competitive threats (Sourcegraph/Amp self-serve re-entry, editor/CLI-native context

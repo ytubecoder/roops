@@ -37,6 +37,21 @@ mkdir -p "$CACHE"
 
 UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 CURL="curl -sL -m 20 -A"
+# GitHub API reads (watch 3 + 5b) go through gh_get: read-only public-metadata
+# GETs under Generalissimo's own ytubecoder account when its gh login exists
+# on this host (5,000/h), anonymous otherwise (60/h per IP — exhausted on
+# 2026-10-15 when three competitor prechecks shared the address). The token
+# is used inline and never printed.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+GH_TOKEN="$(gh auth token -u ytubecoder 2>/dev/null || true)"
+gh_get () {
+  # $1 = url, $2 = output file
+  if [ -n "$GH_TOKEN" ]; then
+    curl -sL -m 20 -A "$UA" -H "Authorization: Bearer $GH_TOKEN" "$1" -o "$2" --fail
+  else
+    curl -sL -m 20 -A "$UA" "$1" -o "$2" --fail
+  fi
+}
 
 echo "# competitor-watch precheck — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo
@@ -133,11 +148,34 @@ echo
 
 # Watch 3: OSS local-indexer commoditization
 echo "### Watch 3: OSS local-indexer traction"
-# colbymchenry/codegraph added 2026-10-15 (71k-star OSS indexer surfaced by the
-# 2026-09-17 research, previously unwatched; see competitor-registry.yaml).
-for repo in "DeusData/codebase-memory-mcp" "abhigyanpatwari/GitNexus" "colbymchenry/codegraph" "Pharaoh-so/pharaoh-mcp" "MagneticAnomaly/SourcePrep-MCP"; do
+# The repo list comes from the competitor registry (every tracked/watch row
+# with repos, minus ref-tools which watch 5b tracks under its own key) since
+# 2026-10-15; the literal list below is only the fallback when the registry
+# cannot be read, so this watch never goes silent on a config problem.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+REGISTRY="${MAGUYVA_REPO:-$HOME/projects/maguyva-marketing}/gc-actions/specs/inputs/competitor-registry.yaml"
+OSS_REPOS="$(python3 - "$REGISTRY" 2>/dev/null <<'PY'
+import sys, yaml
+rows = yaml.safe_load(open(sys.argv[1], encoding="utf-8")).get("competitors") or []
+out = []
+for r in rows:
+    if r.get("status") not in ("tracked", "watch") or str(r.get("slug", "")).startswith("ref-"):
+        continue
+    for repo in r.get("repos") or []:
+        if isinstance(repo, str) and "/" in repo and repo not in out:
+            out.append(repo)
+print(" ".join(out))
+PY
+)"
+if [ -z "$OSS_REPOS" ]; then
+  echo "NOTE: competitor registry unreadable at $REGISTRY — using the built-in fallback repo list (registry:source-unavailable)."
+  OSS_REPOS="DeusData/codebase-memory-mcp abhigyanpatwari/GitNexus colbymchenry/codegraph Pharaoh-so/pharaoh-mcp MagneticAnomaly/SourcePrep-MCP"
+else
+  echo "repo list from registry ($REGISTRY): $(echo "$OSS_REPOS" | wc -w | tr -d ' ') repos"
+fi
+for repo in $OSS_REPOS; do
   api_out="$INPUTS/gh-$(echo "$repo" | tr '/' '_').json"
-  if $CURL "$UA" "https://api.github.com/repos/$repo" -o "$api_out" --fail 2>/dev/null && \
+  if gh_get "https://api.github.com/repos/$repo" "$api_out" 2>/dev/null && \
      jq -e '.stargazers_count' "$api_out" >/dev/null 2>&1; then
     stars=$(jq -r '.stargazers_count' "$api_out")
     pushed=$(jq -r '.pushed_at' "$api_out")
@@ -148,11 +186,10 @@ for repo in "DeusData/codebase-memory-mcp" "abhigyanpatwari/GitNexus" "colbymche
     echo "  previous cached star count: $prev"
     echo "$stars" > "$cache_file"
   else
-    echo "- $repo: LOOKUP FAILED (source-unavailable) — repo id may have changed since B-27's design; verify the slug"
+    echo "- $repo: LOOKUP FAILED (source-unavailable) — GitHub API refused or rate-limited, or the slug changed; a single failure is not evidence about the project"
   fi
 done
-echo "NOTE: the Pharaoh and SourcePrep slugs above are best-effort guesses at the org/repo path for the"
-echo "names in B-27's design — confirm/correct them on first review. The other three are verified."
+echo "NOTE: a repo with 0-2 stars (Pharaoh, SourcePrep) is a best-effort slug guess from B-27's design, not traction data."
 echo
 
 # Watch 4: Augment SEO encroachment (DEVIATION — see header: sitemap proxy, not live SERP, no credential available)
@@ -222,7 +259,7 @@ fetch_and_diff "ref-docs-index" "https://docs.ref.tools/llms.txt" "docs.ref.tool
 fetch_and_diff "ref-home" "https://ref.tools/" "ref.tools homepage (JS shell; only <title>/<meta description> positioning copy is diffable)"
 repo="ref-tools/ref-tools-mcp"
 api_out="$INPUTS/gh-$(echo "$repo" | tr '/' '_').json"
-if $CURL "$UA" "https://api.github.com/repos/$repo" -o "$api_out" --fail 2>/dev/null && \
+if gh_get "https://api.github.com/repos/$repo" "$api_out" 2>/dev/null && \
    jq -e '.stargazers_count' "$api_out" >/dev/null 2>&1; then
   stars=$(jq -r '.stargazers_count' "$api_out")
   pushed=$(jq -r '.pushed_at' "$api_out")

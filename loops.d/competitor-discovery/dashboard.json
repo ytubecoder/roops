@@ -1,0 +1,5 @@
+{"panels":[
+  {"title":"New candidates","metric":"candidates.new","type":"number","unit":"candidates","direction":"neutral","missing":"gap"},
+  {"title":"Queries failed","metric":"queries.failed","type":"number","unit":"queries","direction":"higher_is_worse","thresholds":{"warn":1,"alert":4},"missing":"gap"},
+  {"title":"Candidates per sweep","metric":"candidates.total","type":"trend","window_days":180,"missing":"hold"}
+]}

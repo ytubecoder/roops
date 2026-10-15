@@ -454,6 +454,16 @@ class PublicSearch(unittest.TestCase):
         for record in first["records"]:
             self.assertLessEqual(len(record["text"].split()), 22)
 
+    def test_registry_schema_2_is_accepted(self):
+        self.write_registry(
+            REGISTRY.replace("schema_version: 1", "schema_version: 2").replace(
+                "    voice_hints:", "    why: profile text\n    brand_terms: [x]\n    voice_hints:", 1
+            )
+        )
+        rows = self.p["load_registry"](self.registry)["competitors"]
+        self.assertTrue(rows)
+        self.assertNotIn("why", rows[0])
+
     def test_malformed_registry_is_a_config_error_without_voice_searches(self):
         self.write_registry("competitors: [\n")
         calls = []

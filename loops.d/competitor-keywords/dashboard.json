@@ -1,0 +1,27 @@
+{
+  "panels": [
+    {
+      "title": "Shared gap keywords",
+      "metric": "gap.shared_count",
+      "type": "trend",
+      "window_days": 365,
+      "missing": "hold"
+    },
+    {
+      "title": "Our baseline keywords",
+      "metric": "baseline.keywords",
+      "type": "trend",
+      "window_days": 365,
+      "missing": "hold"
+    },
+    {
+      "title": "Changes this run",
+      "metric": "changes.total",
+      "type": "number",
+      "unit": "lines",
+      "direction": "higher_is_worse",
+      "thresholds": { "warn": 10, "alert": 40 },
+      "missing": "gap"
+    }
+  ]
+}

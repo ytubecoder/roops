@@ -163,7 +163,9 @@ def load_registry(path=None):
         data = yaml.safe_load(raw)
     except yaml.YAMLError:
         raise CollectionError("malformed") from None
-    if not isinstance(data, dict) or data.get("schema_version") != 1:
+    # Registry schema 1 (2026-10-15 first cut) and 2 (profile fields added the
+    # same day, additive) carry identical name/slug/status/repos/voice_hints.
+    if not isinstance(data, dict) or data.get("schema_version") not in (1, 2):
         raise CollectionError("malformed")
     updated = data.get("updated")
     return {

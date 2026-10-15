@@ -26,27 +26,24 @@ Read `draft.md` and `persona.md`. Draft an item only when your assessment `relev
 
 ## Emit
 
-Work in this order, and run exactly one local command, the emit command, once:
+Three separate steps. Do not combine them into one shell command.
 
-1. Read every input file first (your file-reading tool or `cat`; reading is not the local command).
-2. Produce the assessment array and the draft array.
-3. Run the emit command ONCE, piping the real JSON you produced. The payload is exactly one object with two keys:
+1. **Read** every input file (your file-reading tool, or a `cat`/`sed` command that does nothing else). Reading is not the emit command.
+2. **Write** your payload to the file `$OUT_DIR/engine.json` with your file-writing tool. The file is exactly one JSON object with two keys:
 
 ```json
 {"assessments": [ ...one object per candidate... ], "drafts": [ ...one object per drafted top item... ]}
 ```
 
-Never run emit with empty arrays, never run it as a dry run or a check, never run it twice. Running it with `"assessments": []` is a failure, not a probe. No markdown fence inside the payload. This payload is not the contract. The contract is your final message, after emit finishes.
+Use the shapes in `assess.md` and `draft.md`. No markdown fence in the file. `assessments` must have one object per candidate in `candidates.json`; a file with an empty `assessments` array is a failure, not a probe.
 
-The command, with `$OUT_DIR` from the environment and the checkout path from `inputs/checkout.txt`, where `<PAYLOAD>` is the JSON object from step 3:
+3. **Run emit once**, as its own command, after the file exists. Emit reads `$OUT_DIR/engine.json` itself; do not pipe anything:
 
 ```bash
-cd "$(cat "$OUT_DIR/inputs/checkout.txt")/growth-console" && PYTHONPATH=. "$HOME/.venvs/forums/bin/python" -m console.forums emit --out-dir "$OUT_DIR" <<'EOF'
-<PAYLOAD>
-EOF
+cd "$(cat "$OUT_DIR/inputs/checkout.txt")/growth-console" && PYTHONPATH=. "$HOME/.venvs/forums/bin/python" -m console.forums emit --out-dir "$OUT_DIR"
 ```
 
-Emit prints the batch path on success and writes `$OUT_DIR/loop-data.commit/batch.json`. If it exits non-zero, report `emit_failed` with its stderr in `report_markdown`. Do not invent a batch.
+Never run emit before `engine.json` is written. Never run it as a dry run. If it exits non-zero, report `emit_failed` with its stderr in `report_markdown`. On success it prints the batch path and writes `$OUT_DIR/loop-data.commit/batch.json`. Do not invent a batch. The file is not the contract; the contract is your final message after emit finishes.
 
 ## Report
 

@@ -26,23 +26,27 @@ Read `draft.md` and `persona.md`. Draft an item only when your assessment `relev
 
 ## Emit
 
-Pipe one JSON object to the emit command. The object is exactly:
+Work in this order, and run exactly one local command, the emit command, once:
+
+1. Read every input file first (your file-reading tool or `cat`; reading is not the local command).
+2. Produce the assessment array and the draft array.
+3. Run the emit command ONCE, piping the real JSON you produced. The payload is exactly one object with two keys:
 
 ```json
-{"assessments": [], "drafts": []}
+{"assessments": [ ...one object per candidate... ], "drafts": [ ...one object per drafted top item... ]}
 ```
 
-`assessments` is the array from the assess step. `drafts` is the array from the draft step. Use the shapes in `assess.md` and `draft.md`. No markdown fence inside the payload. This payload is not the contract. The contract is your final message, after emit finishes.
+Never run emit with empty arrays, never run it as a dry run or a check, never run it twice. Running it with `"assessments": []` is a failure, not a probe. No markdown fence inside the payload. This payload is not the contract. The contract is your final message, after emit finishes.
 
-Run, with `$OUT_DIR` and the checkout line from the file:
+The command, with `$OUT_DIR` from the environment and the checkout path from `inputs/checkout.txt`, where `<PAYLOAD>` is the JSON object from step 3:
 
 ```bash
 cd "$(cat "$OUT_DIR/inputs/checkout.txt")/growth-console" && PYTHONPATH=. "$HOME/.venvs/forums/bin/python" -m console.forums emit --out-dir "$OUT_DIR" <<'EOF'
-{"assessments": [], "drafts": []}
+<PAYLOAD>
 EOF
 ```
 
-That command is the only local command you may run. It writes `$OUT_DIR/loop-data.commit/batch.json`. If it exits non-zero, say so in the report. Do not invent a batch.
+Emit prints the batch path on success and writes `$OUT_DIR/loop-data.commit/batch.json`. If it exits non-zero, report `emit_failed` with its stderr in `report_markdown`. Do not invent a batch.
 
 ## Report
 

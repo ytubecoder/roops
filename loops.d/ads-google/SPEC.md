@@ -341,3 +341,9 @@ provenance. A configured ENABLED switch never overrides fresh primary ENDED.
 The native Search overview prints both values. Fresh ended campaigns resolve
 earlier starvation findings; zero subsequent delivery is expected. Unknown or
 stale state is an input gap. No completed probe is resumed or extended.
+
+Program-event digests preserve full fields for the last 28 account-local dates
+(UTC fallback), newest first. An 18 KB section cap omits complete events rather
+than cutting recent corrections mid-sentence. Older text previews disclose
+omitted characters and raw-input locations; any omitted recent event is an
+explicit evidence gap. A preview cannot prove resolution or authorization.

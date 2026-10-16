@@ -60,7 +60,7 @@ with open(os.environ["FETCH_LOG"], "a") as log:
             },
         }
 
-    def run_precheck(self, name, snapshot, campaigns=None):
+    def run_precheck(self, name, snapshot, campaigns=None, program_events=None):
         self.counter += 1
         fixture = self.root / str(self.counter)
         fixture.mkdir()
@@ -87,6 +87,8 @@ with open(os.environ["FETCH_LOG"], "a") as log:
         }
         if campaigns is not None:
             payloads["campaigns"] = campaigns
+        if program_events is not None:
+            payloads["program-events"] = program_events
         for key, value in payloads.items():
             (fixture / (key + ".json")).write_text(json.dumps(value))
         out = fixture / "out"
@@ -238,6 +240,25 @@ with open(os.environ["FETCH_LOG"], "a") as log:
     def test_legacy_snapshot_is_explicit_28_day_input_gap(self):
         text = self.run_precheck("ads-google", self.snapshot)
         self.assertIn("28-day Search intent/action evidence is unavailable", text)
+
+    def test_recent_correction_after_220_characters_survives_both_real_prechecks(self):
+        from datetime import datetime, timezone
+
+        ending = "The previous strike was wrong: preserve the original targets and reopen the same finding."
+        event = {
+            "date": datetime.now(timezone.utc).date().isoformat(),
+            "text": "Context. " * 40 + ending,
+            "evidence": "journal-scope-review",
+        }
+        for name in ("ads-google", "ads-intl"):
+            with self.subTest(loop=name):
+                text = self.run_precheck(
+                    name, self.snapshot, program_events={"events": [event]}
+                )
+                self.assertIn(ending, text)
+                self.assertIn('"text_complete":true,"omitted_text_chars":0', text)
+                self.assertIn('"evidence":"journal-scope-review"', text)
+                self.assertLess(text.index(ending), text.index("## Prior action set"))
 
     def test_native_ended_survives_enabled_switch_and_resolves_dark_findings(self):
         for name, key, cid in (

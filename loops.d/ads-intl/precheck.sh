@@ -247,11 +247,9 @@ print()
 
 # ---- Program events ----
 print("## Program events (non-journalable changes / incidents)")
-if isinstance(prog, dict):
-    for e in prog.get("events", []):
-        print(f"- {e.get('date')}: {(e.get('text') or '')[:220]}")
-else:
-    print("- program-events MISSING.")
+sys.path.insert(0, str(Path(LOOP_DIR).resolve().parents[1] / "bin"))
+from ads_program_events import event_digest
+print("\n".join(event_digest(prog, FETCHED_AT, search_review.get("time_zone") if isinstance(search_review, dict) else None)))
 print()
 
 # ---- Prior action set + ID continuity (ids are NEVER reused) ----

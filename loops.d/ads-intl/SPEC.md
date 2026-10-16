@@ -343,3 +343,9 @@ CMP analyst briefs, independently of unavailable performance Band E evidence.
 No order fields, scheduled mutation, new permission axis, changed cadence or
 budget reduction follows. Native credits are neither distinct people nor paid
 customers. Unknown brands and ambiguous coding terms remain analyst questions.
+
+The campaign scope also preserves GC's effective native lifecycle state and
+provenance. A configured ENABLED switch never overrides fresh primary ENDED.
+The native Search overview prints both values. Fresh ended campaigns resolve
+earlier starvation findings; zero subsequent delivery is expected. Unknown or
+stale state is an input gap. No completed probe is resumed or extended.

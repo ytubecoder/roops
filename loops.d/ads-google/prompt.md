@@ -29,9 +29,15 @@ program should yield few or zero actions. Look for:
   evaluator payload and exact configured target states. CTR is a click diagnostic;
   it never establishes performance-pause eligibility. Missing/blocked inputs are INP gaps.
 
-- **Delivery anomalies:** an ENABLED/approved campaign or leg serving ~zero
-  impressions (e.g. theme SEARCH legs starved while DG spends); a serving leg
-  that suddenly zeroed.
+- **Delivery anomalies:** use effective native campaign state and its freshness
+  before judging zero impressions. A configured ENABLED switch can coexist with
+  native primary_status=ENDED. ENDED campaigns are completed/non-serving;
+  expected zero later delivery is not starvation. Strike prior dark/starved
+  findings when fresh native evidence shows the campaign ended, including every
+  `RESOLVED_DELIVERY` line. Do not recommend resuming or extending a completed
+  probe. Unknown/stale state is an input gap. Only an eligible active campaign
+  can have unexplained zero delivery; distinguish current state from historical
+  impressions within the reporting window.
 - **Budget-guard headroom:** google network actual MTD spend approaching its
   cap; whether a positive-spend suggestion would be refused by the guard.
   State the basis plainly — since the 2026-07-21 budget rework only the
@@ -100,6 +106,12 @@ the exception (pick from what raised it, not where it might be fixed):
   two-part shape (renaming breaks finding identity).
 - A prior condition the digest shows is **resolved** → include it with
   `"status":"struck"` and a `struck_reason` (ids are NEVER reused after a strike).
+- Match resolution evidence to the original brief's exact targets and scope;
+  an unrelated or partial cleanup cannot close a broader finding. If a dated
+  correction or later evidence shows a prior strike was wrong, reopen that
+  same finding under its original ID and original scope, explain the correction,
+  and preserve its historical artifacts. This corrects the same finding; it
+  does not reuse its ID for a different issue.
 - A genuinely new exception → take the digest's stated **`next NEW action id`**
   number, substitute your source designator (e.g. `ADG-CMP-08`), then increment
   from there. That value comes from the id high-water mark across ALL history —
@@ -249,9 +261,11 @@ braces — write it exactly as the schema requires.
      scope (intl belongs to ads-intl). If the digest shows the ledger is
      unreconciled (e.g. $0.00 MTD while campaigns serve), say so IN this
      block, not lines later.
-  3. **Serving state** (1 line per in-scope campaign): name, ENABLED/PAUSED
-     as the digest states it, and one delivery word — serving / starved /
-     dark.
+  3. **Serving state** (1 line per in-scope campaign): name and effective native
+     state, including ENDED, PAUSED or UNKNOWN. Report fresh ENDED campaigns as
+     completed/non-serving, even when their configured switch is ENABLED.
+     Use serving/starved only for eligible active campaigns. Preserve native
+     status date and source when state is stale or uncertain.
   4. **Variant table** — ALL in-scope variants: id, impressions, clicks,
      CTR, CPC, spend, evaluator verdict; group g-msg and g-theme visibly;
      name the serving surface the evaluator used where the digest states it.

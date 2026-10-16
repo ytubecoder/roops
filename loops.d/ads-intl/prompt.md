@@ -34,9 +34,15 @@ program should yield few or zero actions. Look for:
   CTR diagnose auctions and messaging; useful adoption and collected revenue
   determine acquisition value. No impression-count performance eligibility.
 
-- **Delivery anomalies:** the ENABLED intl-en campaign serving ~zero in a geo
-  or overall; a paused campaign (ja/ko) unexpectedly serving; delivery
-  collapsing after a budget/geo change.
+- **Delivery anomalies:** use effective native campaign state and its freshness
+  before judging zero impressions. A configured ENABLED switch can coexist with
+  native primary_status=ENDED. ENDED campaigns are completed/non-serving;
+  expected zero later delivery is not starvation. Strike prior dark/starved
+  findings when fresh native evidence shows the campaign ended, including every
+  in-scope `RESOLVED_DELIVERY` line. Do not recommend resuming or extending a
+  completed probe. Unknown/stale state is an input gap. Judge zero geo delivery
+  only within an eligible active campaign's current targeting; historical spend
+  after a targeting change does not prove the old target is still selected.
 - **Budget-guard headroom:** google network actual MTD spend approaching its
   cap; whether a positive-spend suggestion would be refused by the guard.
   State the basis plainly — since the 2026-07-21 budget rework only the
@@ -105,6 +111,12 @@ the exception (pick from what raised it, not where it might be fixed):
   two-part shape (renaming breaks finding identity).
 - A prior condition the digest shows is **resolved** → include it with
   `"status":"struck"` and a `struck_reason` (ids are NEVER reused after a strike).
+- Match resolution evidence to the original brief's exact targets and scope;
+  an unrelated or partial cleanup cannot close a broader finding. If a dated
+  correction or later evidence shows a prior strike was wrong, reopen that
+  same finding under its original ID and original scope, explain the correction,
+  and preserve its historical artifacts. This corrects the same finding; it
+  does not reuse its ID for a different issue.
 - A genuinely new exception → take the digest's stated **`next NEW action id`**
   number, substitute your source designator (e.g. `ADI-CMP-08`), then increment
   from there. That value comes from the id high-water mark across ALL history —
@@ -236,8 +248,10 @@ braces — write it exactly as the schema requires.
      spend for intl-specific color only, labeled as window figures. If the
      digest shows the ledger is unreconciled (e.g. $0.00 MTD while intl-en
      verifiably spends), say so IN this block.
-  3. **Serving state** (1–2 lines): google-intl-en-jul26 ENABLED/PAUSED as
-     the digest states it + one delivery word (serving / starved / dark);
+  3. **Serving state** (1–2 lines): the effective native state, including ENDED,
+     PAUSED or UNKNOWN. Report fresh ENDED campaigns as completed/non-serving,
+     even when their configured switch is ENABLED. Use serving/starved only
+     for eligible active campaigns;
      confirm ja/ko remain PAUSED. Then a **per-geo line per selected geo**
      from the digest's `## Per-geo delivery` block (impressions, clicks,
      spend, signups/syncs, in-scope campaign share) — name any selected geo

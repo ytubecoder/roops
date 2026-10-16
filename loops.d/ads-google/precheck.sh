@@ -116,10 +116,11 @@ if isinstance(camp, dict):
         if not vids and not google_leg.get("campaigns"):
             continue
         scope_variants.update(vids)
-        camps = [(cc.get("campaign_id"), cc.get("name"),
-                  cc.get("configured_status") or cc.get("status"))
-                 for cc in google_leg.get("campaigns", [])]
-        for cid, nm, st in camps:
+        # Keep GC's effective status and native provenance. The configured
+        # ENABLED switch can remain on after a native campaign has ENDED.
+        camps = google_leg.get("campaigns", [])
+        for cc in camps:
+            cid, nm = cc.get("campaign_id"), cc.get("name")
             if cid:
                 scope_campaigns[cid] = nm
         scope_cards.append({"key": key, "title": c.get("title"),
@@ -133,12 +134,16 @@ if scope_cards:
         cadence = sc["cadence_days"]
         cad = f", cadence_days={cadence}" if cadence else ""
         print(f"- {sc['key']} ({sc['title']}) started {sc['started']}{cad}")
-        for cid, nm, st in sc["campaigns"]:
-            print(f"    campaign {cid} {nm} [{st}]")
+        for cc in sc["campaigns"]:
+            state = {k: cc.get(k) for k in ("status", "configured_status", "native_status", "primary_status", "status_reasons", "status_source", "status_as_of", "status_evidence", "end_time", "ended", "serving")}
+            print(f"    campaign {cc.get('campaign_id')} {cc.get('name')} effective_state=" + json.dumps(state, separators=(",", ":")))
+            if cc.get("status") == "ENDED" and cc.get("status_evidence") == "fresh":
+                print(f"    RESOLVED_DELIVERY {cc.get('campaign_id')}: native campaign ENDED; zero later delivery is expected. Strike prior dark/starved findings for this campaign; do not recommend resuming it.")
     print(f"- scope variant ids: {sorted(scope_variants)}")
 else:
     print("- NO scope cards resolved (campaigns payload missing/empty) — treat as input gap.")
 print("- EXCLUDED by design: g-intl (owned by ads-intl loop), retired.")
+print("- Campaign status is effective native state, not the configured switch. ENDED campaigns are completed/non-serving, not starved. UNKNOWN/stale evidence is a state gap, never proof of live delivery eligibility.")
 print()
 
 # ---- Per-variant metrics (in-scope google rows) ----
@@ -186,8 +191,8 @@ if isinstance(sb, dict):
               f"camp {s.get('campaign_id')} {s.get('network_type')} impr={s.get('impressions')} "
               f"clicks={s.get('clicks')} spend=${spend} conv={s.get('conversions')}")
     if not srows:
-        print("- no in-scope ad-group rows in scoreboard surfaces (input gap if any in-scope campaign is ENABLED).")
-    print("- One row per ad group x network type; a variant may own several. An ENABLED campaign with no row here delivered nothing in the window.")
+        print("- no in-scope ad-group rows in scoreboard surfaces; check effective campaign state before interpreting zero delivery.")
+    print("- One row per ad group x network type; a variant may own several. Absent rows show no reported delivery, not current eligibility. ENDED/PAUSED campaigns are expected to have no later delivery.")
 else:
     print("- scoreboard MISSING — no leg-level read.")
 print()
@@ -421,7 +426,7 @@ from ads_search_intent import intent_digest
 print("\n".join(intent_digest(search_review, scope_campaigns, search_review_ok)))
 print()
 
-# ---- Bulky evidence LAST (harness caps precheck output at 64 KiB, INTERFACES.md §4):
+# ---- Bulky evidence LAST (this loop overrides the 64 KiB default to 128 KiB):
 # the authoritative budget/journal/events/prior-set/METRICS blocks above must
 # survive a truncation; these two sections are the ones a cap would cut.
 
@@ -437,7 +442,7 @@ else:
     print("- Complete account-local days:", search_review.get("complete_window"),
           "partial day:", search_review.get("partial_day"), "timezone:", search_review.get("time_zone"))
     print("- Separate product-fit review window:", search_review.get("review_window"), "; native conversion credits are not users, successful syncs or paid customers.")
-    print("- All enabled native Search campaigns (including new/unregistered probes):")
+    print("- Native Search campaigns with configured ENABLED switch, including ENDED campaigns (and new/unregistered probes):")
     native_ids = set((search_review.get("coverage") or {}).keys())
     overview = search_review.get("campaigns", [])
     print("- Campaign overview shown:", min(20, len(overview)), "of", len(overview), "cached campaigns; remaining rows are in the input artifact.")
@@ -445,7 +450,9 @@ else:
         c = r.get("campaign") or {}
         cid = str(c.get("id", ""))
         native_ids.add(cid)
-        print("  -", cid, json.dumps(c.get("name")), "coverage=", json.dumps((search_review.get("coverage") or {}).get(cid)))
+        print("  -", cid, json.dumps(c.get("name")), "configured_status=", c.get("status"), "native_primary_status=", c.get("primary_status"), "coverage=", json.dumps((search_review.get("coverage") or {}).get(cid)))
+        if search_review_ok and c.get("primary_status") == "ENDED":
+            print("    RESOLVED_DELIVERY", cid, ": fresh native primary_status=ENDED. Zero later delivery is expected; strike prior starvation findings.")
     registry_ids = set()
     for card in (camp.get("cards", []) if isinstance(camp, dict) else []):
         if card.get("status") == "retired":

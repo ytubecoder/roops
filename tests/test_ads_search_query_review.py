@@ -60,7 +60,7 @@ with open(os.environ["FETCH_LOG"], "a") as log:
             },
         }
 
-    def run_precheck(self, name, snapshot):
+    def run_precheck(self, name, snapshot, campaigns=None):
         self.counter += 1
         fixture = self.root / str(self.counter)
         fixture.mkdir()
@@ -85,6 +85,8 @@ with open(os.environ["FETCH_LOG"], "a") as log:
                 ]
             },
         }
+        if campaigns is not None:
+            payloads["campaigns"] = campaigns
         for key, value in payloads.items():
             (fixture / (key + ".json")).write_text(json.dumps(value))
         out = fixture / "out"
@@ -236,6 +238,129 @@ with open(os.environ["FETCH_LOG"], "a") as log:
     def test_legacy_snapshot_is_explicit_28_day_input_gap(self):
         text = self.run_precheck("ads-google", self.snapshot)
         self.assertIn("28-day Search intent/action evidence is unavailable", text)
+
+    def test_native_ended_survives_enabled_switch_and_resolves_dark_findings(self):
+        for name, key, cid in (
+            ("ads-google", "g-msg", "google"),
+            ("ads-intl", "g-intl", "intl"),
+        ):
+            with self.subTest(loop=name):
+                data = copy.deepcopy(self.snapshot)
+                data["campaigns"] = [
+                    {
+                        "campaign": {
+                            "id": cid,
+                            "name": cid,
+                            "status": "ENABLED",
+                            "primary_status": "ENDED",
+                        }
+                    }
+                ]
+                campaigns = {
+                    "cards": [
+                        {
+                            "key": key,
+                            "legs": [
+                                {
+                                    "network": "google",
+                                    "campaigns": [
+                                        {
+                                            "campaign_id": cid,
+                                            "name": cid,
+                                            "status": "ENDED",
+                                            "configured_status": "ENABLED",
+                                            "native_status": "ENABLED",
+                                            "primary_status": "ENDED",
+                                            "status_evidence": "fresh",
+                                            "status_source": "google_api",
+                                            "status_as_of": data["generated_at"],
+                                            "ended": True,
+                                            "serving": False,
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                }
+                text = self.run_precheck(name, data, campaigns)
+                scope = text.split("## In-scope variant metrics", 1)[0]
+                self.assertIn('"status":"ENDED","configured_status":"ENABLED"', scope)
+                self.assertIn("RESOLVED_DELIVERY " + cid, scope)
+                self.assertIn("native_primary_status= ENDED", text)
+                self.assertIn("Strike prior dark/starved findings", scope)
+                self.assertNotIn(cid + " [ENABLED]", scope)
+
+    def test_stale_ended_evidence_does_not_declare_current_resolution(self):
+        data = copy.deepcopy(self.snapshot)
+        data.update(stale=True)
+        data["campaigns"] = [
+            {
+                "campaign": {
+                    "id": "google",
+                    "name": "google",
+                    "status": "ENABLED",
+                    "primary_status": "ENDED",
+                }
+            }
+        ]
+        campaigns = {
+            "cards": [
+                {
+                    "key": "g-msg",
+                    "legs": [
+                        {
+                            "network": "google",
+                            "campaigns": [
+                                {
+                                    "campaign_id": "google",
+                                    "name": "google",
+                                    "status": "UNKNOWN",
+                                    "configured_status": "ENABLED",
+                                    "primary_status": "ENDED",
+                                    "status_evidence": "stale",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+        text = self.run_precheck("ads-google", data, campaigns)
+        self.assertIn('"status":"UNKNOWN","configured_status":"ENABLED"', text)
+        self.assertNotIn("RESOLVED_DELIVERY google", text)
+        self.assertIn("UNKNOWN/stale evidence is a state gap", text)
+
+    def test_both_consumer_caps_preserve_critical_blocks_and_original_finding_identity(
+        self,
+    ):
+        import importlib.util
+
+        for name, aid in (("ads-google", "ADG-CMP-33"), ("ads-intl", "ADI-CMP-11")):
+            with self.subTest(loop=name):
+                config = (REPO / "loops.d" / name / "loop.conf").read_text()
+                self.assertIn("precheck_cap_bytes=131072", config.splitlines())
+                text = self.run_precheck(name, self.snapshot)
+                self.assertLess(len(text.encode()), 131072)
+                self.assertLess(
+                    text.index("## Product-fit recommendations"),
+                    text.index("## Native Search query"),
+                )
+                prompt = (REPO / "loops.d" / name / "prompt.md").read_text()
+                self.assertIn("original ID and original scope", prompt)
+                path = REPO / "loops.d" / name / "bin" / "validate_action_set.py"
+                spec = importlib.util.spec_from_file_location(
+                    "continuity_review_" + name, path
+                )
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                self.assertEqual(
+                    module._continuity_errors(
+                        [aid],
+                        {"high_water": 34, "prior_ids": [aid], "prior_open_ids": []},
+                    ),
+                    [],
+                )
 
 
 if __name__ == "__main__":

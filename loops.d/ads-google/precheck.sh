@@ -415,6 +415,12 @@ print("- actions.open / actions.struck: count them from the set YOU emit this ru
 print("- All metric values are NUMBERS, not strings.")
 print()
 
+# Keep bounded product-fit findings ahead of the bulky inventory digest.
+sys.path.insert(0, str(Path(LOOP_DIR).resolve().parents[1] / "bin"))
+from ads_search_intent import intent_digest
+print("\n".join(intent_digest(search_review, scope_campaigns, search_review_ok)))
+print()
+
 # ---- Bulky evidence LAST (harness caps precheck output at 64 KiB, INTERFACES.md §4):
 # the authoritative budget/journal/events/prior-set/METRICS blocks above must
 # survive a truncation; these two sections are the ones a cap would cut.
@@ -430,6 +436,7 @@ else:
         print("- INPUT GAP: cached Search evidence is stale, has incomplete freshness metadata or its latest refresh failed; any targeting assessment is provisional.")
     print("- Complete account-local days:", search_review.get("complete_window"),
           "partial day:", search_review.get("partial_day"), "timezone:", search_review.get("time_zone"))
+    print("- Separate product-fit review window:", search_review.get("review_window"), "; native conversion credits are not users, successful syncs or paid customers.")
     print("- All enabled native Search campaigns (including new/unregistered probes):")
     native_ids = set((search_review.get("coverage") or {}).keys())
     overview = search_review.get("campaigns", [])

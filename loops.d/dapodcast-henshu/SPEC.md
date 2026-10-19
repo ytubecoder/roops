@@ -4,7 +4,9 @@ The full design is in `directorsactorspodcast`, at
 `docs/superpowers/specs/2026-09-30-feedback-loop-design.md` (CR-61).
 
 1. Purpose & stop condition
-The loop turns author feedback left on https://dapodcast.pages.dev into
+The loop turns author feedback left on the firstparty studio (http://127.0.0.1:8934
+on this host, https://dastudio.rhino-balance.ts.net/ for people; https://dapodcast.pages.dev
+until CR-86) into
 published editorial outcomes without the owner's involvement. Each note or
 direct edit gets:
 - a bilingual editorial reply on the app's Feedback tab
@@ -102,7 +104,8 @@ for a scheduled network write. It covers exactly three mutations, all in
 precheck via `tools/feedback-publish.sh`:
 - reply and revert notes through the site's own `/api/review/feedback`
 - `git push` of `main` on `ytubecoder/directorsactorspodcast`
-- `wrangler pages deploy` of the `dapodcast` project
+- `wrangler pages deploy` of the `dapodcast` project (until CR-86; since then
+  `tools/deploy-firstparty.sh --from .`, which restarts the local `dac-studio`)
 
 The credentials, all on firstparty only:
 - `~/.ssh/dapodcast-deploy`: a deploy key with write access to this one repo

@@ -6,6 +6,8 @@
 set -euo pipefail
 REPO="${DAPODCAST_BACKUP_ROOT:-$HOME/projects/dapodcast-backup}"
 export PATH="$HOME/.local/node/bin:$PATH" GIT_TERMINAL_PROMPT=0
+# Production is the firstparty studio on this host since CR-86 (Cloudflare retired).
+export REVIEW_STATE_URL="${REVIEW_STATE_URL:-http://127.0.0.1:8934/api/review/state}"
 cd "$REPO"
 git fetch -q origin
 git reset -q --hard origin/main

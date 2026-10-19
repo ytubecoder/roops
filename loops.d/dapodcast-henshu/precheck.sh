@@ -14,7 +14,10 @@ set -euo pipefail
 : "${OUT_DIR:?OUT_DIR required}"
 
 REPO="${DAPODCAST_ROOT:-$HOME/projects/directorsactorspodcast}"
-API="${REVIEW_API_BASE:-https://dapodcast.pages.dev}"
+# Production is the firstparty studio on this host since CR-86 (Cloudflare retired).
+API="${REVIEW_API_BASE:-http://127.0.0.1:8934}"
+export REVIEW_API_BASE="$API" FEEDBACK_ASSET_BASE="${FEEDBACK_ASSET_BASE:-$API}"
+export FEEDBACK_DEPLOY_CMD="${FEEDBACK_DEPLOY_CMD:-./tools/deploy-firstparty.sh --from .}"
 STATE_DIR="$HOME/.cache/dapodcast/henshu"
 MAX_FIX_ROUNDS=3
 # The harness caps a precheck at 300 s. Publish is resumable, so a kill only

@@ -109,8 +109,9 @@ precheck via `tools/feedback-publish.sh`:
 
 The credentials, all on firstparty only:
 - `~/.ssh/dapodcast-deploy`: a deploy key with write access to this one repo
-- `~/.config/dapodcast/cloudflare.env` (mode 600): a Pages-edit and D1-read
-  token
+- `~/.config/dapodcast/cloudflare.env` (mode 600): the retired Pages-edit and
+  D1-read token. Nothing has needed it since CR-86; it goes when Cloudflare is
+  torn down.
 
 The harness `.env` holds no credentials for this loop, and the engine never
 sees them.

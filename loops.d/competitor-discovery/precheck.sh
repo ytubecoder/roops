@@ -17,6 +17,15 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 GITHUB_TOKEN="$(gh auth token -u ytubecoder 2>/dev/null || true)"
 if [ -n "$GITHUB_TOKEN" ]; then export GITHUB_TOKEN; else unset GITHUB_TOKEN; fi
 
+# Reddit evidence comes from RedditGrow's /reddit/search. Only that one key is
+# lifted from the repo .env (never the whole file, never printed); without it
+# the script marks the Reddit queries failed/config and carries on.
+REPO_FOR_KEY="${MAGUYVA_REPO:-$HOME/projects/maguyva-marketing}"
+if [ -f "$REPO_FOR_KEY/.env" ]; then
+  RG_KEY="$(grep -E '^REDDITGROW_API_KEY=' "$REPO_FOR_KEY/.env" | head -n1 | cut -d= -f2- | tr -d '"'"'"'"' | tr -d '[:space:]')"
+  if [ -n "$RG_KEY" ]; then export REDDITGROW_API_KEY="$RG_KEY"; fi
+fi
+
 OUT="${OUT_DIR:?OUT_DIR required}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CACHE="$HERE/cache"

@@ -7,16 +7,17 @@ Surface tools that may compete with Maguyva and are not yet in `gc-actions/specs
 Outer shape human-in-the-loop: the loop proposes candidates, Generalissimo gives the verdict (accept = `tracked`, reject = `rejected` with a reason). Inside one invocation the engine does single-shot labelling of a short printed list. No exploration.
 
 3. Type & data flow (precheck gathers vs engine interprets)
-`type=agent`. `precheck.sh` runs `scripts/competitor-discovery.py --out-root $OUT_DIR/discovery --max-candidates 40` (11 anonymous GitHub queries paced 6.5 s, 6 Tavily queries), diffs `candidates.json` against `cache/seen.json` (`{key: {first_seen, best_score, name}}`, key = repo or domain, lower-case) and prints only new candidates, the top-5 standing list and a stats row. Empty stdout = skipped. Output contract for Growth Console: `$OUT_DIR/discovery/<date>/candidates.json`.
+`type=agent`. `precheck.sh` runs `scripts/competitor-discovery.py --out-root $OUT_DIR/discovery --max-candidates 40` (11 anonymous GitHub queries paced 6.5 s, 6 Tavily queries, 7 RedditGrow `/reddit/search` queries since 2026-10-21 — repos and product domains linked or named in the posts become candidates with the post as evidence), diffs `candidates.json` against `cache/seen.json` (`{key: {first_seen, best_score, name}}`, key = repo or domain, lower-case) and prints only new candidates, the top-5 standing list and a stats row. Empty stdout = skipped. Output contract for Growth Console: `$OUT_DIR/discovery/<date>/candidates.json`.
 
 4. Cadence
 `weekly:tue:10:30` local. Missed firings coalesce; the diff is against the cache, so nothing is lost. Staleness expectation 8 days.
 
 5. Scope & exclusions
-In scope: GitHub repository search and Tavily web search for codebase context / code intelligence / structural search tools. Excluded: anything already in the registry (any status, by repo or domain suffix), aggregator and social domains, repos under 300 stars or idle over 120 days (script filters).
+In scope: GitHub repository search, Tavily web search and Reddit search (RedditGrow) for codebase context / code intelligence / structural search tools. Excluded: anything already in the registry (any status, by repo or domain suffix), aggregator and social domains, repos under 300 stars or idle over 120 days (script filters).
 
 6. Guardrails
 - Never print the Tavily key. The script reads the exact field `mcp_servers.tavily.env.TAVILY_API_KEY` of `~/.codex/config.toml` and echoes no provider error bodies.
+- Never print the RedditGrow key. `precheck.sh` lifts the single `REDDITGROW_API_KEY` line from the repo `.env` into the environment; the script scrubs it from any payload it persists. 7 calls per firing against RedditGrow's 100/hour.
 - GitHub reads use `gh auth token -u ytubecoder` (Generalissimo's own account, read-only GETs) when that login exists on the host, anonymous otherwise; the token is never printed. Added 2026-10-15 after the anonymous 60/h limit was exhausted by three competitor prechecks sharing one IP.
 - Never edit the registry: the verdict is Generalissimo's (design §4).
 - Writes: only the runner-owned `$OUT_DIR` and this loop's `cache/seen.json`.

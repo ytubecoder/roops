@@ -4,8 +4,10 @@
 
 Anonymous, best-effort, paced reads (GitHub, npm, PyPI, crates, Homebrew, HN
 Algolia) plus Tavily news for tracked rows (key read by the gtm-public-search
-probe's exact-field loader, never printed). An error becomes a short string in
-that competitor's `errors`; nothing here crashes the run. Empty stdout means
+probe's exact-field loader, never printed) and Reddit mentions for every row
+via RedditGrow's /reddit/search (key = REDDITGROW_API_KEY, exported by
+precheck.sh from the repo .env, never printed). An error becomes a short string
+in that competitor's `errors`; nothing here crashes the run. Empty stdout means
 nothing new anywhere, so the harness skips the engine.
 """
 
@@ -34,6 +36,42 @@ BLOCK_CAP = 1500
 STDOUT_CAP = 48 * 1024
 REGISTRY_REL = "gc-actions/specs/inputs/competitor-registry.yaml"
 TAVILY_URL = "https://api.tavily.com/search"
+REDDITGROW_SEARCH_URL = "https://redditgrow.ai/api/v1/reddit/search"
+REDDIT_TIME = "month"  # Reddit search window; the count is "last 30 days"
+REDDIT_LIMIT = 25
+REDDIT_TOP = 3
+REDDIT_NEW_CAP = 4  # new posts printed per competitor per run
+# A post counts as a mention only when the brand term appears as a whole word
+# AND the post reads as developer talk (RedditGrow's own monitor matched "Amp"
+# on a dog video; Reddit search matches job ads for "sourcegraph").
+REDDIT_CONTEXT_TERMS = (
+    "code", "codebase", "repo", "repository", "mcp", "agent", "ide", "developer",
+    "programming", "llm", "claude", "cursor", "copilot", "github", "api", "cli",
+    "editor", "vscode", "software", "engineer", "refactor", "index", "search",
+    "open source", "open-source", "ai",
+)
+# Tokens of a multi-word brand term that are too generic to stand alone
+# ("claude context mcp" must match as a phrase; "cursor ai" may match "cursor").
+REDDIT_GENERIC_TOKENS = frozenset(
+    {
+        "code", "tools", "tool", "mcp", "editor", "plans", "plan", "context", "claude",
+        "codebase", "memory", "index", "indexing", "ai", "search", "grep", "deep",
+        "server", "agent", "graph", "local", "enterprise", "cloud", "pro", "open",
+    }
+)
+# Hiring posts mention every vendor by name and say nothing about the product.
+REDDIT_JOB_MARKERS = ("hiring", "job", "career", "remote work", "recruit")
+REDDIT_DEV_SUBS = frozenset(
+    {
+        "claudecode", "claudeai", "mcp", "cursor", "githubcopilot", "chatgptcoding",
+        "codex", "ai_agents", "vscode", "programming", "coding", "localllama",
+        "artificial", "machinelearning", "devops", "webdev", "softwareengineering",
+        "experienceddevs", "cscareerquestions", "rust", "golang", "python",
+        "javascript", "typescript", "java", "neovim", "emacs", "vibecoding",
+        "aiagents", "llmdevs", "openai", "chatgpt", "ollama", "selfhosted",
+        "sourcegraph", "augmentcode", "windsurf", "aider", "codeium", "tabnine",
+    }
+)
 _PACE = {"last": 0.0}
 
 
@@ -107,6 +145,29 @@ def _list(value):
 def hn_query(row):
     hints = _list(row.get("voice_hints"))
     return hints[0] if hints else row.get("name", row["slug"])
+
+
+def reddit_terms(row):
+    """Terms a Reddit post must contain (whole word); the first is the search query.
+
+    Full brand terms always count; a single token of a multi-word term counts too
+    when it is distinctive (4+ chars, not generic), so "cursor ai" also accepts a
+    post that just says "Cursor" while "claude context mcp" stays a phrase.
+    """
+    terms = _list(row.get("brand_terms")) or _list(row.get("voice_hints"))[:1]
+    terms = terms or [row.get("name", row["slug"])]
+    out = list(terms)
+    for term in terms:
+        for tok in term.lower().split():
+            if len(tok) >= 4 and tok not in REDDIT_GENERIC_TOKENS and tok not in {t.lower() for t in out}:
+                out.append(tok)
+    return out
+
+
+def reddit_is_job_post(post):
+    sub = (post.get("subreddit") or "").lower()
+    title = (post.get("title") or "").lower()
+    return any(m in sub for m in REDDIT_JOB_MARKERS) or "[hiring]" in title or "hiring" in title
 
 
 # ------------------------------------------------------------- per-source
@@ -221,6 +282,73 @@ def tavily_news(row, key, get=get_json):
     return out[:5]
 
 
+def _whole_word(term, text):
+    return re.search(r"(?<![a-z0-9])" + re.escape(term.lower()) + r"(?![a-z0-9])", text) is not None
+
+
+def reddit_relevant(post, terms):
+    """Whole-word brand term + developer context (sub or vocabulary)."""
+    text = f"{post.get('title') or ''} {post.get('excerpt') or ''}".lower()
+    if reddit_is_job_post(post):
+        return False
+    if not any(_whole_word(t, text) for t in terms):
+        return False
+    if (post.get("subreddit") or "").lower() in REDDIT_DEV_SUBS:
+        return True
+    return any(_whole_word(t, text) for t in REDDIT_CONTEXT_TERMS)
+
+
+def reddit_mentions(row, key, get=get_json):
+    """RedditGrow /reddit/search for the first brand term, gated by reddit_relevant.
+
+    Returns (count_30d, top_by_score[:3], posts) where posts carry url, title,
+    subreddit, score, created_at and a 240-char excerpt — never author.
+    """
+    terms = reddit_terms(row)
+    query = urlencode({"q": terms[0], "sort": "new", "time": REDDIT_TIME, "limit": REDDIT_LIMIT})
+    data = get(REDDITGROW_SEARCH_URL + "?" + query, {"Authorization": "Bearer " + key})
+    rows = data.get("items") if isinstance(data, dict) else None
+    if rows is None and isinstance(data, dict):
+        rows = data.get("data")
+    if not isinstance(rows, list):
+        raise FetchError("malformed")
+    posts = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        url = r.get("url") or ""
+        permalink = r.get("permalink") or ""
+        if isinstance(permalink, str) and permalink.startswith("/"):
+            url = "https://www.reddit.com" + permalink
+        if not isinstance(url, str) or not url.startswith("https://"):
+            continue
+        try:
+            created = datetime.fromtimestamp(int(float(r.get("created_utc") or 0)), timezone.utc)
+            created_at = created.strftime("%Y-%m-%dT%H:%M:%SZ") if created.year > 2000 else None
+        except (TypeError, ValueError, OverflowError, OSError):
+            created_at = None
+        post = {
+            "title": " ".join(str(r.get("title") or "").split())[:200],
+            "url": url,
+            "subreddit": str(r.get("subreddit") or "")[:60],
+            "score": _num(_int(r.get("score"))) or 0,
+            "num_comments": _num(_int(r.get("num_comments"))) or 0,
+            "created_at": created_at,
+            "excerpt": " ".join(str(r.get("selftext") or "").split())[:240],
+        }
+        if reddit_relevant(post, terms):
+            posts.append(post)
+    top = sorted(posts, key=lambda p: (p["score"], p["num_comments"]), reverse=True)[:REDDIT_TOP]
+    return len(posts), [{k: p[k] for k in ("title", "url", "subreddit", "score", "created_at")} for p in top], posts
+
+
+def _int(value):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def visible_text(raw, limit=400):
     title = re.search(r"<title[^>]*>(.*?)</title>", raw, re.DOTALL | re.IGNORECASE)
     body = re.sub(r"(?is)<(script|style|noscript|svg|head)\b.*?</\1>", " ", raw)
@@ -244,7 +372,7 @@ def news_page(url, get=get_text):
 # ------------------------------------------------------------ orchestration
 
 
-def collect_competitor(row, now, tavily_key=None, fns=None):
+def collect_competitor(row, now, tavily_key=None, fns=None, reddit_key=None):
     f = {
         "stars": gh_stars,
         "rels": gh_releases,
@@ -252,6 +380,7 @@ def collect_competitor(row, now, tavily_key=None, fns=None):
         "hn": hn_mentions,
         "tv": tavily_news,
         "page": news_page,
+        "rd": reddit_mentions,
     }
     f.update(fns or {})
     out = {
@@ -261,7 +390,8 @@ def collect_competitor(row, now, tavily_key=None, fns=None):
         "stars": {},
         "releases": [],
         "downloads": {"npm": {}, "pypi": {}, "crates": {}, "brew": {}},
-        "mentions": {"hn_90d": None, "hn_top": []},
+        "mentions": {"hn_90d": None, "hn_top": [], "reddit_30d": None, "reddit_top": []},
+        "reddit": [],
         "news": [],
         "errors": [],
     }
@@ -289,6 +419,15 @@ def collect_competitor(row, now, tavily_key=None, fns=None):
         out["mentions"]["hn_90d"], out["mentions"]["hn_top"] = f["hn"](hn_query(row), now)
     except Exception as exc:
         err("hn", exc)
+    if reddit_key:
+        try:
+            count, top, posts = f["rd"](row, reddit_key)
+            out["mentions"]["reddit_30d"], out["mentions"]["reddit_top"] = count, top
+            out["reddit"] = posts
+        except Exception as exc:
+            err("redditgrow", exc)
+    else:
+        out["errors"].append("redditgrow: no key")
     if row["status"] == "tracked":
         if tavily_key:
             try:
@@ -321,6 +460,8 @@ def load_cache(cache_dir):
         "releases": set(rd("releases.json", [])),
         "news": set(rd("news.json", [])),
         "hn": rd("hn.json", {}),
+        "reddit": set(rd("reddit.json", [])),
+        "reddit_count": rd("reddit-count.json", {}),
     }
 
 
@@ -331,10 +472,13 @@ def apply_cache(competitors, cache):
         prev_stars = cache["stars"].get(c["slug"]) or {}
         for repo, s in c["stars"].items():
             s["prev_stars"] = prev_stars.get(repo)
+        seen_reddit = cache.get("reddit") or set()
         diffs[c["slug"]] = {
             "new_releases": [r for r in c["releases"] if r.get("url") and r["url"] not in cache["releases"]],
             "new_news": [n for n in c["news"] if n["url"] not in cache["news"]],
             "prev_hn": cache["hn"].get(c["slug"]),
+            "new_reddit": [p for p in c.get("reddit") or [] if p["url"] not in seen_reddit],
+            "prev_reddit": (cache.get("reddit_count") or {}).get(c["slug"]),
         }
     return diffs
 
@@ -350,13 +494,33 @@ def next_cache(competitors, cache):
             hn[c["slug"]] = c["mentions"]["hn_90d"]
     rel = set(cache["releases"]) | {r["url"] for c in competitors for r in c["releases"] if r.get("url")}
     news = set(cache["news"]) | {n["url"] for c in competitors for n in c["news"]}
-    return {"stars": stars, "hn": hn, "releases": sorted(rel), "news": sorted(news)}
+    reddit = set(cache.get("reddit") or set()) | {p["url"] for c in competitors for p in c.get("reddit") or []}
+    reddit_count = dict(cache.get("reddit_count") or {})
+    for c in competitors:
+        if c["mentions"].get("reddit_30d") is not None:
+            reddit_count[c["slug"]] = c["mentions"]["reddit_30d"]
+    return {
+        "stars": stars,
+        "hn": hn,
+        "releases": sorted(rel),
+        "news": sorted(news),
+        "reddit": sorted(reddit),
+        "reddit_count": reddit_count,
+    }
 
 
 def save_cache(cache_dir, new):
     d = Path(cache_dir)
     d.mkdir(parents=True, exist_ok=True)
-    for name, key in (("stars.json", "stars"), ("hn.json", "hn"), ("releases.json", "releases"), ("news.json", "news")):
+    names = (
+        ("stars.json", "stars"),
+        ("hn.json", "hn"),
+        ("releases.json", "releases"),
+        ("news.json", "news"),
+        ("reddit.json", "reddit"),
+        ("reddit-count.json", "reddit_count"),
+    )
+    for name, key in names:
         tmp = d / (name + ".tmp")
         tmp.write_text(json.dumps(new[key], sort_keys=True))
         tmp.replace(d / name)
@@ -391,6 +555,21 @@ def build_block(c, diff):
         lines.append(f"HN 90d mentions: {hn} (prev {prev if prev is not None else 'none'})")
         for t in c["mentions"]["hn_top"][:1]:
             lines.append(f"HN top: {_clip(t['title'], 80)} ({t['points']} pts) {t['url']}")
+    new_reddit = sorted(diff.get("new_reddit") or [], key=lambda p: (p.get("score") or 0), reverse=True)
+    rd, prev_rd = c["mentions"].get("reddit_30d"), diff.get("prev_reddit")
+    if new_reddit or (rd is not None and rd != prev_rd):
+        lines.append(f"Reddit 30d mentions: {rd} (prev {prev_rd if prev_rd is not None else 'none'})")
+    for p in new_reddit[:REDDIT_NEW_CAP]:
+        date = str(p.get("created_at") or "")[:10]
+        lines.append(
+            " ".join(
+                f"NEW reddit {date} r/{p['subreddit']} ({p['score']} pts) {_clip(p['title'], 100)} | {p['url']}".split()
+            )
+        )
+        if p.get("excerpt"):
+            lines.append(f"  > {_clip(p['excerpt'], 160)}")
+    if len(new_reddit) > REDDIT_NEW_CAP:
+        lines.append(f"  (+{len(new_reddit) - REDDIT_NEW_CAP} more new Reddit posts in pulse.json)")
     if not lines:
         return ""
     head = f"## {c['name']} ({c['slug']})"
@@ -411,6 +590,10 @@ def render(competitors, diffs):
         parts.append("ERRORS:\n" + "\n".join(errors))
     if not parts:
         return ""
+    if any("NEW reddit " in b for b in parts):
+        # Lets the engine spot a tool named in a Reddit post that no registry row covers.
+        known = ", ".join(f"{c['name']} ({c['slug']})" for c in competitors)
+        parts.insert(0, "KNOWN COMPETITORS (registry rows): " + known)
     text = "\n\n".join(parts) + "\n"
     raw = text.encode()
     if len(raw) > STDOUT_CAP:
@@ -435,6 +618,12 @@ def tavily_key():
         return None
 
 
+def redditgrow_key():
+    """REDDITGROW_API_KEY from the environment (precheck.sh exports it from the repo .env)."""
+    key = (os.environ.get("REDDITGROW_API_KEY") or "").strip()
+    return key if key and not any(ch.isspace() for ch in key) else None
+
+
 def main():
     out_dir = Path(os.environ.get("OUT_DIR") or ".")
     cache_dir = Path(os.environ.get("PULSE_CACHE_DIR") or HERE / "cache")
@@ -445,13 +634,15 @@ def main():
         print("ERRORS:\nregistry: unreadable")
         return 1
     key = tavily_key() if any(r["status"] == "tracked" for r in rows) else None
-    competitors = [collect_competitor(r, now, key) for r in rows]
+    rd_key = redditgrow_key()
+    competitors = [collect_competitor(r, now, key, reddit_key=rd_key) for r in rows]
     cache = load_cache(cache_dir)
     diffs = apply_cache(competitors, cache)
     pulse = {
         "schema_version": 1,
         "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "window_days": WINDOW_DAYS,
+        "reddit_window_days": 30,
         "competitors": competitors,
     }
     out_dir.mkdir(parents=True, exist_ok=True)

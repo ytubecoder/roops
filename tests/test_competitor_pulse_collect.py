@@ -40,6 +40,14 @@ def fns(stars=100, fail=None):
         ],
         "page": lambda url: {"title": "Changelog", "url": url, "published": None,
                              "source": "example.test", "snippet": "x"},
+        "rd": lambda row, key: (
+            2,
+            [{"title": "Tracked vs X", "url": "https://www.reddit.com/r/mcp/comments/a1/x/",
+              "subreddit": "mcp", "score": 12, "created_at": "2026-10-14T00:00:00Z"}],
+            [{"title": "Tracked vs X", "url": "https://www.reddit.com/r/mcp/comments/a1/x/",
+              "subreddit": "mcp", "score": 12, "num_comments": 3,
+              "created_at": "2026-10-14T00:00:00Z", "excerpt": "which one indexes a repo"}],
+        ),
     }
 
 
@@ -53,7 +61,7 @@ class Pulse(unittest.TestCase):
         self.rows = C["load_registry"](reg)
 
     def collect(self, **kw):
-        return [C["collect_competitor"](r, NOW, "k", fns(**kw)) for r in self.rows]
+        return [C["collect_competitor"](r, NOW, "k", fns(**kw), reddit_key="rg") for r in self.rows]
 
     def test_registry_filters_rejected(self):
         self.assertEqual([r["slug"] for r in self.rows], ["tracked", "watched"])
@@ -138,6 +146,75 @@ class Pulse(unittest.TestCase):
         json.dumps(comps)
         for key in ("slug", "name", "status", "stars", "releases", "downloads", "mentions", "news", "errors"):
             self.assertIn(key, comps[0])
+
+    def test_reddit_posts_print_once_then_only_count_moves(self):
+        comps = self.collect()
+        self.assertEqual(comps[0]["mentions"]["reddit_30d"], 2)
+        self.assertEqual(comps[1]["mentions"]["reddit_30d"], 2)  # watch rows get Reddit too
+        cache = C["load_cache"](self.dir / "cache")
+        text = C["render"](comps, C["apply_cache"](comps, cache))
+        self.assertIn("KNOWN COMPETITORS (registry rows): Tracked Tool (tracked), Watched Tool (watched)", text)
+        self.assertIn("NEW reddit 2026-10-14 r/mcp (12 pts) Tracked vs X | https://www.reddit.com/r/mcp/comments/a1/x/", text)
+        self.assertIn("  > which one indexes a repo", text)
+        self.assertIn("Reddit 30d mentions: 2 (prev none)", text)
+        C["save_cache"](self.dir / "cache", C["next_cache"](comps, cache))
+        cache = C["load_cache"](self.dir / "cache")
+        self.assertEqual(cache["reddit_count"], {"tracked": 2, "watched": 2})
+        again = self.collect()
+        text = C["render"](again, C["apply_cache"](again, cache))
+        self.assertEqual(text, "")  # same posts, same count: quiet week
+
+    def test_missing_reddit_key_is_an_error_row(self):
+        c = C["collect_competitor"](self.rows[1], NOW, None, fns())
+        self.assertIn("redditgrow: no key", c["errors"])
+        self.assertIsNone(c["mentions"]["reddit_30d"])
+
+    def test_old_cache_without_reddit_keys_still_works(self):
+        comps = self.collect()
+        cache = {"stars": {}, "releases": set(), "news": set(), "hn": {}}
+        diffs = C["apply_cache"](comps, cache)
+        self.assertEqual(len(diffs["tracked"]["new_reddit"]), 1)
+        self.assertIn("reddit", C["next_cache"](comps, cache))
+
+    def test_reddit_terms_add_distinctive_tokens_only(self):
+        self.assertEqual(C["reddit_terms"]({"slug": "cursor", "brand_terms": ["cursor ai", "cursor editor"]}),
+                         ["cursor ai", "cursor editor", "cursor"])
+        self.assertEqual(C["reddit_terms"]({"slug": "cc", "brand_terms": ["claude context mcp"]}),
+                         ["claude context mcp"])
+        self.assertEqual(C["reddit_terms"]({"slug": "x", "name": "Pharaoh"}), ["Pharaoh"])
+
+    def test_reddit_job_posts_are_dropped(self):
+        row = {"slug": "sourcegraph", "name": "Sourcegraph", "status": "tracked", "brand_terms": ["sourcegraph"]}
+        rows = [
+            {"id": "1", "title": "Sourcegraph [HIRING] a Tech Lead - Code Plane", "selftext": "", "subreddit": "jobboardsearch",
+             "score": 1, "num_comments": 0, "created_utc": "1792420361", "permalink": "/r/jobboardsearch/comments/1/x/"},
+            {"id": "2", "title": "Using Sourcegraph Deep Search in Claude Code", "selftext": "", "subreddit": "sourcegraph",
+             "score": 2, "num_comments": 0, "created_utc": "1792420361", "permalink": "/r/sourcegraph/comments/2/y/"},
+        ]
+        count, top, posts = C["reddit_mentions"](row, "rg", get=lambda url, headers=None, body=None: {"items": rows})
+        self.assertEqual(count, 1)
+        self.assertEqual(top[0]["url"], "https://www.reddit.com/r/sourcegraph/comments/2/y/")
+
+    def test_reddit_relevance_gate(self):
+        row = {"slug": "amp", "name": "Amp", "status": "watch", "brand_terms": ["amp"]}
+        rows = [
+            {"id": "1", "title": "Brave dog tugs a rope with Amp", "selftext": "", "subreddit": "dogs",
+             "score": 5, "num_comments": 0, "created_utc": "1792420361", "permalink": "/r/dogs/comments/1/x/"},
+            {"id": "2", "title": "Amp vs Cody for a large codebase", "selftext": "", "subreddit": "somewhere",
+             "score": 9, "num_comments": 2, "created_utc": "1792420361", "permalink": "/r/somewhere/comments/2/y/"},
+            {"id": "3", "title": "amplifier build", "selftext": "", "subreddit": "mcp",
+             "score": 1, "num_comments": 0, "created_utc": "0", "permalink": "/r/mcp/comments/3/z/"},
+            {"id": "4", "title": "trying Amp today", "selftext": "", "subreddit": "ClaudeCode",
+             "score": 1, "num_comments": 0, "created_utc": "1792420361", "url": "https://www.reddit.com/r/ClaudeCode/comments/4/w/"},
+        ]
+        count, top, posts = C["reddit_mentions"](row, "rg", get=lambda url, headers=None, body=None: {"items": rows})
+        self.assertEqual(count, 2)
+        self.assertEqual([p["url"] for p in top], [
+            "https://www.reddit.com/r/somewhere/comments/2/y/",
+            "https://www.reddit.com/r/ClaudeCode/comments/4/w/",
+        ])
+        self.assertNotIn("author", posts[0])
+        self.assertEqual(posts[0]["created_at"], "2026-10-19T14:32:41Z")
 
 
 if __name__ == "__main__":

@@ -6,7 +6,9 @@ platform) and are not yet in `gc-actions/specs/inputs/competitor-registry.yaml`.
 Design of record: `gc-actions/specs/competitor-profiles.md` §2b and §4 in the
 `maguyva-marketing` repo.
 
-`precheck.sh` already did ALL the searching (GitHub and Tavily). You have no
+`precheck.sh` already did ALL the searching (GitHub, Tavily and Reddit via
+RedditGrow; a `why:` of `reddit: <query>` means a Reddit post linked or named
+the tool). You have no
 network access. The `PRECHECK OUTPUT` block the runner appends below this
 prompt is the only ground truth: never add a candidate, star count, URL or
 fact that is not printed there. You report; you never edit the registry.

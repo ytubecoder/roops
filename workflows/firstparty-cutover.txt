@@ -111,6 +111,8 @@ Install in this order. Each `install` runs a real self-verify engine run (~10 se
 - Expected outcome: each name prints a successful install; guest `./bin/loopctl list` shows them installed.
 - If fails: the named loop's install stderr. Do not skip ahead; a failed install boots the unit back out. Fix requirements / probe / credential, then re-run from the failed name.
 
+- Stays on llm, never installed on the guest (they read llm-local files and keys): competitor-watch, competitor-keywords, competitor-discovery, competitor-pulse, competitor-rank, dev-asks-watch, research-replies. Leave them out of the loop above.
+
 - Run: ssh firstparty-svc 'cd ~/projects/loops && ./bin/loopctl console install'
 - Expected outcome: `loops-console.service` enabled and `/api/state` 200 on the guest loopback.
 - If fails: linger / tz / XDG host-check messages; `loginctl enable-linger`, set `XDG_RUNTIME_DIR=/run/user/$(id -u)`, then retry.

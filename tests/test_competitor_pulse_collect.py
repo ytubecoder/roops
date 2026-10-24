@@ -40,6 +40,7 @@ def fns(stars=100, fail=None):
         ],
         "page": lambda url: {"title": "Changelog", "url": url, "published": None,
                              "source": "example.test", "snippet": "x"},
+        "site": lambda url, now: C["site_reading"](url, now, get=lambda u: "<p>Stable page text long enough.</p>"),
         "rd": lambda row, key: (
             2,
             [{"title": "Tracked vs X", "url": "https://www.reddit.com/r/mcp/comments/a1/x/",
@@ -191,7 +192,7 @@ class Pulse(unittest.TestCase):
             {"id": "2", "title": "Using Sourcegraph Deep Search in Claude Code", "selftext": "", "subreddit": "sourcegraph",
              "score": 2, "num_comments": 0, "created_utc": "1792420361", "permalink": "/r/sourcegraph/comments/2/y/"},
         ]
-        count, top, posts = C["reddit_mentions"](row, "rg", get=lambda url, headers=None, body=None: {"items": rows})
+        count, top, _posts = C["reddit_mentions"](row, "rg", get=lambda url, headers=None, body=None: {"items": rows})
         self.assertEqual(count, 1)
         self.assertEqual(top[0]["url"], "https://www.reddit.com/r/sourcegraph/comments/2/y/")
 
@@ -215,6 +216,225 @@ class Pulse(unittest.TestCase):
         ])
         self.assertNotIn("author", posts[0])
         self.assertEqual(posts[0]["created_at"], "2026-10-19T14:32:41Z")
+
+
+PAGE_V1 = """<html><head><title>Acme pricing</title><script>var x = "Hidden script text that is long";</script></head>
+<body><nav><a>Home navigation link text that is long</a></nav>
+<h1>Acme indexes your whole codebase for agents</h1>
+<p>Plans start at twenty dollars per seat per month. Teams get shared context.</p>
+<p>We use cookies to improve your experience on this website.</p>
+<p>Short line</p><p>2026-10-24</p>
+<footer>Copyright 2026 Acme Inc. All rights reserved worldwide.</footer></body></html>"""
+PAGE_V2 = PAGE_V1.replace("<p>Short line</p>", "<p>New: Acme MCP server ships repo-wide context for every agent.</p>")
+SITE_REGISTRY = """schema_version: 2
+competitors:
+  - {name: Acme, slug: acme, status: tracked, seed_urls: ["https://acme.test/", "https://acme.test/pricing",
+     "https://acme.test/a", "https://acme.test/b"]}
+"""
+
+
+class Site(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        reg = self.dir / "registry.yaml"
+        reg.write_text(SITE_REGISTRY)
+        self.row = C["load_registry"](reg)[0]
+        self.calls = []
+
+    def run_once(self, page, fail_url=None):
+        def get(url):
+            self.calls.append(url)
+            if url == fail_url:
+                raise C["FetchError"]("http 503")
+            return page
+
+        f = fns()
+        f["site"] = lambda url, now: C["site_reading"](url, now, get=get)
+        c = C["collect_competitor"](self.row, NOW, "k", f, reddit_key="rg")
+        cache = C["load_cache"](self.dir / "cache")
+        diffs = C["apply_cache"]([c], cache)
+        text = C["build_block"](c, diffs["acme"])
+        C["save_cache"](self.dir / "cache", C["next_cache"]([c], cache))
+        return c, text
+
+    def test_lines_skip_noise_short_and_boilerplate(self):
+        lines = C["site_lines"](PAGE_V1)
+        self.assertIn("Acme indexes your whole codebase for agents", lines)
+        self.assertIn("Plans start at twenty dollars per seat per month.", lines)
+        self.assertIn("Teams get shared context.", lines)
+        joined = " ".join(lines)
+        for gone in ("Hidden script", "navigation", "cookies", "Short line", "2026-10-24", "rights reserved"):
+            self.assertNotIn(gone, joined)
+
+    def test_first_reading_change_then_quiet(self):
+        c, text = self.run_once(PAGE_V1)
+        self.assertEqual(len(self.calls), 3)  # cap 3 urls per row
+        self.assertIn("SITE first reading https://acme.test/ (3 lines)", text)
+        s = c["site"]["https://acme.test/"]
+        self.assertTrue(s["first_reading"])
+        self.assertEqual(s["title"], "Acme pricing")
+        cached = json.loads((self.dir / "cache/site.json").read_text())
+        self.assertEqual(len(cached["https://acme.test/"]["lines"]), 3)
+        self.assertTrue(cached["https://acme.test/"]["sha"])
+
+        c, text = self.run_once(PAGE_V2)
+        line = "New: Acme MCP server ships repo-wide context for every agent."
+        self.assertIn("SITE CHANGE https://acme.test/ (+1/\u22120)", text)
+        self.assertIn("  + " + line, text)
+        s = c["site"]["https://acme.test/pricing"]
+        self.assertEqual((s["first_reading"], s["changed"], s["added"], s["removed_count"]), (False, True, [line], 0))
+        public = C["public"](c)["site"]["https://acme.test/"]
+        self.assertEqual(set(public), {"fetched_at", "title", "first_reading", "changed", "added", "removed_count"})
+
+        c, text = self.run_once(PAGE_V2)
+        self.assertNotIn("SITE", text)
+        self.assertFalse(c["site"]["https://acme.test/"]["changed"])
+
+    def test_fetch_error_is_a_row_error_and_keeps_old_reading(self):
+        self.run_once(PAGE_V1)
+        c, text = self.run_once(PAGE_V2, fail_url="https://acme.test/pricing")
+        self.assertIn("site acme.test: http 503", c["errors"])
+        self.assertIn("SITE CHANGE https://acme.test/ ", text)  # other urls still ran
+        cached = json.loads((self.dir / "cache/site.json").read_text())
+        self.assertNotIn("New: Acme", " ".join(cached["https://acme.test/pricing"]["lines"]))
+
+    def test_old_cache_without_site_json_loads(self):
+        cache_dir = self.dir / "cache"
+        cache_dir.mkdir()
+        (cache_dir / "stars.json").write_text("{}")
+        cache = C["load_cache"](cache_dir)
+        self.assertEqual(cache["site"], {})
+        c, text = self.run_once(PAGE_V1)
+        self.assertIn("SITE first reading", text)
+        legacy = {"stars": {}, "releases": set(), "news": set(), "hn": {}}
+        C["apply_cache"]([c], legacy)
+        self.assertIn("site", C["next_cache"]([c], legacy))
+
+
+CAND_REGISTRY = """schema_version: 2
+competitors:
+  - {name: Known, slug: known, status: tracked, repos: [Org/Known], domains: [known.test],
+     seed_urls: ["https://github.com/org/seeded"]}
+  - {name: Gone, slug: gone, status: rejected, repos: [org/gone-row]}
+rejected:
+  - {name: Nope, domains: [nope.test], reason: x}
+"""
+
+
+def cand(i, **kw):
+    row = {"name": f"o/c{i}", "kind": "github repo", "repo": f"o/c{i}", "domain": None, "stars": 10,
+           "description": f"Candidate {i} indexes code", "html_url": f"https://github.com/o/c{i}",
+           "evidence_urls": [], "why_surfaced": [], "score": float(i), "verdict": ""}
+    row.update(kw)
+    return row
+
+
+def cand_fns(news_url="https://news.test/c"):
+    return {
+        "home": lambda domain: f"{domain} title — meta",
+        "tv": lambda row, key: [{"title": f"{row['name']} launch", "url": news_url, "published": "2026-10-20",
+                                 "source": "news.test", "snippet": ""}],
+        "rd": lambda row, key: (1, [{"title": "t", "url": "https://www.reddit.com/r/mcp/comments/z/",
+                                     "subreddit": "mcp", "score": 3, "created_at": "2026-10-20T00:00:00Z"}],
+                                [{"title": "t", "url": "https://www.reddit.com/r/mcp/comments/z/", "subreddit": "mcp",
+                                  "score": 3, "num_comments": 0, "created_at": "2026-10-20T00:00:00Z", "excerpt": ""}]),
+    }
+
+
+class Candidates(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        self.reg = self.dir / "registry.yaml"
+        self.reg.write_text(CAND_REGISTRY)
+        self.runs = self.dir / "runs"
+        self.seen = self.dir / "seen.json"
+        self.seen.write_text(json.dumps({"o/c12": {"first_seen": "2026-10-15", "best_score": 12, "name": "o/c12"}}))
+        rows = [cand(i) for i in range(1, 13)] + [
+            cand(90, repo="org/known", name="org/known"),
+            cand(91, repo="ORG/seeded", name="ORG/seeded"),
+            cand(92, repo="org/gone-row"),
+            cand(93, kind="product domain", repo=None, domain="docs.nope.test", name="Nope Docs"),
+            cand(94, verdict="rejected"),
+            cand(95, kind="product domain", repo=None, domain="www.fresh.test", name="Fresh", html_url=None),
+        ]
+        for name, data in (("20261015T000000Z-competitor-discovery-aaa", [cand(99)]),
+                           ("20261021T000000Z-competitor-discovery-bbb", rows)):
+            d = self.runs / name / "discovery" / name[:8]
+            d.mkdir(parents=True)
+            (d / "candidates.json").write_text(json.dumps({"schema_version": 1, "candidates": data}))
+        (self.runs / "20261022T000000Z-competitor-discovery-ccc").mkdir()  # newer run, no output yet
+
+    def gather(self, **kw):
+        return C["gather_candidates"](self.reg, self.runs, self.seen, "k", "rg", cand_fns(**kw))
+
+    def test_selection_skips_covered_and_verdicted_and_caps(self):
+        cands, source = self.gather()
+        self.assertIn("20261021T000000Z-competitor-discovery-bbb", source)
+        self.assertEqual(len(cands), C["CANDIDATE_CAP"])
+        keys = [c["key"] for c in cands]
+        self.assertEqual(keys[0], "fresh.test")  # score 95 first; repo-less keys by domain
+        for gone in ("org/known", "org/seeded", "org/gone-row", "docs.nope.test", "o/c94"):
+            self.assertNotIn(gone, keys)
+        self.assertEqual(keys[1:], ["o/c12", "o/c11", "o/c10", "o/c9", "o/c8", "o/c7", "o/c6"])
+
+    def test_output_shape(self):
+        cands, _ = self.gather()
+        fresh, c12 = cands[0], cands[1]
+        self.assertEqual(fresh["what"], "fresh.test title — meta")
+        self.assertEqual(fresh["url"], "https://fresh.test/")
+        self.assertEqual(c12["what"], "Candidate 12 indexes code")
+        self.assertEqual(c12["first_seen"], "2026-10-15")
+        self.assertEqual(c12["news"], [{"title": "c12 launch", "url": "https://news.test/c", "date": "2026-10-20"}])
+        self.assertEqual(c12["reddit_30d"], 1)
+        pub = C["public"](c12)
+        self.assertEqual(set(pub), {"key", "name", "kind", "url", "repo", "domain", "score", "first_seen", "what",
+                                    "news", "reddit_30d", "reddit_top", "errors"})
+        json.dumps(pub)
+
+    def test_missing_discovery_dir_is_empty(self):
+        cands, source = C["gather_candidates"](self.reg, self.dir / "absent", self.seen, "k", "rg", cand_fns())
+        self.assertEqual((cands, source), ([], None))
+        self.assertEqual(C["render"]([], {}, cands, {}), "")
+
+    def test_no_keys_skip_searches(self):
+        cands, _ = C["gather_candidates"](self.reg, self.runs, self.seen, None, None, cand_fns())
+        self.assertEqual(cands[1]["news"], [])
+        self.assertIsNone(cands[1]["reddit_30d"])
+        self.assertEqual(cands[1]["errors"], [])
+
+    def test_block_then_news_not_reprinted(self):
+        cache_dir = self.dir / "cache"
+        cands, _ = self.gather()
+        cache = C["load_cache"](cache_dir)
+        text = C["render"]([], {}, cands, C["apply_candidate_cache"](cands, cache))
+        self.assertIn(C["CANDIDATES_HEAD"], text)
+        self.assertIn("### o/c12 (o/c12)", text)
+        self.assertIn("what: Candidate 12 indexes code", text)
+        self.assertIn("score: 12.0  first seen: 2026-10-15", text)
+        self.assertIn("NEW news 2026-10-20 c12 launch | https://news.test/c", text)
+        self.assertIn("Reddit 30d mentions: 1", text)
+        self.assertIn("NEW reddit 2026-10-20 r/mcp (3 pts) t | https://www.reddit.com/r/mcp/comments/z/", text)
+        C["save_cache"](cache_dir, C["next_cache"]([], cache, cands))
+        again, _ = self.gather()
+        cache = C["load_cache"](cache_dir)
+        self.assertEqual(C["render"]([], {}, again, C["apply_candidate_cache"](again, cache)), "")
+        fresh_news, _ = self.gather(news_url="https://news.test/d")
+        text = C["render"]([], {}, fresh_news, C["apply_candidate_cache"](fresh_news, cache))
+        self.assertIn("https://news.test/d", text)
+        self.assertNotIn("https://news.test/c", text)
+        self.assertNotIn("NEW reddit", text)
+
+    def test_candidate_error_lands_in_errors(self):
+        f = cand_fns()
+        f["home"] = lambda domain: (_ for _ in ()).throw(C["FetchError"]("timeout"))
+        cands, _ = C["gather_candidates"](self.reg, self.runs, self.seen, "k", "rg", f)
+        self.assertIn("home fresh.test: timeout", cands[0]["errors"])
+        text = C["render"]([], {}, cands, C["apply_candidate_cache"](cands, {}))
+        self.assertIn("candidate fresh.test: home fresh.test: timeout", text)
 
 
 if __name__ == "__main__":

@@ -9,8 +9,15 @@ via RedditGrow's /reddit/search (key = REDDITGROW_API_KEY, exported by
 precheck.sh from the repo .env, never printed). An error becomes a short string
 in that competitor's `errors`; nothing here crashes the run. Empty stdout means
 nothing new anywhere, so the harness skips the engine.
+
+Two lighter passes ride along (2026-10-24): a website feature watch that diffs
+the visible text of every tracked row's seed_urls against cache/site.json, and
+a pass over the newest competitor-discovery candidates.json (candidates no
+registry row covers and Generalissimo has not given a verdict on): what it is,
+one Tavily news search and one RedditGrow search each, capped at CANDIDATE_CAP.
 """
 
+import hashlib
 import html
 import json
 import os
@@ -72,6 +79,24 @@ REDDIT_DEV_SUBS = frozenset(
         "sourcegraph", "augmentcode", "windsurf", "aider", "codeium", "tabnine",
     }
 )
+SITE_TIMEOUT_S = 20
+SITE_MAX_BODY = 3_000_000
+SITE_URL_CAP = 3  # seed urls fetched per tracked row
+SITE_LINE_MIN = 25
+SITE_LINE_MAX = 300  # stored length per line
+SITE_LINES_CAP = 800  # stored lines per url
+SITE_ADDED_CAP = 8  # pulse.json
+SITE_ADDED_PRINT = 6  # stdout
+SITE_ADDED_CHARS = 220
+SITE_BOILERPLATE = (
+    "cookie", "consent", "all rights reserved", "privacy policy", "terms of service",
+    "terms of use", "accept all", "do not sell", "javascript is disabled", "enable javascript",
+    "skip to content", "skip to main", "©", "copyright",
+    # GitHub page chrome; star/fork counters ride on the "must be signed in" lines
+    "you must be signed in", "another tab or window", "reload to refresh", "switched accounts",
+)
+CANDIDATE_CAP = 8
+CANDIDATE_WHAT_CHARS = 300
 _PACE = {"last": 0.0}
 
 
@@ -89,7 +114,7 @@ def _pace():
     _PACE["last"] = time.monotonic()
 
 
-def http_get(url, headers=None, body=None):
+def http_get(url, headers=None, body=None, timeout=TIMEOUT_S, max_body=MAX_BODY):
     """Return response bytes or raise FetchError('http 404' / 'timeout' / ...)."""
     _pace()
     hdrs = {"User-Agent": UA, "Accept": "application/json, text/html;q=0.8"}
@@ -99,15 +124,15 @@ def http_get(url, headers=None, body=None):
         data = json.dumps(body).encode()
         hdrs["Content-Type"] = "application/json"
     try:
-        with urlopen(Request(url, data=data, headers=hdrs), timeout=TIMEOUT_S) as r:
-            raw = r.read(MAX_BODY + 1)
+        with urlopen(Request(url, data=data, headers=hdrs), timeout=timeout) as r:
+            raw = r.read(max_body + 1)
     except HTTPError as exc:
         raise FetchError(f"http {exc.code}") from None
     except TimeoutError:
         raise FetchError("timeout") from None
     except Exception:  # URLError, ssl, reset: no message (could embed the URL)
         raise FetchError("network") from None
-    if len(raw) > MAX_BODY:
+    if len(raw) > max_body:
         raise FetchError("too large")
     return raw
 
@@ -123,6 +148,12 @@ def get_text(url):
     return http_get(url).decode("utf-8", "replace")
 
 
+def get_site(url):
+    """Anonymous GET for the website watch (longer timeout, larger body)."""
+    raw = http_get(url, {"Accept": "text/html,application/xhtml+xml"}, timeout=SITE_TIMEOUT_S, max_body=SITE_MAX_BODY)
+    return raw.decode("utf-8", "replace")
+
+
 # ---------------------------------------------------------------- registry
 
 
@@ -136,6 +167,34 @@ def load_registry(path):
             continue
         rows.append(row)
     return rows
+
+
+def _host(value):
+    host = (value or "").strip().lower()
+    if "://" in host:
+        host = urlsplit(host).hostname or ""
+    host = host.split("/")[0]
+    return host.removeprefix("www.")
+
+
+def registry_coverage(path):
+    """(repos, domains) named anywhere in the registry, rejected rows and list included."""
+    data = yaml.safe_load(Path(path).read_text()) or {}
+    repos, domains = set(), set()
+    rows = [r for r in (data.get("competitors") or []) if isinstance(r, dict)]
+    rows += [r for r in (data.get("rejected") or []) if isinstance(r, dict)]
+    for row in rows:
+        repos |= {r.strip().lower() for r in _list(row.get("repos"))}
+        domains |= {h for d in _list(row.get("domains")) if (h := _host(d))}
+        for url in _list(row.get("seed_urls")):
+            host = _host(url)
+            if host == "github.com":
+                parts = urlsplit(url).path.strip("/").split("/")
+                if len(parts) >= 2:
+                    repos.add(f"{parts[0]}/{parts[1]}".lower())
+            elif host:
+                domains.add(host)
+    return repos, domains
 
 
 def _list(value):
@@ -369,11 +428,214 @@ def news_page(url, get=get_text):
     }
 
 
+_SITE_DROP = r"(?is)<(script|style|noscript|svg|head|nav|footer|template|iframe|form)\b.*?</\1>"
+_SITE_BREAK = (
+    r"(?i)<(?:br|hr)\b[^>]*>|</?(?:p|h[1-6]|li|ul|ol|div|section|article|main|aside|header|tr|td|th|"
+    r"dt|dd|dl|table|blockquote|figcaption|button|summary|details|label|option|pre)\b[^>]*>"
+)
+_SITE_SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])")
+_SITE_NOISE = re.compile(
+    r"^[\W\d_]*$|^(?:[\d\W_]|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)*$|"
+    r"\b\d+\s+(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s+ago\b",
+    re.IGNORECASE,
+)
+
+
+def site_title(raw):
+    m = re.search(r"<title[^>]*>(.*?)</title>", raw, re.DOTALL | re.IGNORECASE)
+    return " ".join(html.unescape(m.group(1)).split())[:200] if m else ""
+
+
+def site_keep(line):
+    """A line counts for the diff: long enough, not numbers/dates only, not boilerplate."""
+    if len(line) < SITE_LINE_MIN or _SITE_NOISE.search(line):
+        return False
+    low = line.lower()
+    return not any(b in low for b in SITE_BOILERPLATE)
+
+
+def site_lines(raw):
+    """Visible text of a page as de-duplicated sentence/heading lines, in page order."""
+    body = re.sub(r"(?s)<!--.*?-->", " ", raw)
+    body = re.sub(_SITE_DROP, " ", body)
+    body = re.sub(_SITE_BREAK, "\n", body)
+    body = html.unescape(re.sub(r"<[^>]+>", " ", body))
+    out, seen = [], set()
+    for block in body.split("\n"):
+        block = " ".join(block.split())
+        for line in _SITE_SENT.split(block) if block else []:
+            line = line.strip()[:SITE_LINE_MAX]
+            if site_keep(line) and line not in seen:
+                seen.add(line)
+                out.append(line)
+                if len(out) >= SITE_LINES_CAP:
+                    return out
+    return out
+
+
+def site_reading(url, now, get=get_site):
+    raw = get(url)
+    lines = site_lines(raw)
+    return {
+        "fetched_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "title": site_title(raw) or urlsplit(url).hostname or url,
+        "first_reading": True,
+        "changed": False,
+        "added": [],
+        "removed_count": 0,
+        "_lines": lines,
+        "_sha": hashlib.sha256("\n".join(lines).encode()).hexdigest()[:16],
+    }
+
+
+def homepage_summary(domain, get=get_site):
+    """<title> + meta description of https://<domain>/, at most 300 chars."""
+    raw = get("https://" + domain + "/")
+    desc = ""
+    for pat in (
+        r"<meta[^>]+(?:name|property)=[\"'](?:og:)?description[\"'][^>]*content=[\"']([^\"']*)",
+        r"<meta[^>]+content=[\"']([^\"']*)[\"'][^>]*(?:name|property)=[\"'](?:og:)?description[\"']",
+    ):
+        m = re.search(pat, raw, re.IGNORECASE)
+        if m:
+            desc = " ".join(html.unescape(m.group(1)).split())
+            break
+    title = site_title(raw)
+    return _clip(" — ".join(x for x in (title, desc) if x), CANDIDATE_WHAT_CHARS)
+
+
+# ------------------------------------------------------------- candidates
+
+
+def find_candidates_file(runs_root):
+    """Newest state/runs/*-competitor-discovery-*/discovery/<date>/candidates.json, or None."""
+    root = Path(runs_root)
+    if not root.is_dir():
+        return None
+    for run in sorted(root.glob("*-competitor-discovery-*"), key=lambda p: p.name, reverse=True):
+        files = sorted(run.glob("discovery/*/candidates.json"), key=lambda p: p.parent.name, reverse=True)
+        if files:
+            return files[0]
+    return None
+
+
+def load_candidates(path):
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError, TypeError):
+        return []
+    rows = data.get("candidates") if isinstance(data, dict) else data
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def load_seen(path):
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def candidate_key(cand):
+    repo = cand.get("repo")
+    if isinstance(repo, str) and repo.strip():
+        return repo.strip().lower()
+    return _host(cand.get("domain") or "")
+
+
+def candidate_covered(cand, coverage):
+    repos, domains = coverage
+    repo = cand.get("repo")
+    if isinstance(repo, str) and repo.strip().lower() in repos:
+        return True
+    host = _host(cand.get("domain") or "")
+    return bool(host) and any(host == d or host.endswith("." + d) for d in domains)
+
+
+def select_candidates(cands, coverage, cap=CANDIDATE_CAP):
+    keep = [
+        c for c in cands
+        if candidate_key(c) and not str(c.get("verdict") or "").strip() and not candidate_covered(c, coverage)
+    ]
+    keep.sort(key=lambda c: _num(c.get("score")) or 0, reverse=True)
+    return keep[:cap]
+
+
+def candidate_term(cand):
+    """Search term: the repo name for a repo (owner/ is noise), else the candidate name."""
+    repo = cand.get("repo")
+    if isinstance(repo, str) and "/" in repo:
+        return repo.split("/")[-1]
+    return str(cand.get("name") or cand.get("domain") or "").strip()
+
+
+def collect_candidate(cand, seen, tavily_key=None, reddit_key=None, fns=None):
+    f = {"home": homepage_summary, "tv": tavily_news, "rd": reddit_mentions}
+    f.update(fns or {})
+    key = candidate_key(cand)
+    domain = _host(cand.get("domain") or "") or None
+    repo = cand.get("repo") if isinstance(cand.get("repo"), str) and cand.get("repo") else None
+    term = candidate_term(cand) or key
+    out = {
+        "key": key,
+        "name": str(cand.get("name") or key),
+        "kind": cand.get("kind"),
+        "url": cand.get("html_url") or (f"https://{domain}/" if domain else None),
+        "repo": repo,
+        "domain": domain,
+        "score": _num(cand.get("score")),
+        "first_seen": (seen.get(key) or {}).get("first_seen") if isinstance(seen.get(key), dict) else None,
+        "what": "",
+        "news": [],
+        "reddit_30d": None,
+        "reddit_top": [],
+        "errors": [],
+        "_reddit": [],
+    }
+
+    def err(source, exc):
+        out["errors"].append(f"{source}: {exc if isinstance(exc, FetchError) else 'malformed'}")
+
+    if repo or not domain:
+        out["what"] = _clip(" ".join(str(cand.get("description") or "").split()), CANDIDATE_WHAT_CHARS)
+    else:
+        try:
+            out["what"] = f["home"](domain)
+        except Exception as exc:
+            err(f"home {domain}", exc)
+    pseudo = {"slug": key, "name": term, "brand_terms": [term]}
+    if tavily_key:
+        try:
+            out["news"] = [
+                {"title": n.get("title") or "", "url": n["url"], "date": n.get("published")}
+                for n in f["tv"](pseudo, tavily_key)
+                if isinstance(n, dict) and n.get("url")
+            ]
+        except Exception as exc:
+            err("tavily", exc)
+    if reddit_key:
+        try:
+            out["reddit_30d"], out["reddit_top"], out["_reddit"] = f["rd"](pseudo, reddit_key)
+        except Exception as exc:
+            err("redditgrow", exc)
+    return out
+
+
+def public(value):
+    """Copy for pulse.json without the private `_` keys (cache-only data)."""
+    if isinstance(value, dict):
+        return {k: public(v) for k, v in value.items() if not str(k).startswith("_")}
+    if isinstance(value, list):
+        return [public(v) for v in value]
+    return value
+
+
 # ------------------------------------------------------------ orchestration
 
 
 def collect_competitor(row, now, tavily_key=None, fns=None, reddit_key=None):
     f = {
+        "site": site_reading,
         "stars": gh_stars,
         "rels": gh_releases,
         "dl": download_count,
@@ -393,6 +655,7 @@ def collect_competitor(row, now, tavily_key=None, fns=None, reddit_key=None):
         "mentions": {"hn_90d": None, "hn_top": [], "reddit_30d": None, "reddit_top": []},
         "reddit": [],
         "news": [],
+        "site": {},
         "errors": [],
     }
 
@@ -441,6 +704,11 @@ def collect_competitor(row, now, tavily_key=None, fns=None, reddit_key=None):
                 out["news"].append(f["page"](url))
             except Exception as exc:
                 err(f"page {urlsplit(url).hostname}", exc)
+        for url in _list(row.get("seed_urls"))[:SITE_URL_CAP]:
+            try:
+                out["site"][url] = f["site"](url, now)
+            except Exception as exc:
+                err(f"site {urlsplit(url).hostname}", exc)
     return out
 
 
@@ -462,7 +730,27 @@ def load_cache(cache_dir):
         "hn": rd("hn.json", {}),
         "reddit": set(rd("reddit.json", [])),
         "reddit_count": rd("reddit-count.json", {}),
+        "site": rd("site.json", {}),
+        "cand_news": rd("candidates-news.json", {}),
+        "cand_reddit": rd("candidates-reddit.json", {}),
     }
+
+
+def site_diff(entry, prev):
+    """Fill first_reading/changed/added/removed_count of one reading against its cached lines."""
+    lines = entry.get("_lines") or []
+    if not isinstance(prev, dict) or not isinstance(prev.get("lines"), list):
+        entry.update(first_reading=True, changed=False, added=[], removed_count=0)
+        return
+    old, new = set(prev["lines"]), set(lines)
+    added = [x for x in lines if x not in old]
+    entry.update(
+        first_reading=False,
+        changed=bool(added) or bool(old - new),
+        added=[_clip(x, SITE_ADDED_CHARS) for x in added[:SITE_ADDED_CAP]],
+        removed_count=len(old - new),
+    )
+    entry["_added_total"] = len(added)
 
 
 def apply_cache(competitors, cache):
@@ -480,10 +768,28 @@ def apply_cache(competitors, cache):
             "new_reddit": [p for p in c.get("reddit") or [] if p["url"] not in seen_reddit],
             "prev_reddit": (cache.get("reddit_count") or {}).get(c["slug"]),
         }
+        for url, entry in (c.get("site") or {}).items():
+            site_diff(entry, (cache.get("site") or {}).get(url))
     return diffs
 
 
-def next_cache(competitors, cache):
+def apply_candidate_cache(candidates, cache):
+    """Per-key new news/Reddit items; a key never listed before counts as a first listing."""
+    seen_news = cache.get("cand_news") or {}
+    seen_rd = cache.get("cand_reddit") or {}
+    diffs = {}
+    for c in candidates:
+        old_news = set(seen_news.get(c["key"]) or [])
+        old_rd = set(seen_rd.get(c["key"]) or [])
+        diffs[c["key"]] = {
+            "first_listing": c["key"] not in seen_news,
+            "new_news": [n for n in c["news"] if n["url"] not in old_news],
+            "new_reddit": [p for p in c.get("_reddit") or [] if p.get("url") and p["url"] not in old_rd],
+        }
+    return diffs
+
+
+def next_cache(competitors, cache, candidates=None):
     stars = dict(cache["stars"])
     hn = dict(cache["hn"])
     for c in competitors:
@@ -499,7 +805,21 @@ def next_cache(competitors, cache):
     for c in competitors:
         if c["mentions"].get("reddit_30d") is not None:
             reddit_count[c["slug"]] = c["mentions"]["reddit_30d"]
+    site = dict(cache.get("site") or {})
+    for c in competitors:
+        for url, entry in (c.get("site") or {}).items():
+            if isinstance(entry.get("_lines"), list):  # failed fetches keep the old reading
+                site[url] = {"fetched_at": entry.get("fetched_at"), "lines": entry["_lines"], "sha": entry.get("_sha")}
+    cand_news = {k: list(v) for k, v in (cache.get("cand_news") or {}).items() if isinstance(v, list)}
+    cand_rd = {k: list(v) for k, v in (cache.get("cand_reddit") or {}).items() if isinstance(v, list)}
+    for c in candidates or []:
+        cand_news[c["key"]] = sorted(set(cand_news.get(c["key"]) or []) | {n["url"] for n in c["news"]})
+        urls = {p["url"] for p in c.get("_reddit") or [] if p.get("url")}
+        cand_rd[c["key"]] = sorted(set(cand_rd.get(c["key"]) or []) | urls)
     return {
+        "site": site,
+        "cand_news": cand_news,
+        "cand_reddit": cand_rd,
         "stars": stars,
         "hn": hn,
         "releases": sorted(rel),
@@ -519,8 +839,13 @@ def save_cache(cache_dir, new):
         ("news.json", "news"),
         ("reddit.json", "reddit"),
         ("reddit-count.json", "reddit_count"),
+        ("site.json", "site"),
+        ("candidates-news.json", "cand_news"),
+        ("candidates-reddit.json", "cand_reddit"),
     )
     for name, key in names:
+        if key not in new:
+            continue
         tmp = d / (name + ".tmp")
         tmp.write_text(json.dumps(new[key], sort_keys=True))
         tmp.replace(d / name)
@@ -570,9 +895,25 @@ def build_block(c, diff):
             lines.append(f"  > {_clip(p['excerpt'], 160)}")
     if len(new_reddit) > REDDIT_NEW_CAP:
         lines.append(f"  (+{len(new_reddit) - REDDIT_NEW_CAP} more new Reddit posts in pulse.json)")
+    lines.extend(site_block_lines(c.get("site") or {}))
+    return _capped(f"## {c['name']} ({c['slug']})", lines)
+
+
+def site_block_lines(site):
+    lines = []
+    for url, s in site.items():
+        if s.get("first_reading"):
+            lines.append(f"SITE first reading {url} ({len(s.get('_lines') or [])} lines)")
+        elif s.get("changed"):
+            total = s.get("_added_total", len(s.get("added") or []))
+            lines.append(f"SITE CHANGE {url} (+{total}/\u2212{s.get('removed_count', 0)})")
+            lines.extend(f"  + {line}" for line in (s.get("added") or [])[:SITE_ADDED_PRINT])
+    return lines
+
+
+def _capped(head, lines):
     if not lines:
         return ""
-    head = f"## {c['name']} ({c['slug']})"
     kept, size = [head], len(head)
     for line in lines:
         if size + len(line) + 1 > BLOCK_CAP - 20:
@@ -583,9 +924,48 @@ def build_block(c, diff):
     return "\n".join(kept)
 
 
-def render(competitors, diffs):
+def build_candidate_block(c, diff):
+    """### block for one discovery candidate, or '' when nothing is new for it."""
+    if not (diff["first_listing"] or diff["new_news"] or diff["new_reddit"]):
+        return ""
+    lines = [
+        f"what: {_clip(c['what'], CANDIDATE_WHAT_CHARS) if c['what'] else '(no description)'}",
+        f"score: {c['score'] if c['score'] is not None else 'n/a'}  first seen: {c['first_seen'] or 'unknown'}",
+    ]
+    if c.get("url"):
+        lines.append(f"url: {c['url']}")
+    for n in diff["new_news"]:
+        date = str(n.get("date") or "")[:16]
+        lines.append(" ".join(f"NEW news {date} {_clip(n['title'], 110)} | {n['url']}".split()))
+    if c["reddit_30d"] is not None:
+        lines.append(f"Reddit 30d mentions: {c['reddit_30d']}")
+    new_reddit = sorted(diff["new_reddit"], key=lambda p: (p.get("score") or 0), reverse=True)
+    for p in new_reddit[:REDDIT_NEW_CAP]:
+        date = str(p.get("created_at") or "")[:10]
+        lines.append(
+            " ".join(
+                f"NEW reddit {date} r/{p['subreddit']} ({p['score']} pts) {_clip(p['title'], 100)} | {p['url']}".split()
+            )
+        )
+        if p.get("excerpt"):
+            lines.append(f"  > {_clip(p['excerpt'], 160)}")
+    return _capped(f"### {c['name']} ({c['key']})", lines)
+
+
+CANDIDATES_HEAD = "## CANDIDATES (discovery; not in the registry; verdict is Generalissimo's)"
+
+
+def render(competitors, diffs, candidates=None, cand_diffs=None):
     parts = [b for c in competitors if (b := build_block(c, diffs[c["slug"]]))]
+    cand_parts = [
+        b for c in candidates or [] if (b := build_candidate_block(c, (cand_diffs or {}).get(c["key"]) or
+                                                                     {"first_listing": True, "new_news": c["news"],
+                                                                      "new_reddit": c.get("_reddit") or []}))
+    ]
+    if cand_parts:
+        parts.append(CANDIDATES_HEAD + "\n\n" + "\n\n".join(cand_parts))
     errors = [f"{c['slug']}: {e}" for c in competitors for e in c["errors"]]
+    errors += [f"candidate {c['key']}: {e}" for c in candidates or [] for e in c["errors"]]
     if errors:
         parts.append("ERRORS:\n" + "\n".join(errors))
     if not parts:
@@ -608,6 +988,32 @@ def render(competitors, diffs):
 def registry_path():
     repo = os.environ.get("MAGUYVA_REPO") or str(Path.home() / "projects/maguyva-marketing")
     return Path(repo) / REGISTRY_REL
+
+
+def discovery_runs_root():
+    root = os.environ.get("PULSE_DISCOVERY_RUNS")
+    if root:
+        return Path(root)
+    return Path(os.environ.get("LOOPS_ROOT") or HERE.parents[1]) / "state/runs"
+
+
+def discovery_seen_path():
+    root = Path(os.environ.get("LOOPS_ROOT") or HERE.parents[1])
+    return root / "loops.d/competitor-discovery/cache/seen.json"
+
+
+def gather_candidates(reg_path, runs_root, seen_path, tavily_key=None, reddit_key=None, fns=None):
+    """(candidates, source_path_or_None); absence or a bad file means no candidates, never a crash."""
+    source = find_candidates_file(runs_root)
+    if source is None:
+        return [], None
+    try:
+        coverage = registry_coverage(reg_path)
+    except Exception:
+        return [], str(source)
+    picked = select_candidates(load_candidates(source), coverage)
+    seen = load_seen(seen_path)
+    return [collect_candidate(c, seen, tavily_key, reddit_key, fns) for c in picked], str(source)
 
 
 def tavily_key():
@@ -633,22 +1039,27 @@ def main():
     except Exception:
         print("ERRORS:\nregistry: unreadable")
         return 1
-    key = tavily_key() if any(r["status"] == "tracked" for r in rows) else None
+    source = find_candidates_file(discovery_runs_root())
+    key = tavily_key() if source or any(r["status"] == "tracked" for r in rows) else None
     rd_key = redditgrow_key()
     competitors = [collect_competitor(r, now, key, reddit_key=rd_key) for r in rows]
+    candidates, cand_source = gather_candidates(registry_path(), discovery_runs_root(), discovery_seen_path(), key, rd_key)
     cache = load_cache(cache_dir)
     diffs = apply_cache(competitors, cache)
+    cand_diffs = apply_candidate_cache(candidates, cache)
     pulse = {
         "schema_version": 1,
         "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "window_days": WINDOW_DAYS,
         "reddit_window_days": 30,
-        "competitors": competitors,
+        "competitors": public(competitors),
+        "candidates": public(candidates),
+        "candidates_source": cand_source,
     }
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "pulse.json").write_text(json.dumps(pulse, indent=1))
-    text = render(competitors, diffs)
-    save_cache(cache_dir, next_cache(competitors, cache))
+    text = render(competitors, diffs, candidates, cand_diffs)
+    save_cache(cache_dir, next_cache(competitors, cache, candidates))
     sys.stdout.write(text)
     return 0
 

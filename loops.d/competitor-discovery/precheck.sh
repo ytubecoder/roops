@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # competitor-discovery/precheck.sh — deterministic gathering step (script->agent
 # pattern, docs/LOOP_AUTHORING.md section 3/6). Runs the repo's discovery script
-# (GitHub search anonymous, Tavily key read by the script itself from
-# ~/.codex/config.toml and never printed), diffs candidates against
+# (GitHub search anonymous; Tavily and Firecrawl/Google keys read by the script
+# itself from ~/.codex/config.toml and never printed), diffs candidates against
 # cache/seen.json and prints ONLY unseen candidates, the top-5 standing list
 # and a stats row. Empty stdout (nothing new, no failed query) -> the runner
 # skips the engine: zero tokens. The full standing list lives in

@@ -40,3 +40,11 @@ A finding is one new candidate. `finding_id` = `discovery:candidate:<key>`, key 
 
 12. Page output
 None. The findings view and Growth Console `/competitors` (reads `candidates.json`) are the product.
+
+## Addendum 2026-10-24 — Google results source
+- Fourth source: Google results through the Firecrawl search API (`POST /v2/search`, `limit` 10, web only). Hits are harvested like Tavily hits; `why_surfaced` = `google: <query>`; the result URL is the evidence.
+- Queries are relevant keywords: 10 static money keywords plus `<first brand term> alternative` for every `tracked` registry row, deduplicated, capped at 20.
+- Key: exact field `mcp_servers.firecrawl.env.FIRECRAWL_API_KEY` of `~/.codex/config.toml`, read by the script. It is never printed and scrubbed from persisted payloads. Provider error bodies are never echoed.
+- Budget: at most 20 Firecrawl searches per weekly run, 2 credits each (40 credits). The team has about 35k credits.
+- Pacing: Firecrawl answers 429 above about 10 searches per minute. The script waits 7 s between searches and retries once after 20 s. `timeout_s` rises from 700 to 900 for this.
+- Skip flag: `--skip-google` marks the Google queries skipped.

@@ -6,7 +6,12 @@ set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 # Read-only public-metadata GETs under the ytubecoder account (avoids the 60/h
 # anonymous GitHub limit); the token is never printed.
+# On a host without that gh login (firstparty) the same read-only token comes
+# from the harness .env as COMPETITOR_GH_TOKEN, which run-loop.sh exports into
+# this precheck only (the engine never sees .env). TAVILY_API_KEY arrives the
+# same way; collect.py prefers it over the llm codex config.
 GH_TOKEN="$(gh auth token -u ytubecoder 2>/dev/null || true)"
+[[ -n "$GH_TOKEN" ]] || GH_TOKEN="${COMPETITOR_GH_TOKEN:-}"
 if [[ -n "$GH_TOKEN" ]]; then export GITHUB_TOKEN="$GH_TOKEN"; fi
 # Reddit mentions come from RedditGrow's /reddit/search. Only that one key is
 # lifted from the repo .env (not the whole file); a missing key is reported by

@@ -1017,6 +1017,11 @@ def gather_candidates(reg_path, runs_root, seen_path, tavily_key=None, reddit_ke
 
 
 def tavily_key():
+    """TAVILY_API_KEY from the environment (the harness .env, exported into the
+    precheck by run-loop.sh), else the llm codex config via the shared probe."""
+    key = (os.environ.get("TAVILY_API_KEY") or "").strip()
+    if key and not any(ch.isspace() for ch in key):
+        return key
     try:
         probe = runpy.run_path(str(HERE.parents[1] / "probes/gtm-public-search"))
         return probe["key_from_config"]()

@@ -2,7 +2,7 @@
 # competitor-discovery/precheck.sh — deterministic gathering step (script->agent
 # pattern, docs/LOOP_AUTHORING.md section 3/6). Runs the repo's discovery script
 # (GitHub search anonymous; Tavily and Firecrawl/Google keys read by the script
-# itself from ~/.codex/config.toml and never printed), diffs candidates against
+# itself from the harness .env, else ~/.codex/config.toml, never printed), diffs candidates against
 # cache/seen.json and prints ONLY unseen candidates, the top-5 standing list
 # and a stats row. Empty stdout (nothing new, no failed query) -> the runner
 # skips the engine: zero tokens. The full standing list lives in
@@ -14,7 +14,12 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 # GitHub search/enrich under Generalissimo's own ytubecoder gh login when it
 # exists on this host (read-only GETs; 30 search calls/min vs 10 anonymous),
 # anonymous otherwise. The token is passed by env only and never printed.
+# On a host without that gh login (firstparty) the same read-only token comes
+# from the harness .env as COMPETITOR_GH_TOKEN; TAVILY_API_KEY and
+# FIRECRAWL_API_KEY arrive the same way and the script prefers them over the
+# llm codex config. run-loop.sh exports .env into this precheck only.
 GITHUB_TOKEN="$(gh auth token -u ytubecoder 2>/dev/null || true)"
+[ -n "$GITHUB_TOKEN" ] || GITHUB_TOKEN="${COMPETITOR_GH_TOKEN:-}"
 if [ -n "$GITHUB_TOKEN" ]; then export GITHUB_TOKEN; else unset GITHUB_TOKEN; fi
 
 # Reddit evidence comes from RedditGrow's /reddit/search. Only that one key is

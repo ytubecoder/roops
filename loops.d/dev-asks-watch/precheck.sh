@@ -9,8 +9,8 @@
 # re-discovers the world.
 #
 # Credentials: `gh auth token -u tomokagami` reads ~/.config/gh/hosts.yml of
-# the launchd user (llm). The token is used inline per command and never
-# printed. Every call here is a read (`gh issue list/view`, `gh pr list/view`,
+# the loop user when that login exists, else DEV_ASKS_GH_TOKEN from the harness
+# .env (firstparty). The token is used inline per command and never printed. Every call here is a read (`gh issue list/view`, `gh pr list/view`,
 # `gh api` GET) — the standing exception in memory
 # feedback_never_use_utbox_github_unasked ("checking the status of OUR OWN
 # outstanding asks, read-only, needs no permission").
@@ -36,8 +36,12 @@ STALE_DAYS=14                 # open + untouched this long -> stale nudge, re-nu
 if ! command -v gh >/dev/null; then
   echo "INPUT GAP: gh CLI not found on PATH ($PATH). No asks were read." ; exit 1
 fi
-if ! GH_TOKEN="$(gh auth token -u tomokagami 2>/dev/null)" || [ -z "${GH_TOKEN:-}" ]; then
-  echo "INPUT GAP: no gh credential for the tomokagami account on this host (gh auth token -u tomokagami failed)."
+GH_TOKEN="$(gh auth token -u tomokagami 2>/dev/null || true)"
+# Hosts without that gh login (firstparty) carry the same token in the harness
+# .env as DEV_ASKS_GH_TOKEN, exported by run-loop.sh into this precheck only.
+[ -n "$GH_TOKEN" ] || GH_TOKEN="${DEV_ASKS_GH_TOKEN:-}"
+if [ -z "$GH_TOKEN" ]; then
+  echo "INPUT GAP: no gh credential for the tomokagami account on this host (no gh login and no DEV_ASKS_GH_TOKEN in the harness .env)."
   echo "Nothing was read. This is a credential problem on the loop host, not a statement about the asks."
   exit 1
 fi
@@ -49,10 +53,10 @@ for repo in $REPOS; do
   for author in $AUTHORS; do
     gh issue list -R "$repo" --author "$author" --state all --limit 100 \
       --json number,title,state,url,createdAt,updatedAt,closedAt,comments \
-      | jq -c --arg repo "$repo" '.[] | . + {repo:$repo, kind:"issue"}' >> "$INPUTS/raw.jsonl"
+      | python3 -c 'import json,sys; [print(json.dumps({**it, "repo": sys.argv[1], "kind": sys.argv[2]})) for it in json.load(sys.stdin)]' "$repo" issue >> "$INPUTS/raw.jsonl"
     gh pr list -R "$repo" --author "$author" --state all --limit 100 \
       --json number,title,state,url,createdAt,updatedAt,closedAt,mergedAt,comments,reviews \
-      | jq -c --arg repo "$repo" '.[] | . + {repo:$repo, kind:"pr"}' >> "$INPUTS/raw.jsonl"
+      | python3 -c 'import json,sys; [print(json.dumps({**it, "repo": sys.argv[1], "kind": sys.argv[2]})) for it in json.load(sys.stdin)]' "$repo" pr >> "$INPUTS/raw.jsonl"
   done
 done
 

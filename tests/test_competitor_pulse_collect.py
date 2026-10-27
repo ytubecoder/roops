@@ -439,3 +439,20 @@ class Candidates(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TavilyKeyTests(unittest.TestCase):
+    def test_env_key_wins_and_malformed_env_falls_through(self):
+        import os
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-ENV"}):
+            self.assertEqual(C["tavily_key"](), "tvly-ENV")
+        with mock.patch.dict(os.environ, {"TAVILY_API_KEY": "has space"}):
+            # falls through to the codex-config probe, which may or may not
+            # have a key on this host; it must not return the malformed value
+            self.assertNotEqual(C["tavily_key"](), "has space")
+
+
+if __name__ == "__main__":
+    unittest.main()

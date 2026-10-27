@@ -44,6 +44,9 @@ CURL="curl -sL -m 20 -A"
 # is used inline and never printed.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 GH_TOKEN="$(gh auth token -u ytubecoder 2>/dev/null || true)"
+# Hosts without that gh login (firstparty) carry the same read-only token in
+# the harness .env as COMPETITOR_GH_TOKEN (exported into prechecks only).
+[ -n "$GH_TOKEN" ] || GH_TOKEN="${COMPETITOR_GH_TOKEN:-}"
 gh_get () {
   # $1 = url, $2 = output file
   if [ -n "$GH_TOKEN" ]; then

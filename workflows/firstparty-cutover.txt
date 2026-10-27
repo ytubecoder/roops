@@ -111,7 +111,8 @@ Install in this order. Each `install` runs a real self-verify engine run (~10 se
 - Expected outcome: each name prints a successful install; guest `./bin/loopctl list` shows them installed.
 - If fails: the named loop's install stderr. Do not skip ahead; a failed install boots the unit back out. Fix requirements / probe / credential, then re-run from the failed name.
 
-- Stays on llm, never installed on the guest (they read llm-local files and keys): competitor-watch, competitor-keywords, competitor-discovery, competitor-pulse, competitor-rank, dev-asks-watch, research-replies. Leave them out of the loop above.
+- Stays on llm, never installed on the guest: competitor-keywords (needs the Growth Console venv and the Google Ads credentials, both llm-only). Leave it out of the loop above.
+- Moved to the guest on 2026-10-27, after the fleet above: competitor-discovery, competitor-pulse, competitor-rank, competitor-watch, dev-asks-watch. They need these keys in the guest's `.env` (names are scoped on purpose; never `GITHUB_TOKEN`, which the gh CLI would pick up in every other loop): TAVILY_API_KEY, FIRECRAWL_API_KEY, REDDITGROW_API_KEY, COMPETITOR_GH_TOKEN (ytubecoder, read-only), DEV_ASKS_GH_TOKEN (tomokagami, read-only). research-replies runs on the guest through its probe and needs nothing extra.
 
 - Run: ssh firstparty-svc 'cd ~/projects/loops && ./bin/loopctl console install'
 - Expected outcome: `loops-console.service` enabled and `/api/state` 200 on the guest loopback.

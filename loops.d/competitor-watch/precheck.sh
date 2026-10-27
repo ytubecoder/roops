@@ -56,6 +56,21 @@ gh_get () {
   fi
 }
 
+# gh_field <file> <field>: one top-level field of a GitHub repo JSON; exit 1
+# when the file is not a repo document. python3 only — jq is not on every loop
+# host (firstparty has none; the 2026-10-27 move found that out).
+gh_field () {
+  python3 - "$1" "$2" <<'PYF'
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1]))
+    value = doc[sys.argv[2]]
+except (OSError, ValueError, KeyError, TypeError):
+    sys.exit(1)
+print(value)
+PYF
+}
+
 echo "# competitor-watch precheck — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo
 
@@ -179,9 +194,8 @@ fi
 for repo in $OSS_REPOS; do
   api_out="$INPUTS/gh-$(echo "$repo" | tr '/' '_').json"
   if gh_get "https://api.github.com/repos/$repo" "$api_out" 2>/dev/null && \
-     jq -e '.stargazers_count' "$api_out" >/dev/null 2>&1; then
-    stars=$(jq -r '.stargazers_count' "$api_out")
-    pushed=$(jq -r '.pushed_at' "$api_out")
+     stars=$(gh_field "$api_out" stargazers_count); then
+    pushed=$(gh_field "$api_out" pushed_at || echo unknown)
     echo "- $repo: stars=$stars, last_pushed=$pushed"
     cache_file="$CACHE/gh-$(echo "$repo" | tr '/' '_').txt"
     prev="none"
@@ -263,9 +277,8 @@ fetch_and_diff "ref-home" "https://ref.tools/" "ref.tools homepage (JS shell; on
 repo="ref-tools/ref-tools-mcp"
 api_out="$INPUTS/gh-$(echo "$repo" | tr '/' '_').json"
 if gh_get "https://api.github.com/repos/$repo" "$api_out" 2>/dev/null && \
-   jq -e '.stargazers_count' "$api_out" >/dev/null 2>&1; then
-  stars=$(jq -r '.stargazers_count' "$api_out")
-  pushed=$(jq -r '.pushed_at' "$api_out")
+   stars=$(gh_field "$api_out" stargazers_count); then
+  pushed=$(gh_field "$api_out" pushed_at || echo unknown)
   echo "- $repo (Ref Context OSS MCP server): stars=$stars, last_pushed=$pushed"
   cache_file="$CACHE/gh-$(echo "$repo" | tr '/' '_').txt"
   prev="none"

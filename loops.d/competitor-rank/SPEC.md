@@ -15,8 +15,10 @@ condition stops appearing: the tier settles, the candidate drops out of the cand
 gets a registry verdict, or a tracked row has evidence again.
 
 ## 2. Agentic pattern
-Outer Human-in-the-loop (Generalissimo turns `rank:promote` findings into registry rows or
-rejections), one scoring step inside a single invocation. No iteration across firings.
+One scoring step inside a single invocation. No iteration across firings. Since 2026-10-27
+the Growth Console warmer turns every `rank:promote` finding into a `tracked` registry row by
+itself (maguyva-marketing `competitor_promote.py`); Generalissimo's verdict is the hide button
+on /competitors. The loop itself still writes nothing.
 
 ## 3. Type & data flow
 Agent. `precheck.sh` runs `assemble.py`, which reads only local files: the registry, the newest

@@ -4,8 +4,8 @@
 # For each job in order (collect, evaluate, reconcile), build a short-lived
 # dry-run request and call probe:ads-experiment-tick. Exit 0 is a quiet
 # heartbeat: every receipt is ok, or skipped because the tick lock is held.
-# Exit 1 asks the engine to write the failure up. This script never places,
-# changes or pauses an ad. The probe forces dry-run.
+# Exit 1 asks the engine to write up failed or degraded receipts. This script
+# never places, changes or pauses an ad. The probe forces dry-run.
 set -euo pipefail
 
 INPUTS="${OUT_DIR:?OUT_DIR required (set by the runner)}/inputs"
@@ -44,7 +44,7 @@ PY
     if [ -n "$detail" ]; then
       detail=" — ${detail//$'\n'/ }"
     fi
-    results+=("PROBLEM: ${job}: transport failed${detail}")
+    results+=("PROBLEM: ${job}: failed — transport failed${detail}")
     fail=1
     continue
   fi
@@ -55,17 +55,41 @@ try:
     with open(path) as fh:
         receipt = json.load(fh)
 except Exception as exc:  # noqa: BLE001 — the receipt is ground truth or it is not
-    print(f"PROBLEM: {job}: unreadable receipt ({exc})")
+    print(f"PROBLEM: {job}: failed — unreadable receipt ({exc})")
     raise SystemExit(1)
 if not isinstance(receipt, dict):
-    print(f"PROBLEM: {job}: receipt is not an object")
+    print(f"PROBLEM: {job}: failed — receipt is not an object")
     raise SystemExit(1)
-if receipt.get("ok") is True or receipt.get("skipped") == "locked":
-    state = "skipped: locked" if receipt.get("skipped") == "locked" else "ok"
-    print(f"{job}: {state}")
+
+def summarize(items, fallback):
+    details = []
+    for item in items[:3]:
+        if isinstance(item, dict):
+            target = item.get("key") or "job"
+            source = item.get("source") or item.get("run_id") or job
+            reason = item.get("error") or item.get("reason") or fallback
+            details.append(f"{target}/{source}: {reason}")
+        else:
+            details.append(str(item))
+    return "; ".join(details) or fallback
+
+if "status" not in receipt:
+    print(f"PROBLEM: {job}: failed — receipt has no status (CLI too old)")
+    raise SystemExit(1)
+status = receipt["status"]
+if status == "failed" or receipt.get("ok") is not True:
+    fallback = receipt.get("error") or receipt.get("stdout_tail") or "receipt ok is not true"
+    detail = summarize(receipt.get("failures") or [], fallback)
+    print(f"PROBLEM: {job}: failed — {detail}")
+    raise SystemExit(1)
+if status == "degraded":
+    detail = summarize(receipt.get("degraded") or [], "receipt is degraded")
+    print(f"DEGRADED: {job}: {detail}")
+    raise SystemExit(1)
+if status == "succeeded" or receipt.get("skipped") == "locked":
+    print(f"{job}: ok")
     raise SystemExit(0)
-err = receipt.get("error") or receipt.get("stdout_tail") or f"tick_exit={receipt.get('tick_exit')}"
-print(f"PROBLEM: {job}: {err}")
+print(f"PROBLEM: {job}: failed — unknown receipt status: {status!r}")
 raise SystemExit(1)
 PY
 )"; then

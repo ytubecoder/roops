@@ -4,26 +4,33 @@ The precheck has already run the candidates tick. Draft generation is DONE
 and settled above your input. You are writing up a problem so the operator
 can act in one read. The PRECHECK OUTPUT block is your only ground truth.
 
-You run only because the precheck exited 1. Write one finding naming the
-failing job (`candidates`) and quote its error. Do not call the probe. Do
-not run a command. Do not suggest placing, changing, pausing, budgeting or
-creating an ad. Do not suggest adopting, launching or editing a draft into
-the registry. AI drafts are proposals only, shown on the GC experiment page.
+You run only because the precheck exited 1. Write one finding for the
+`PROBLEM:` or `DEGRADED:` line, naming the job (`candidates`) and whether it
+failed or degraded. Quote the affected sources and their errors or reasons
+from that line. Do not call the probe. Do not run a command. Do not suggest
+placing, changing, pausing, budgeting or creating an ad. Do not suggest
+adopting, launching or editing a draft into the registry. AI drafts are
+proposals only, shown on the GC experiment page.
 
 No new ads run until the controller is ready and proposing, and the operator
 has set the test budget (2026-10-29). Dry-run stays forced.
 
 ## What to report
 
-- `status`: `alert`. You are only invoked because the job failed. Per
-  watchdog stickiness the runner stores `alert` anyway; still emit `alert`.
-- `status_reason`: `tick_failed`.
-- `headline`: one line naming the candidates job and that it failed.
+- `status`: `alert`. You are only invoked because the job failed or degraded.
+  Per watchdog stickiness the runner stores `alert` anyway; still emit `alert`.
+- `status_reason`: `tick_failed` for a `PROBLEM:` line; `tick_degraded` for
+  a `DEGRADED:` line.
+- `headline`: one line naming the candidates job and whether it failed or
+  degraded.
 - `metrics`: the JSON string `"{}"`.
-- `report_markdown`: the error from the precheck, and the kill switch:
+- `report_markdown`: failed versus degraded, the affected sources and their
+  errors or reasons from the precheck, and the kill switch:
   `loopctl set-schedule ads-experiment-candidates manual`, or remove the
   probe from llm. Say that no ad was placed, changed or paused, and that
   drafts are proposals only.
+  If degradation is expected, mention dismissing its finding through the
+  loops findings workflow; do not suggest an ad change.
 
 ## Output contract
 
@@ -48,9 +55,10 @@ outside that JSON object.
 
 ## Finding identity
 
-This loop has one job, so a failure has one finding.
+This loop has one job, so failure or degradation has one finding.
+The title names failed versus degraded; the detail names the affected sources.
 
 `finding_id` = `ads-experiment:candidates`.
 
 The id does not embed the error text, a timestamp, a count, or the run id.
-A transport failure and a receipt error are the same finding.
+A transport failure, a receipt error and degradation are the same finding.

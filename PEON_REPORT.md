@@ -16,8 +16,29 @@ degradation can be dismissed through the existing findings workflow.
 This prevents `ok: true` from hiding degraded collection results. Fake-probe
 coverage exercises both prechecks, including literal boolean handling,
 locked receipts, transport failures, and three-item summaries. The new real
-CLI integration tests prove collection failure reaches the precheck and
-empty-command reconciliation remains successful.
+CLI integration tests prove collection failure reaches the precheck,
+empty-command reconciliation remains successful, and an uncertain simulated
+pause produces a degraded reconciliation receipt.
+
+Planner amendment A6 adds `test_real_cli_degraded_turns_loop_amber`. A GC
+venv subprocess creates a `g-msg` run using resolved settings, records an
+approved review, activates it, and creates one simulated pause. Recovery
+leaves that command uncertain. The test checks the actual CLI receipt
+(`ok: true`, `status: degraded`, and the matching command/source details),
+precheck exit 1, `DEGRADED: reconcile:`, and absence of `reconcile: ok` or
+any `PROBLEM:` line. Other jobs receive successful fixture receipts only
+in this test, so collection failure cannot mask the degraded exit path.
+Missing GC venv, CLI, or command module produces an explicit skip reason.
+
+API adjustment from the requested seed recipe: this GC version rejects
+`claim(lease_seconds=0)` with `lease_seconds must be positive`, and
+recovery requeues lapsed claimed commands. It makes only executing
+commands uncertain. The seed therefore claims a 120-second lease, calls
+`execute` with a local test executor, and calls `recover(now=...)` one
+second past the recorded lease deadline from that executor. Assertions
+confirm exactly one recovery to uncertain and exactly one stored command.
+This uses public APIs without sleeping, monkeypatching, direct SQL updates,
+ad driver calls, or changes to the read-only GC checkout.
 
 Verification ran with temporary files inside this worktree, an isolated
 ads database and lock directory, empty Stripe and attribution directories,
@@ -29,12 +50,12 @@ modified. Validation used `LOOPS_PROBE_HOST=` to keep requirement checks local.
 
 The first test run exposed a fake-probe mismatch: it printed receipts even
 with `--out`, unlike the production probe. Both test probes now write the
-receipt only to `--out`. Final verification passed all 41 tests, with no skips.
+receipt only to `--out`. A6 verification passed all 42 tests, with no skips.
 
 Verification environment (from the repository root):
 
 ```sh
-export PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS="--basetemp=$PWD/state/fd2-verification/pytest" TMPDIR="$PWD/state/fd2-verification/tmp" LOOPS_PROBE_HOST=
+export PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS="--basetemp=$PWD/state/fd2-a6-verification/pytest" TMPDIR="$PWD/state/fd2-a6-verification/tmp" LOOPS_PROBE_HOST=
 ```
 
 Required verification command (exit 0):
@@ -46,8 +67,8 @@ $HOME/projects/maguyva-marketing/growth-console/.venv/bin/python -m pytest tests
 Actual terminal output, verbatim:
 
 ```text
-.........................................                                [100%]
-41 passed in 10.23s
+..........................................                               [100%]
+42 passed in 10.86s
 OK ads-experiment-controller
 OK ads-experiment-candidates
 ```
@@ -66,6 +87,9 @@ All checks passed!
 ```
 
 Only the four allowlisted precheck/prompt files, the two allowlisted test
-files, and this report changed. The specification itself required no edits.
+files, and this report changed across FD2. This A6 revision changes only
+`tests/test_ads_experiment_precheck_real_cli.py` and `PEON_REPORT.md`;
+production prechecks and prompts remain unchanged. The specification
+itself required no edits.
 
 Open questions: none.

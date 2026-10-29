@@ -27,6 +27,7 @@ PROBE_PATH = REPO / "probes" / "ads-experiment-tick"
 ALLOW_PATH = REPO / "probes" / "ads-experiment-tick.allow"
 CONTROLLER_PRECHECK = REPO / "loops.d" / "ads-experiment-controller" / "precheck.sh"
 CANDIDATES_PRECHECK = REPO / "loops.d" / "ads-experiment-candidates" / "precheck.sh"
+PRECHECKS = [(CONTROLLER_PRECHECK, "collect"), (CANDIDATES_PRECHECK, "candidates")]
 
 ECHO_ARGV = """\
 #!/bin/sh
@@ -61,16 +62,19 @@ if transport and job == transport:
     sys.stderr.write("probe transport failed\\n")
     raise SystemExit(75)
 if os.environ.get("LOCK_JOB", "") == job:
-    body = {"ok": True, "skipped": "locked", "job": job}
+    body = {"ok": True, "status": "succeeded", "skipped": "locked", "job": job}
 elif os.environ.get("FAIL_JOB", "") == job:
-    body = {"ok": False, "error": "simulated failure", "job": job}
+    body = {"ok": False, "status": "failed", "failures": ["simulated failure"], "job": job}
 else:
-    body = {"ok": True, "job": job}
+    body = {"ok": True, "status": "succeeded", "job": job}
+if os.environ.get("RECEIPT_JOB", "") == job:
+    body = json.loads(os.environ["RECEIPT_JSON"])
 text = json.dumps(body)
 if out_path:
     with open(out_path, "w") as fh:
         fh.write(text)
-sys.stdout.write(text + "\\n")
+else:
+    sys.stdout.write(text + "\\n")
 """
 
 
@@ -336,6 +340,10 @@ def test_precheck_quiet_when_all_ok(tmp_path):
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PROBLEM:" not in proc.stdout
+    assert "DEGRADED:" not in proc.stdout
+    assert all(
+        f"{job}: ok" in proc.stdout for job in ("collect", "evaluate", "reconcile")
+    )
     assert [item["job"] for item in calls] == ["collect", "evaluate", "reconcile"]
     for item in calls:
         assert item["dry_run"] is True
@@ -350,6 +358,7 @@ def test_precheck_quiet_when_all_ok(tmp_path):
         tmp_path / "candidates", CANDIDATES_PRECHECK, RUN_ID="testrun"
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "candidates: ok" in proc.stdout
     assert [item["job"] for item in calls] == ["candidates"]
     assert calls[0]["request_id"] == "testrun:candidates"
     assert calls[0]["dry_run"] is True
@@ -361,7 +370,7 @@ def test_precheck_quiet_when_all_ok(tmp_path):
         LOCK_JOB="evaluate",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "evaluate: skipped: locked" in proc.stdout
+    assert "evaluate: ok" in proc.stdout
 
     proc, calls = _run_precheck(tmp_path / "norun", CONTROLLER_PRECHECK, RUN_ID=None)
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -381,7 +390,7 @@ def test_precheck_exit_1_on_failure(tmp_path):
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "evaluate" in proc.stdout
-    assert "PROBLEM: evaluate:" in proc.stdout
+    assert "PROBLEM: evaluate: failed — simulated failure" in proc.stdout
     assert [item["job"] for item in calls] == ["collect", "evaluate", "reconcile"]
 
     proc, _calls = _run_precheck(
@@ -391,7 +400,7 @@ def test_precheck_exit_1_on_failure(tmp_path):
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "candidates" in proc.stdout
-    assert "PROBLEM: candidates:" in proc.stdout
+    assert "PROBLEM: candidates: failed — simulated failure" in proc.stdout
 
     proc, _calls = _run_precheck(
         tmp_path / "transport",
@@ -400,4 +409,103 @@ def test_precheck_exit_1_on_failure(tmp_path):
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "reconcile" in proc.stdout
-    assert "transport failed" in proc.stdout
+    assert "PROBLEM: reconcile: failed — transport failed" in proc.stdout
+
+
+@pytest.mark.parametrize("script,job", PRECHECKS)
+@pytest.mark.parametrize("ok", [False, True])
+def test_precheck_failed_status_exits_1(tmp_path, script, job, ok):
+    failures = [
+        {"key": "example", "source": source, "error": "config missing"}
+        for source in (
+            "google.account",
+            "google.status",
+            "google.cost",
+            "google.budget_history",
+        )
+    ]
+    proc, _ = _run_precheck(
+        tmp_path,
+        script,
+        RECEIPT_JOB=job,
+        RECEIPT_JSON=json.dumps({"ok": ok, "status": "failed", "failures": failures}),
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    expected = "; ".join(
+        f"example/{item['source']}: config missing" for item in failures[:3]
+    )
+    assert f"PROBLEM: {job}: failed — {expected}" in proc.stdout.splitlines()
+    assert "google.budget_history" not in proc.stdout
+    assert "DEGRADED:" not in proc.stdout
+
+
+@pytest.mark.parametrize("script,job", PRECHECKS)
+def test_precheck_degraded_exits_1_and_says_degraded(tmp_path, script, job):
+    degraded = [
+        {"key": "example", "source": "stripe.aggregate", "reason": "snapshot missing"},
+        {"key": "example", "source": "umami.funnel", "reason": "partial source data"},
+        {"key": None, "source": "reconcile", "reason": "command outcome uncertain"},
+        {"key": "example", "source": "google.experiment", "reason": "fourth item"},
+    ]
+    proc, _ = _run_precheck(
+        tmp_path,
+        script,
+        RECEIPT_JOB=job,
+        RECEIPT_JSON=json.dumps(
+            {"ok": True, "status": "degraded", "degraded": degraded}
+        ),
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert (
+        f"DEGRADED: {job}: example/stripe.aggregate: snapshot missing; "
+        "example/umami.funnel: partial source data; job/reconcile: command outcome uncertain"
+    ) in proc.stdout.splitlines()
+    assert "fourth item" not in proc.stdout
+    assert "PROBLEM:" not in proc.stdout
+
+
+@pytest.mark.parametrize("script,job", PRECHECKS)
+@pytest.mark.parametrize("skipped", [None, "locked"])
+def test_precheck_missing_status_is_failed(tmp_path, script, job, skipped):
+    proc, _ = _run_precheck(
+        tmp_path,
+        script,
+        RECEIPT_JOB=job,
+        RECEIPT_JSON=json.dumps({"ok": True, "skipped": skipped}),
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert (
+        f"PROBLEM: {job}: failed — receipt has no status (CLI too old)"
+    ) in proc.stdout.splitlines()
+
+
+@pytest.mark.parametrize("script,job", PRECHECKS)
+@pytest.mark.parametrize("ok", [False, None, 1, "true"])
+def test_precheck_requires_literal_true_ok(tmp_path, script, job, ok):
+    proc, _ = _run_precheck(
+        tmp_path,
+        script,
+        RECEIPT_JOB=job,
+        RECEIPT_JSON=json.dumps(
+            {"ok": ok, "status": "succeeded", "error": "invalid ok"}
+        ),
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert f"PROBLEM: {job}: failed — invalid ok" in proc.stdout.splitlines()
+
+
+@pytest.mark.parametrize("script,job", PRECHECKS)
+def test_precheck_locked_is_ok(tmp_path, script, job):
+    proc, _ = _run_precheck(tmp_path, script, LOCK_JOB=job)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"{job}: ok" in proc.stdout.splitlines()
+
+
+@pytest.mark.parametrize("script,job", PRECHECKS)
+def test_precheck_transport_failure_is_failed(tmp_path, script, job):
+    proc, _ = _run_precheck(tmp_path, script, TRANSPORT_JOB=job)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert (
+        f"PROBLEM: {job}: failed — transport failed — probe transport failed"
+        in proc.stdout.splitlines()
+    )

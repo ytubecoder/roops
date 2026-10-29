@@ -21,9 +21,9 @@ PEON_REPORT.md
 
 Verify (from the loops repo root):
 ```
-python3 -m pytest tests/test_ads_experiment_tick_probe.py -q && python3 bin/validate_contract.py loops.d/ads-experiment-controller && python3 bin/validate_contract.py loops.d/ads-experiment-candidates
+python3 -m pytest tests/test_ads_experiment_tick_probe.py -q && bin/loopctl validate ads-experiment-controller && bin/loopctl validate ads-experiment-candidates
 ```
-If `bin/validate_contract.py` takes a different argument form, use the form `bin/loopctl validate` uses for one loop, and record the exact command in the report.
+`loopctl validate` only checks the loop definition. It installs and runs nothing.
 
 ## 1. `probes/ads-experiment-tick`
 

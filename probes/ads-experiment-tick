@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+# probe: ads-experiment-tick
+# probe-timeout-s: 600
+# probe-writes: experiment-controller ledger rows (ads_ctl_* tables, experiment_assessment) in ~/.growth-console/ads.db on llm. NEVER places, changes or pauses ads: dry-run is forced.
+# probe-output: json
+# probe-reads: growth-console venv under MAGUYVA_REPO (default ~/projects/maguyva-marketing); Google Ads read-only GAQL, Stripe snapshot, Umami cache via the GC CLI
+"""One ads-experiment controller tick. Observes and simulates. Never mutates ads.
+
+The single argument is a base64url (RFC 4648 §5, padding optional) JSON
+object with exactly these keys: v, request_id, job, issued_at, expires_at,
+dry_run. dry_run must be literal true. The job must be listed in
+ads-experiment-tick.allow. Forbidden fields (order, amount, budget,
+campaign, resource, params) fail the exact-keys rule.
+
+Then this runs, with cwd=growth-console and a 560s timeout:
+
+    <MAGUYVA_REPO>/growth-console/.venv/bin/python -m console.ads.ctl_cli
+        tick --job <job> --request-id <request_id> --dry-run --host "$(hostname)"
+
+Stdout JSON is passed through with tick_exit added. Exit 0 when the tick
+ran (the JSON carries ok or failed). Exit 1 when the venv or CLI is missing.
+Exit 2 on a rejected request.
+
+Spec: loops docs/specs/ads-experiment-tick-U9b.md. Design: maguyva-marketing
+openspec/changes/add-ads-experiment-controller D3. No new ads until the
+controller is ready and proposing and the operator has set the test budget
+(2026-10-29).
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+REQUIRED_KEYS = frozenset(
+    {"v", "request_id", "job", "issued_at", "expires_at", "dry_run"}
+)
+REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.:@=+-]{1,200}$")
+B64URL_RE = re.compile(r"^[A-Za-z0-9_-]+={0,2}$")
+MAX_LIFE = timedelta(minutes=10)
+MAX_FUTURE = timedelta(minutes=2)
+TICK_TIMEOUT_S = 560
+STDOUT_TAIL = 400
+
+ALLOW_NAME = "ads-experiment-tick.allow"
+
+
+def maguyva_repo() -> Path:
+    raw = os.environ.get("MAGUYVA_REPO")
+    if raw:
+        return Path(raw)
+    return Path.home() / "projects" / "maguyva-marketing"
+
+
+def gc_dir() -> Path:
+    return maguyva_repo() / "growth-console"
+
+
+def venv_python() -> Path:
+    return gc_dir() / ".venv" / "bin" / "python"
+
+
+def allow_path() -> Path:
+    return Path(__file__).resolve().parent / ALLOW_NAME
+
+
+def load_jobs() -> set[str]:
+    try:
+        lines = allow_path().read_text().splitlines()
+    except OSError:
+        return set()
+    jobs = set()
+    for line in lines:
+        item = line.strip()
+        if not item or item.startswith("#"):
+            continue
+        jobs.add(item)
+    return jobs
+
+
+def problem() -> str | None:
+    """Inputs --check can see without running a tick.
+
+    A missing console.ads.ctl_cli module is reported from run_tick, when the
+    venv interpreter actually starts and the module is not there.
+    """
+    path = allow_path()
+    if not path.is_file():
+        return f"allow file missing: {path}"
+    if not load_jobs():
+        return f"allow file has no jobs: {path}"
+    py = venv_python()
+    if not py.is_file():
+        return f"growth-console venv or ctl CLI not found at {py}"
+    return None
+
+
+def check() -> int:
+    issue = problem()
+    print(issue or "ok ads-experiment-tick")
+    return 1 if issue else 0
+
+
+def reject(error: str) -> int:
+    print(json.dumps({"error": error, "ok": False}, sort_keys=True))
+    return 2
+
+
+def b64url_decode(token: str) -> bytes:
+    if not B64URL_RE.fullmatch(token):
+        raise ValueError("not base64url")
+    pad = "=" * ((-len(token)) % 4)
+    try:
+        return base64.urlsafe_b64decode(token + pad)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("not base64url") from exc
+
+
+def parse_aware(value: object) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise ValueError("timestamps must be timezone-aware")
+    text = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError("timestamps must be timezone-aware") from exc
+    if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+        raise ValueError("timestamps must be timezone-aware")
+    return parsed
+
+
+def decode_request(token: str) -> dict | int:
+    """Return the request dict, or an exit code after printing a refusal."""
+    try:
+        raw = b64url_decode(token)
+    except ValueError:
+        return reject("not base64url")
+    try:
+        obj = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return reject("not a JSON object")
+    if not isinstance(obj, dict):
+        return reject("not a JSON object")
+    keys = set(obj)
+    if keys != REQUIRED_KEYS:
+        extra = sorted(keys - REQUIRED_KEYS)
+        missing = sorted(REQUIRED_KEYS - keys)
+        return reject(
+            f"keys must be exactly {sorted(REQUIRED_KEYS)}; extra={extra} missing={missing}"
+        )
+    if type(obj["v"]) is not int or obj["v"] != 1:
+        return reject("v must be 1")
+    if obj["dry_run"] is not True:
+        return reject("dry_run must be true")
+    request_id = obj["request_id"]
+    if not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id):
+        return reject("request_id invalid")
+    job = obj["job"]
+    if not isinstance(job, str) or job not in load_jobs():
+        return reject("job not allowed")
+    try:
+        issued = parse_aware(obj["issued_at"])
+        expires = parse_aware(obj["expires_at"])
+    except ValueError as exc:
+        return reject(str(exc))
+    now = datetime.now(timezone.utc)
+    if expires <= now:
+        return reject("request expired")
+    if expires > issued + MAX_LIFE:
+        return reject("request lifetime exceeds 10 minutes")
+    if issued > now + MAX_FUTURE:
+        return reject("issued_at is in the future")
+    return obj
+
+
+def host_name() -> str:
+    try:
+        proc = subprocess.run(
+            ["hostname"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        name = proc.stdout.strip()
+        if proc.returncode == 0 and name:
+            return name
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return socket.gethostname()
+
+
+def emit_unparseable(out: str, tick_exit: int) -> int:
+    print(
+        json.dumps(
+            {
+                "error": "unparseable tick output",
+                "ok": False,
+                "stdout_tail": (out or "")[-STDOUT_TAIL:],
+                "tick_exit": tick_exit,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def run_tick(req: dict) -> int:
+    issue = problem()
+    if issue:
+        print(json.dumps({"error": issue, "ok": False}, sort_keys=True))
+        return 1
+    cmd = [
+        str(venv_python()),
+        "-m",
+        "console.ads.ctl_cli",
+        "tick",
+        "--job",
+        req["job"],
+        "--request-id",
+        req["request_id"],
+        "--dry-run",
+        "--host",
+        host_name(),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=gc_dir(),
+            capture_output=True,
+            text=True,
+            timeout=TICK_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        out = exc.stdout or ""
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", errors="replace")
+        return emit_unparseable(out.strip(), 124)
+    except OSError as exc:
+        print(json.dumps({"error": f"could not run ctl CLI: {exc}", "ok": False}, sort_keys=True))
+        return 1
+    out = proc.stdout.strip()
+    stderr = (proc.stderr or "").strip()
+    if not out and proc.returncode != 0 and "No module named console.ads.ctl_cli" in stderr:
+        print(json.dumps({"error": "ctl CLI missing", "ok": False}, sort_keys=True))
+        return 1
+    try:
+        summary = json.loads(out) if out else None
+    except json.JSONDecodeError:
+        summary = None
+    if not isinstance(summary, dict):
+        return emit_unparseable(out, proc.returncode)
+    summary["tick_exit"] = proc.returncode
+    print(json.dumps(summary, sort_keys=True))
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if argv == ["--check"]:
+        return check()
+    if len(argv) != 1:
+        return reject("exactly one argument required")
+    decoded = decode_request(argv[0])
+    if isinstance(decoded, int):
+        return decoded
+    return run_tick(decoded)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,8 @@
+# Job vocabulary for the ads-experiment-tick probe.
+# This file pins the jobs the probe may run. One job per line.
+# A line removed here is refused. The probe never places, changes or pauses an ad.
+collect
+evaluate
+reconcile
+candidates
+health

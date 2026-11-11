@@ -1,0 +1,9 @@
+{"panels":[
+  {"title":"Ready to apply","metric":"updates.ready","type":"number","unit":"updates","direction":"higher_is_worse","thresholds":{"warn":1,"alert":5},"missing":"hold"},
+  {"title":"Apply now (Debian / KEV)","metric":"updates.apply_now","type":"number","unit":"updates","direction":"higher_is_worse","thresholds":{"warn":1,"alert":3},"missing":"hold"},
+  {"title":"Waiting in hold","metric":"updates.waiting","type":"number","unit":"updates","direction":"neutral","missing":"hold"},
+  {"title":"KEV matches (30d)","metric":"kev.matches","type":"number","unit":"CVEs","direction":"higher_is_worse","thresholds":{"warn":1,"alert":1},"missing":"hold"},
+  {"title":"Reboot pending","metric":"reboot.pending","type":"number","unit":"hosts","direction":"neutral","missing":"hold"},
+  {"title":"Unreachable hosts","metric":"hosts.unreachable","type":"number","unit":"hosts","direction":"higher_is_worse","thresholds":{"warn":1,"alert":2},"missing":"hold"},
+  {"title":"Pending, 30 days","metric":"updates.pending","type":"trend","window_days":30,"missing":"gap"}
+]}

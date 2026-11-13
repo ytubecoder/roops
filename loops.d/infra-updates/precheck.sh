@@ -181,7 +181,7 @@ def classify(url):
     if "download.docker.com" in u: return "third-party", "moby"
     if "pkgs.tailscale.com" in u: return "third-party", "tailscale"
     if "cloudsmith.io/public/caddy" in u or "caddy" in u: return "third-party", "caddy"
-    if "downloads.plex.tv" in u: return "third-party", "plex"
+    if "downloads.plex.tv" in u or "repo.plex.tv" in u: return "third-party", "plex"
     if "proxmox.com" in u: return "third-party", "proxmox"
     if u in ("?", ""): return "unknown-origin", None
     return "third-party", None
@@ -232,6 +232,10 @@ for host in ["pve1", "firstparty", "thirdparty", "ntp", "media", "evilempire"]:
             n, inst, cand, src = (line[4:].split("|") + ["?"] * 4)[:4]
             cls, upstream = classify(src)
             upstream = PKG_UPSTREAM.get(n, upstream)
+            if cls not in ("debian", "debian-security") and short_ver(inst) == short_ver(cand):
+                # revision-only bump (2.4.2-3 -> 2.4.2-4): the upstream tag date does not date this build.
+                # containerd.io -4 (2026-11-13) rebundled runc 1.5.3 released the day before; grade from first sight.
+                upstream = None
             v, rel, age = verdict_for(cls, upstream, cand)
             add(host, n, inst, cand, cls, v, rel, age)
 

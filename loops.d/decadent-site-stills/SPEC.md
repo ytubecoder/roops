@@ -21,9 +21,9 @@ chromium when `public-site/package-lock.json` changed, then runs decadent's `scr
 only reads that output on a non-zero exit.
 
 4. Cadence
-`interval:1h`. The old GitHub job ran daily plus on every push to main; hourly with a skip when main has
-not moved gives at most an hour's lag after an app change for the cost of a git fetch. A render takes
-about 10 s. Missed firings while the guest is down are simply the next firing's work.
+`daily:03:00` (firstparty local time, Asia/Manila). Owner, 2026-11-16: the stills are made once a day,
+overnight, and nothing but the stills goes to production on its own. A night when main has not moved costs a
+git fetch. A render takes about 10 s. A firing missed while the guest is down is the next night's work.
 
 5. Scope & exclusions
 In scope: the tablet stills, `stills.json`, the DE1 hero images. Excluded: the phone showcase images and
